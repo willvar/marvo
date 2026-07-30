@@ -15,6 +15,7 @@ type Dependencies struct {
 	NoteStore *store.NoteStore
 	Search    *search.Index
 	Hub       *ws.Hub
+	AIDeps    *AIDeps
 }
 
 func RegisterRoutes(app *fiber.App, deps *Dependencies) {
@@ -37,6 +38,16 @@ func RegisterRoutes(app *fiber.App, deps *Dependencies) {
 	api.Post("/notes/:title/assets", deps.UploadAttachment)
 
 	api.Get("/search", deps.SearchNotes)
+
+	if deps.AIDeps != nil {
+		ai := api.Group("/ai")
+		ai.Get("/global/event", deps.AIDeps.proxyGlobalSSE)
+		ai.Get("/*", deps.AIDeps.proxyJSON)
+		ai.Post("/*", deps.AIDeps.proxyJSON)
+		ai.Delete("/*", deps.AIDeps.proxyJSON)
+		ai.Patch("/*", deps.AIDeps.proxyJSON)
+		ai.Put("/*", deps.AIDeps.proxyJSON)
+	}
 
 	api.Use("/ws", ws.UpgradeHandler())
 	api.Get("/ws", websocket.New(deps.HandleWebSocket))

@@ -10,9 +10,30 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig `yaml:"server"`
-	Auth   AuthConfig   `yaml:"auth"`
-	Log    LogConfig    `yaml:"log"`
+	Server   ServerConfig   `yaml:"server"`
+	Auth     AuthConfig     `yaml:"auth"`
+	Log      LogConfig      `yaml:"log"`
+	OpenCode OpenCodeConfig `yaml:"opencode"`
+}
+
+type OpenCodeConfig struct {
+	URL string `yaml:"url"`
+}
+
+func (c *Config) resolve() {
+	if c.Server.Port == 0 {
+		c.Server.Port = 8080
+	}
+	if c.Server.DataDir == "" {
+		c.Server.DataDir = "~/.marvo/data"
+	}
+	home, _ := os.UserHomeDir()
+	if strings.HasPrefix(c.Server.DataDir, "~/") {
+		c.Server.DataDir = filepath.Join(home, c.Server.DataDir[2:])
+	}
+	if c.Log.Level == "" {
+		c.Log.Level = "info"
+	}
 }
 
 type ServerConfig struct {
@@ -47,20 +68,4 @@ func Load(path string) *Config {
 	cfg.resolve()
 
 	return &cfg
-}
-
-func (c *Config) resolve() {
-	if c.Server.Port == 0 {
-		c.Server.Port = 8080
-	}
-	if c.Server.DataDir == "" {
-		c.Server.DataDir = "~/.marvo/data"
-	}
-	home, _ := os.UserHomeDir()
-	if strings.HasPrefix(c.Server.DataDir, "~/") {
-		c.Server.DataDir = filepath.Join(home, c.Server.DataDir[2:])
-	}
-	if c.Log.Level == "" {
-		c.Log.Level = "info"
-	}
 }

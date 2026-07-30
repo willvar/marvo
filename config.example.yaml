@@ -8,6 +8,9 @@ server:
 auth:
   password: marvo
 
+opencode:
+  url: "http://127.0.0.1:4096"
+
 log:
   level: info
   # file: /var/log/marvo.log

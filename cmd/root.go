@@ -22,7 +22,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 )
 
-const shutdownTimeout = time.Second
+const shutdownTimeout = 10 * time.Second
 
 func Execute() {
 	configPath := flag.String("c", "config.yaml", "path to config file")
@@ -56,10 +56,10 @@ func Execute() {
 			slog.Error("failed to reindex note after external change", "title", title, "error", err)
 		})
 		hub.BroadcastToNote(title, "", store.MustJSON(map[string]interface{}{
-			"action":   "ot_snapshot",
-			"title":    title,
-			"content":  content,
-			"version":  doc.Version,
+			"action":  "ot_snapshot",
+			"title":   title,
+			"content": content,
+			"version": doc.Version,
 		}))
 	})
 	if err != nil {
@@ -82,14 +82,15 @@ func Execute() {
 		AllowCredentials: true,
 	}))
 
+	shuttingDown := make(chan struct{})
+
 	handler.RegisterRoutes(app, &handler.Dependencies{
 		Config:    cfg,
 		NoteStore: noteStore,
 		Search:    searchIdx,
 		Hub:       hub,
+		AIDeps:    handler.NewAIDeps(cfg.OpenCode.URL, shuttingDown),
 	})
-
-	shuttingDown := make(chan struct{})
 	go func() {
 		addr := fmt.Sprintf(":%d", cfg.Server.Port)
 		slog.Info("starting server", "addr", addr)
