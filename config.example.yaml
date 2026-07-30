@@ -1,0 +1,13 @@
+server:
+  port: 8080
+  data_dir: ~/.marvo/data
+  session_secret: ""
+  cors_origins:
+    - http://localhost:5173
+
+auth:
+  password: marvo
+
+log:
+  level: info
+  # file: /var/log/marvo.log

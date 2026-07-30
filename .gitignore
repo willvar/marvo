@@ -1,0 +1,7 @@
+dist/
+node_modules/
+config.yaml
+*.exe
+*.tar.gz
+.DS_Store
+frontend/dist/
