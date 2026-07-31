@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Input, Button, App } from 'antd'
 import { useAuthStore } from '../stores/auth'
 
-export default function LoginPage() {
+export default function Login() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()

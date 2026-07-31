@@ -3,10 +3,11 @@ import { ConfigProvider, App as AntApp, Spin, theme } from 'antd'
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { useAuthStore } from './stores/auth'
 
-const LoginPage = lazy(() => import('./pages/LoginPage'))
-const HomePage = lazy(() => import('./pages/HomePage'))
+const Login = lazy(() => import('./pages/Login'))
+const Home = lazy(() => import('./pages/Home'))
 const NotesList = lazy(() => import('./pages/NotesList'))
 const NoteEditor = lazy(() => import('./pages/NoteEditor'))
+const AIChat = lazy(() => import('./pages/AIChat'))
 
 function AuthGuard() {
   const { isAuthenticated, check } = useAuthStore()
@@ -39,11 +40,12 @@ export default function App() {
         <BrowserRouter>
           <Suspense fallback={<PageLoading />}>
             <Routes>
-              <Route path="/login" element={<LoginPage />} />
+              <Route path="/login" element={<Login />} />
               <Route element={<AuthGuard />}>
-                <Route path="/" element={<HomePage />}>
+                <Route path="/" element={<Home />}>
                   <Route index element={<NotesList />} />
                   <Route path="note/:title" element={<NoteEditor />} />
+                  <Route path="ai" element={<AIChat />} />
                 </Route>
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />

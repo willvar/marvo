@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Input, Button, App } from 'antd'
-import { MenuOutlined, CloseOutlined, SearchOutlined, PlusOutlined } from '@ant-design/icons'
+import { MenuOutlined, CloseOutlined, SearchOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import { useNoteStore } from '../stores/note'
 
-export default function HomePage() {
+export default function Home() {
   const navigate = useNavigate()
   const location = useLocation()
   const { message } = App.useApp()
@@ -202,6 +202,9 @@ export default function HomePage() {
               />
             )}
           </div>
+          <button className="icon-btn" onClick={() => navigate('/ai')} title="AI 助手">
+            <RobotOutlined style={{ fontSize: 18 }} />
+          </button>
         </header>
         <div className="main-content">
           <Outlet />
