@@ -1,54 +1,83 @@
 package handler
 
 import (
-	"marvo/config"
-	"marvo/internal/search"
+	"marvo/internal/collab"
+	"marvo/internal/media"
 	"marvo/internal/store"
-	"marvo/internal/ws"
+	"net/http"
+	"sync"
+	"time"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/websocket/v2"
+	"marvo/config"
 )
 
 type Dependencies struct {
-	Config    *config.Config
-	NoteStore *store.NoteStore
-	Search    *search.Index
-	Hub       *ws.Hub
-	AIDeps    *AIDeps
+	Config      *config.Config
+	NoteStore   *store.NoteStore
+	Hub         *collab.Hub
+	Media       *media.Manager
+	AgentDeps   *AgentDeps
+	DeviceStore *store.DeviceStore
+	securityMu  sync.Mutex
+	rateLimits  map[string]rateWindow
+	challenges  map[string]int64
 }
 
-func RegisterRoutes(app *fiber.App, deps *Dependencies) {
-	api := app.Group("/api")
+type rateWindow struct {
+	Count int
+	Reset time.Time
+}
 
-	api.Post("/auth/verify", deps.Verify)
-	api.Post("/auth", deps.Login)
-	api.Post("/auth/logout", deps.Logout)
+func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
+	mux.HandleFunc("POST /api/auth/verify", deps.Verify)
+	mux.HandleFunc("POST /api/auth", deps.Login)
+	mux.HandleFunc("POST /api/auth/logout", deps.Logout)
+	mux.HandleFunc("POST /api/auth/apply", deps.Apply)
+	mux.HandleFunc("GET /api/auth/token", deps.Token)
 
-	api.Use(deps.AuthMiddleware())
+	auth := deps.AuthMiddleware()
+	admin := deps.AdminMiddleware()
 
-	api.Get("/notes", deps.ListNotes)
-	api.Post("/notes", deps.CreateNote)
-	api.Get("/notes/:title", deps.GetNote)
-	api.Put("/notes/:title/content", deps.UpdateNoteContent)
-	api.Put("/notes/:title/meta", deps.UpdateNoteMeta)
-	api.Put("/notes/:title/rename", deps.RenameNote)
-	api.Delete("/notes/:title", deps.DeleteNote)
-	api.Get("/notes/:title/assets/:filename", deps.GetAttachment)
-	api.Post("/notes/:title/assets", deps.UploadAttachment)
+	// Content access is deliberately device-only. An administrator session can
+	// approve or revoke devices, but cannot read notes unless this browser is an
+	// independently approved device too.
+	mux.Handle("GET /api/notes", auth(http.HandlerFunc(deps.ListNotes)))
+	mux.Handle("GET /api/notes/{title}", auth(http.HandlerFunc(deps.GetNote)))
+	mux.Handle("GET /api/notes/{title}/assets/{filename}", auth(http.HandlerFunc(deps.GetAttachment)))
+	mux.Handle("GET /api/theme", auth(http.HandlerFunc(deps.GetTheme)))
+	mux.Handle("GET /api/search", auth(http.HandlerFunc(deps.SearchNotes)))
 
-	api.Get("/search", deps.SearchNotes)
+	mux.Handle("POST /api/notes", auth(http.HandlerFunc(deps.CreateNote)))
+	mux.Handle("PUT /api/notes/{title}/content", auth(http.HandlerFunc(deps.UpdateNoteContent)))
+	mux.Handle("PUT /api/notes/{title}/meta", auth(http.HandlerFunc(deps.UpdateNoteMeta)))
+	mux.Handle("PUT /api/notes/{title}/rename", auth(http.HandlerFunc(deps.RenameNote)))
+	mux.Handle("DELETE /api/notes/{title}", auth(http.HandlerFunc(deps.DeleteNote)))
+	mux.Handle("GET /api/notes/{title}/assets", auth(http.HandlerFunc(deps.ListMediaAssets)))
+	mux.Handle("POST /api/notes/{title}/assets/reserve", auth(http.HandlerFunc(deps.ReserveMediaAsset)))
+	mux.Handle("GET /api/notes/{title}/assets/{assetID}/status", auth(http.HandlerFunc(deps.GetMediaAsset)))
+	mux.Handle("PUT /api/notes/{title}/assets/{assetID}/content", auth(http.HandlerFunc(deps.UploadMediaAsset)))
+	mux.Handle("DELETE /api/notes/{title}/assets/{assetID}", auth(http.HandlerFunc(deps.AbandonMediaAsset)))
+	mux.Handle("GET /api/trash", auth(http.HandlerFunc(deps.ListTrash)))
+	mux.Handle("POST /api/trash/{id}/restore", auth(http.HandlerFunc(deps.RestoreTrash)))
+	mux.Handle("DELETE /api/trash/{id}", auth(http.HandlerFunc(deps.PermanentlyDeleteTrash)))
+	mux.Handle("DELETE /api/trash", auth(http.HandlerFunc(deps.EmptyTrash)))
+	mux.Handle("GET /api/events", auth(http.HandlerFunc(deps.HandleSSE)))
+	mux.Handle("POST /api/send", auth(http.HandlerFunc(deps.HandleSend)))
 
-	if deps.AIDeps != nil {
-		ai := api.Group("/ai")
-		ai.Get("/global/event", deps.AIDeps.proxyGlobalSSE)
-		ai.Get("/*", deps.AIDeps.proxyJSON)
-		ai.Post("/*", deps.AIDeps.proxyJSON)
-		ai.Delete("/*", deps.AIDeps.proxyJSON)
-		ai.Patch("/*", deps.AIDeps.proxyJSON)
-		ai.Put("/*", deps.AIDeps.proxyJSON)
+	if deps.AgentDeps != nil {
+		mux.Handle("GET /api/agent/settings", auth(http.HandlerFunc(deps.AgentDeps.GetSettings)))
+		mux.Handle("PUT /api/agent/settings", auth(http.HandlerFunc(deps.AgentDeps.UpdateSettings)))
+		mux.Handle("GET /api/agent/global/event", auth(http.HandlerFunc(deps.AgentDeps.ProxyGlobalSSE)))
+		mux.Handle("GET /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
+		mux.Handle("POST /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
+		mux.Handle("PATCH /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
+		mux.Handle("PUT /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
+		mux.Handle("DELETE /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
 	}
 
-	api.Use("/ws", ws.UpgradeHandler())
-	api.Get("/ws", websocket.New(deps.HandleWebSocket))
+	mux.Handle("GET /api/admin/requests", admin(http.HandlerFunc(deps.ListRequests)))
+	mux.Handle("POST /api/admin/requests/{id}/approve", admin(http.HandlerFunc(deps.ApproveRequest)))
+	mux.Handle("POST /api/admin/requests/{id}/reject", admin(http.HandlerFunc(deps.RejectRequest)))
+	mux.Handle("GET /api/admin/devices", admin(http.HandlerFunc(deps.ListDevices)))
+	mux.Handle("DELETE /api/admin/devices/{id}", admin(http.HandlerFunc(deps.RevokeDevice)))
 }
