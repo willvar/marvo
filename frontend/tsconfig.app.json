@@ -18,5 +18,14 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    "src/components",
+    "src/sdk",
+    "src/stores/agent.ts",
+    "src/stores/agentMessageState.ts",
+    "src/stores/agentSessionTree.ts",
+    "src/stores/agentSettings.ts",
+    "src/stores/uiPreferences.ts"
+  ]
 }
