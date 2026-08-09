@@ -1,0 +1,112 @@
+@use 'mixins' as *;
+
+@mixin login-styles {
+  .login-container {
+    height: 100vh;
+    @include flexCenter;
+    background: var(--bg-login);
+  }
+
+  .login-card {
+    width: 340px;
+    text-align: center;
+    padding: 48px 36px 36px;
+    background: var(--bg-primary);
+    border-radius: 16px;
+    border: 1px solid var(--border-secondary);
+    box-shadow: var(--shadow-card);
+  }
+
+  .login-logo {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    background: var(--marvo-accent-color, #4f46e5);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 20px;
+  }
+
+  .login-title {
+    font-size: var(--marvo-type-24);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 4px;
+  }
+  .login-subtitle {
+    font-size: var(--marvo-type-14);
+    color: var(--text-muted);
+    margin: 0 0 28px;
+  }
+  .login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .login-password {
+    width: 100%;
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    outline: none;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font: inherit;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
+    &::placeholder {
+      color: var(--text-muted);
+    }
+    &:focus {
+      border-color: var(--text-accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 14%, transparent);
+    }
+  }
+
+  .login-error {
+    text-align: left;
+    color: var(--text-danger);
+    font-size: var(--marvo-type-13);
+  }
+
+  .login-submit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 40px;
+    border: none;
+    border-radius: 8px;
+    background: var(--marvo-accent-color, #4f46e5);
+    color: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+    transition:
+      opacity 0.15s,
+      transform 0.15s,
+      box-shadow 0.15s;
+    &:hover:not(:disabled) {
+      box-shadow: 0 8px 18px color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 25%, transparent);
+      transform: translateY(-1px);
+    }
+    &:active:not(:disabled) {
+      transform: translateY(0);
+    }
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+  }
+
+  .login-pending {
+    font-size: var(--marvo-type-14);
+    color: var(--text-secondary);
+    margin-top: 16px;
+  }
+}

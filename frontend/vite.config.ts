@@ -1,9 +1,23 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import vue from '@vitejs/plugin-vue'
+
+const apiTarget = process.env.VITE_API_TARGET || 'http://localhost:5090'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [vue()],
+  base: '/',
   server: {
-    port: 9988,
+    port: 5080,
+    host: '0.0.0.0',
+    proxy: {
+      '/api': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
+      '/static': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
+    },
   },
 })
