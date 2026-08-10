@@ -1,0 +1,18 @@
+server:
+  host: 127.0.0.1
+  port: 9989
+  data_dir: /var/lib/marvo/data
+  session_secret: "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
+  cors_origins:
+    - https://YOUR_FRONTEND_DOMAIN
+
+auth:
+  password: CHANGE_ME
+
+opencode:
+  url: http://127.0.0.1:4096
+  global_instructions_file: /var/lib/marvo/opencode-state/home/.config/opencode/AGENTS.md
+
+log:
+  level: info
+  file: /var/log/marvo/marvo.log
