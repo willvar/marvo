@@ -4,15 +4,19 @@ import {
   formatAgentError,
   isAbortedAgentError,
   unwrapAgentError,
+  type AgentSession,
+  type AgentSessionError,
   type MessageInfo,
   type MessagePart,
 } from '../sdk'
 import { agentMessageRenderKey } from '../stores/agentMessageState'
-import type { XThoughtItem } from './x'
+import { agentSessionTreeStatus, agentSessionTreeValue } from '../stores/agentSessionTree'
+import type { XSubtaskStatus, XThoughtItem } from './x'
 import {
   buildExecutionThoughtChainFromParts,
   formatAgentExecutionDuration,
   isAgentExecutionPart,
+  isAgentTaskToolPart,
 } from './agentExecution'
 
 interface AgentUserTimelineItem {
@@ -47,6 +51,17 @@ interface AgentActionSegment {
   key: string
   type: 'action'
   items: XThoughtItem[]
+  _signature: string
+}
+
+interface AgentSubtaskSegment {
+  key: string
+  type: 'subtask'
+  sessionID: string
+  title: string
+  description: string
+  status: XSubtaskStatus
+  background: boolean
   _signature: string
 }
 
@@ -107,6 +122,7 @@ type AgentAssistantSegment =
   | AgentTextSegment
   | AgentReasoningSegment
   | AgentActionSegment
+  | AgentSubtaskSegment
   | AgentFilesSegment
   | AgentErrorSegment
   | AgentQuestionSegment
@@ -163,6 +179,13 @@ interface RawActionSegment {
   parts: MessagePart[]
 }
 
+interface RawSubtaskSegment {
+  key: string
+  type: 'subtask'
+  part: MessagePart
+  parentSessionID: string
+}
+
 interface RawFilesSegment {
   key: string
   type: 'files'
@@ -190,6 +213,7 @@ type RawAssistantSegment =
   | RawTextSegment
   | RawReasoningSegment
   | RawActionSegment
+  | RawSubtaskSegment
   | RawFilesSegment
   | RawErrorSegment
   | RawStoppedSegment
@@ -200,7 +224,14 @@ type ActivePhase = 'reasoning' | 'action' | 'text' | 'files' | 'none'
 export function buildAgentTimeline(
   messages: MessageInfo[],
   partsByMessage: Record<string, MessagePart[]>,
-  options: { running: boolean; unsettled?: boolean; status?: SessionStatus },
+  options: {
+    running: boolean
+    unsettled?: boolean
+    status?: SessionStatus
+    sessions?: AgentSession[]
+    sessionStatuses?: Record<string, SessionStatus | undefined>
+    sessionErrors?: Record<string, AgentSessionError | undefined>
+  },
 ): AgentTimelineItem[] {
   const turns = constructTurns(messages, partsByMessage)
   const unsettled = options.unsettled ?? options.running
@@ -214,7 +245,7 @@ export function buildAgentTimeline(
       turn,
       turn === activeTurn && options.running,
       turn === activeTurn && unsettled,
-      options.status,
+      options,
     )
     if (assistant) items.push(...splitInterruptedAssistant(assistant))
   }
@@ -321,8 +352,14 @@ function buildAssistantItem(
   turn: TimelineTurn,
   active: boolean,
   unsettled: boolean,
-  status?: SessionStatus,
+  options: {
+    status?: SessionStatus
+    sessions?: AgentSession[]
+    sessionStatuses?: Record<string, SessionStatus | undefined>
+    sessionErrors?: Record<string, AgentSessionError | undefined>
+  },
 ): AgentAssistantTimelineItem | undefined {
+  const status = options.status
   const raw: RawAssistantSegment[] = []
   let activePhase: ActivePhase = 'none'
 
@@ -352,6 +389,11 @@ function buildAssistantItem(
         }
         continue
       }
+      if (isAgentTaskToolPart(part)) {
+        appendSubtask(raw, part, entry.message.sessionID)
+        activePhase = 'action'
+        continue
+      }
       if (isAgentExecutionPart(part) && part.type !== 'retry') {
         appendAction(raw, part)
         activePhase = 'action'
@@ -371,7 +413,7 @@ function buildAssistantItem(
   }
 
   const duration = assistantDuration(turn.assistants)
-  const actionCount = raw.filter((segment) => segment.type === 'action').length
+  const executionSegmentCount = raw.filter((segment) => segment.type === 'action' || segment.type === 'subtask').length
   const lastRaw = raw[raw.length - 1]
   const segments: AgentAssistantSegment[] = []
 
@@ -412,7 +454,7 @@ function buildAssistantItem(
         segment.parts,
         segment.key,
         executionOutcome(raw, rawIndex, streaming),
-        actionCount === 1 ? duration : '',
+        executionSegmentCount === 1 ? duration : '',
       )
       if (items.length > 0) {
         segments.push({
@@ -422,6 +464,10 @@ function buildAssistantItem(
           _signature: `action|${JSON.stringify(items)}`,
         })
       }
+      continue
+    }
+    if (segment.type === 'subtask') {
+      segments.push(buildSubtaskSegment(segment, active && activePhase === 'action' && segment === lastRaw, options))
       continue
     }
     if (segment.type === 'files') {
@@ -544,6 +590,134 @@ function appendAction(segments: RawAssistantSegment[], part: MessagePart) {
     return
   }
   segments.push({ key: part.callID || part.id || `${part.messageID}-action`, type: 'action', parts: [part] })
+}
+
+function appendSubtask(segments: RawAssistantSegment[], part: MessagePart, parentSessionID: string) {
+  const key = part.callID || part.id || `${part.messageID}-subtask`
+  const existingIndex = segments.findIndex((segment) => segment.type === 'subtask' && segment.key === key)
+  if (existingIndex >= 0) {
+    const existing = segments[existingIndex]
+    if (existing.type === 'subtask' && subtaskPartRank(part) >= subtaskPartRank(existing.part)) {
+      segments[existingIndex] = { key, type: 'subtask', part, parentSessionID }
+    }
+    return
+  }
+  segments.push({ key, type: 'subtask', part, parentSessionID })
+}
+
+function buildSubtaskSegment(
+  segment: RawSubtaskSegment,
+  streaming: boolean,
+  options: {
+    sessions?: AgentSession[]
+    sessionStatuses?: Record<string, SessionStatus | undefined>
+    sessionErrors?: Record<string, AgentSessionError | undefined>
+  },
+): AgentSubtaskSegment {
+  const state = objectRecord(segment.part.state)
+  const input = objectRecord(state.input ?? segment.part.input)
+  const metadata = objectRecord(state.metadata ?? segment.part.metadata)
+  const sessions = options.sessions || []
+  const sessionID = resolveSubtaskSessionID(metadata, input, segment.parentSessionID, sessions)
+  const matchingSession = sessions.find((session) => session.id === sessionID)
+  const agent = stringValue(input.subagent_type ?? segment.part.agent)
+  const description = cleanSubtaskDescription(
+    stringValue(input.description ?? state.title ?? segment.part.description) || matchingSession?.title || '',
+  )
+  const status = resolveSubtaskStatus(
+    segment.part,
+    sessionID,
+    streaming,
+    sessions,
+    options.sessionStatuses || {},
+    options.sessionErrors || {},
+  )
+  const title = subtaskAgentTitle(agent)
+  const background = metadata.background === true || input.background === true
+  return {
+    key: segment.key,
+    type: 'subtask',
+    sessionID,
+    title,
+    description,
+    status,
+    background,
+    _signature: ['subtask', sessionID, title, description, status, background ? 'background' : 'foreground'].join('|'),
+  }
+}
+
+function resolveSubtaskSessionID(
+  metadata: Record<string, unknown>,
+  input: Record<string, unknown>,
+  parentSessionID: string,
+  sessions: AgentSession[],
+) {
+  const metadataID = stringValue(metadata.sessionId ?? metadata.sessionID ?? metadata.session_id)
+  if (metadataID) return metadataID
+  if (!parentSessionID) return ''
+
+  const description = stringValue(input.description)
+  const agent = stringValue(input.subagent_type).toLowerCase()
+  return (
+    sessions
+      .filter((session) => session.parentID === parentSessionID)
+      .filter((session) => (description ? session.title.startsWith(description) : true))
+      .filter((session) => (agent ? session.title.toLowerCase().includes(`@${agent} subagent`) : true))
+      .sort((left, right) => (right.time?.created || 0) - (left.time?.created || 0))[0]?.id || ''
+  )
+}
+
+function resolveSubtaskStatus(
+  part: MessagePart,
+  sessionID: string,
+  streaming: boolean,
+  sessions: AgentSession[],
+  statuses: Record<string, SessionStatus | undefined>,
+  errors: Record<string, AgentSessionError | undefined>,
+): XSubtaskStatus {
+  if (sessionID && agentSessionTreeValue(sessions, errors, sessionID)) return 'error'
+  const sessionStatus = sessionID ? agentSessionTreeStatus(sessions, statuses, sessionID) : undefined
+  if (sessionStatus?.type === 'retry') return 'retry'
+  if (sessionStatus?.type === 'busy') return 'running'
+
+  const toolStatus = part.state?.status
+  if (toolStatus === 'pending' || toolStatus === 'running') return 'running'
+  if (toolStatus === 'error') {
+    return isAbortedAgentError(part.state?.error ?? part.error) ? 'stopped' : 'error'
+  }
+  if (toolStatus === 'completed' || part.type === 'tool_result') return 'success'
+  return streaming ? 'running' : 'default'
+}
+
+function subtaskPartRank(part: MessagePart) {
+  if (part.type === 'tool_result') return 3
+  const ranks: Record<string, number> = { pending: 0, running: 1, completed: 3, error: 3 }
+  return ranks[part.state?.status || ''] ?? 0
+}
+
+function subtaskAgentTitle(agent: string) {
+  const labels: Record<string, string> = {
+    build: '执行智能体',
+    explore: '探索智能体',
+    general: '通用智能体',
+    plan: '规划智能体',
+  }
+  const key = agent.toLowerCase()
+  if (labels[key]) return labels[key]
+  if (!agent) return '子任务'
+  return `${agent.charAt(0).toUpperCase()}${agent.slice(1)} 智能体`
+}
+
+function cleanSubtaskDescription(value: string) {
+  return value.replace(/\s+\(@[^)]+\s+subagent\)\s*$/i, '').trim()
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value : ''
 }
 
 function appendFiles(segments: RawAssistantSegment[], part: MessagePart) {

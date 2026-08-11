@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { Toast, Toaster, createToaster } from '@ark-ui/vue/toast'
-import { CloseOutlined, DeleteOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons-vue'
+import {
+  CloseOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  LeftOutlined,
+  LockOutlined,
+  RobotOutlined,
+} from '@ant-design/icons-vue'
 import { useAgentStore } from '../../stores/agent'
 import { formatAgentError, isAbortedAgentError, type AgentFilePartInput } from '../../sdk'
 import AgentComposer from '../../components/AgentComposer.vue'
@@ -24,16 +31,32 @@ const deletingSession = ref(false)
 const renameTargetId = ref('')
 const renameTitle = ref('')
 const renamingSession = ref(false)
+const subtaskStack = ref<Array<{ id: string; title: string }>>([])
+
+const activeSubtask = computed(() => subtaskStack.value[subtaskStack.value.length - 1])
+const activeSessionId = computed(() => activeSubtask.value?.id || agent.currentSessionId)
+const activeConversation = computed(() =>
+  activeSubtask.value ? agent.conversations[activeSubtask.value.id] : undefined,
+)
+const visibleMessages = computed(() =>
+  activeSubtask.value ? activeConversation.value?.messages || [] : agent.messages,
+)
+const visibleParts = computed(() => (activeSubtask.value ? activeConversation.value?.parts || {} : agent.parts))
+const visibleLoading = computed(() =>
+  activeSubtask.value ? !!activeConversation.value?.loading && !activeConversation.value.loaded : agent.messagesLoading,
+)
+const currentStatus = computed(() => agent.statusForSession(activeSessionId.value))
+const visibleSending = computed(() => {
+  if (!activeSubtask.value) return agent.sending
+  return currentStatus.value?.type === 'busy' || currentStatus.value?.type === 'retry'
+})
 
 const blocked = computed(() => {
-  const id = agent.currentSessionId
+  const id = activeSessionId.value
   return id ? agent.hasPendingRequest(id) : false
 })
 const deleteTarget = computed(() => agent.sessions.find((s) => s.id === deleteTargetId.value))
-const messageScrollKey = computed(
-  () => `${agent.currentSessionId || ''}:${agent.messagesLoading ? 'loading' : 'ready'}`,
-)
-const currentStatus = computed(() => agent.statusForSession(agent.currentSessionId))
+const messageScrollKey = computed(() => `${activeSessionId.value || ''}:${visibleLoading.value ? 'loading' : 'ready'}`)
 const conversationItems = computed<XConversationItem[]>(() =>
   agent.sessions.map((session) => ({
     key: session.id,
@@ -43,7 +66,7 @@ const conversationItems = computed<XConversationItem[]>(() =>
   })),
 )
 const timelineHasError = computed(() =>
-  agent.messages.some((message) => message.error && !isAbortedAgentError(message.error)),
+  visibleMessages.value.some((message) => message.error && !isAbortedAgentError(message.error)),
 )
 const runtimeNotice = computed(() => {
   if (agent.sessionsError) {
@@ -51,6 +74,14 @@ const runtimeNotice = computed(() => {
   }
   if (initError.value) {
     return { title: '操作未完成', message: initError.value, variant: 'error' as const, retryable: true }
+  }
+  if (activeSubtask.value && activeConversation.value?.error) {
+    return {
+      title: '子任务未能更新',
+      message: activeConversation.value.error,
+      variant: 'warning' as const,
+      retryable: true,
+    }
   }
   if (agent.conversationError) {
     return {
@@ -69,7 +100,7 @@ const runtimeNotice = computed(() => {
       retryable: true,
     }
   }
-  const sessionError = agent.errorForSession(agent.currentSessionId)
+  const sessionError = agent.errorForSession(activeSessionId.value)
   if (sessionError && !timelineHasError.value) {
     return {
       title: '本次执行未完成',
@@ -147,6 +178,13 @@ onMounted(async () => {
   }
 })
 
+watch(
+  () => agent.currentSessionId,
+  (id, previousID) => {
+    if (id !== previousID) subtaskStack.value = []
+  },
+)
+
 async function send(text: string, files: AgentFilePartInput[]) {
   initError.value = ''
   if (!agent.currentSessionId) await agent.createSession()
@@ -155,6 +193,7 @@ async function send(text: string, files: AgentFilePartInput[]) {
 
 async function newSession() {
   try {
+    subtaskStack.value = []
     await agent.createSession()
   } catch (cause) {
     initError.value = displayError(cause, '暂时无法创建对话')
@@ -163,6 +202,7 @@ async function newSession() {
 
 async function selectSession(id: string) {
   try {
+    subtaskStack.value = []
     if (renameTargetId.value && renameTargetId.value !== id) await confirmRenameSession()
     await agent.selectSession(id)
   } catch (cause) {
@@ -174,10 +214,27 @@ async function recoverAgent() {
   initError.value = ''
   try {
     await agent.reconnect()
-    if (agent.currentSessionId) await agent.loadConversation(agent.currentSessionId)
+    if (activeSessionId.value) await agent.loadConversation(activeSessionId.value)
   } catch (cause) {
     initError.value = displayError(cause, '重新连接失败，请稍后再试')
   }
+}
+
+async function openSubtask(sessionID: string, title: string) {
+  if (!sessionID || activeSubtask.value?.id === sessionID) return
+  subtaskStack.value = [...subtaskStack.value, { id: sessionID, title: title || '子任务' }]
+  initError.value = ''
+  try {
+    await agent.ensureSessionLineage(sessionID)
+    await agent.loadConversation(sessionID)
+  } catch (cause) {
+    initError.value = displayError(cause, '暂时无法加载子任务')
+  }
+}
+
+function backFromSubtask() {
+  subtaskStack.value = subtaskStack.value.slice(0, -1)
+  initError.value = ''
 }
 
 function handleConversationAction(actionKey: string, item: XConversationItem) {
@@ -298,22 +355,39 @@ function cancelRenameSession() {
       </div>
 
       <template v-else>
+        <header v-if="activeSubtask" class="agent-chat-subtask-header">
+          <XButton class="agent-chat-subtask-back" variant="ghost" size="small" @click="backFromSubtask">
+            <LeftOutlined aria-hidden="true" />
+            {{ subtaskStack.length > 1 ? '返回上一级' : '返回主对话' }}
+          </XButton>
+          <div class="agent-chat-subtask-heading">
+            <span>子任务</span>
+            <strong :title="activeSubtask.title">{{ activeSubtask.title }}</strong>
+          </div>
+        </header>
+
         <AgentMessageList
-          :messages="agent.messages"
-          :parts="agent.parts"
-          :sending="agent.sending"
-          :stopping="agent.stopping"
+          :messages="visibleMessages"
+          :parts="visibleParts"
+          :sending="visibleSending"
+          :stopping="activeSubtask ? false : agent.stopping"
           :waiting="blocked"
-          :loading="agent.messagesLoading"
+          :loading="visibleLoading"
           :status="currentStatus"
+          :sessions="agent.allSessions"
+          :session-statuses="agent.sessionStatuses"
+          :session-errors="agent.sessionErrors"
           :scroll-reset-key="messageScrollKey"
+          :empty-title="activeSubtask ? '暂无子任务记录' : '有什么可以帮你？'"
+          :empty-description="activeSubtask ? '该子任务尚未产生可展示内容' : '发送消息或添加图片、文件来开始对话'"
+          @open-subtask="openSubtask"
         />
 
         <footer class="agent-chat-input">
           <div class="agent-chat-composer-wrap">
-            <AgentRequestPrompts :session-id="agent.currentSessionId" @error="showToast($event, 'error')" />
+            <AgentRequestPrompts :session-id="activeSessionId || ''" @error="showToast($event, 'error')" />
             <AgentComposer
-              v-if="!blocked"
+              v-if="!blocked && !activeSubtask"
               :key="agent.currentSessionId"
               :sending="agent.sending"
               :stopping="agent.stopping"
@@ -324,6 +398,10 @@ function cancelRenameSession() {
               :stop-message="() => agent.abortSession()"
               @error="initError = $event"
             />
+            <div v-if="activeSubtask && !blocked" class="agent-chat-subtask-readonly">
+              <LockOutlined aria-hidden="true" />
+              <span>子任务记录为只读，请返回主对话继续发送消息</span>
+            </div>
           </div>
         </footer>
       </template>
@@ -447,6 +525,44 @@ function cancelRenameSession() {
   margin: auto;
 }
 
+.agent-chat-subtask-header {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--border-primary);
+  background: var(--bg-primary);
+}
+
+.agent-chat-subtask-back {
+  flex: none;
+}
+
+.agent-chat-subtask-heading {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+
+  span {
+    flex: none;
+    color: var(--text-muted);
+    font-size: var(--marvo-type-11);
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: var(--marvo-type-13);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .agent-chat-input {
   flex-shrink: 0;
   padding: 8px 24px 12px;
@@ -459,6 +575,17 @@ function cancelRenameSession() {
   flex-direction: column;
   gap: 8px;
   margin-inline: auto;
+}
+
+.agent-chat-subtask-readonly {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: var(--marvo-type-12);
+  text-align: center;
 }
 
 :deep([data-scope='toast'][data-part='root']) {
@@ -503,6 +630,13 @@ function cancelRenameSession() {
   }
   .agent-chat-input {
     padding: 6px 12px max(12px, env(safe-area-inset-bottom));
+  }
+  .agent-chat-subtask-header {
+    gap: 6px;
+    padding-inline: 12px;
+  }
+  .agent-chat-subtask-heading {
+    gap: 6px;
   }
 }
 </style>

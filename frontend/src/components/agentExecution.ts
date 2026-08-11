@@ -112,6 +112,10 @@ export function isAgentExecutionPart(part: MessagePart) {
   return TOOL_PART_TYPES.has(part.type) || VISIBLE_EVENT_PART_TYPES.has(part.type)
 }
 
+export function isAgentTaskToolPart(part: MessagePart) {
+  return TOOL_PART_TYPES.has(part.type) && toolName(part) === 'task'
+}
+
 function toolStateRank(part: MessagePart) {
   if (part.type === 'tool_result') return 3
   const ranks: Record<string, number> = { pending: 0, running: 1, completed: 3, error: 3 }
@@ -260,6 +264,8 @@ function toolKind(tool: string): ActivityKind {
 }
 
 function toolActionTitle(part: MessagePart, tool: string) {
+  const personalizationTitle = personalizationCommandTitle(part, tool)
+  if (personalizationTitle) return personalizationTitle
   const titles: Record<string, string> = {
     bash: '执行命令',
     shell: '执行命令',
@@ -314,7 +320,9 @@ function toolTargets(part: MessagePart, tool: string) {
   const metadata = record(state.metadata || part.metadata)
   const targets: string[] = []
 
-  if (tool === 'bash' || tool === 'shell') {
+  if (personalizationCommandTitle(part, tool)) {
+    return []
+  } else if (tool === 'bash' || tool === 'shell') {
     const title = stringValue(state.title)
     if (title) targets.push(cleanToolTitle(title))
     else if (typeof input.command === 'string') targets.push(inlineText(input.command, 140))
@@ -346,6 +354,18 @@ function toolTargets(part: MessagePart, tool: string) {
     targets.push(inlineText(input.description, 140))
   }
   return uniqueStrings(targets.filter(Boolean))
+}
+
+function personalizationCommandTitle(part: MessagePart, tool: string) {
+  if (tool !== 'bash' && tool !== 'shell') return ''
+  const input = record(record(part.state).input || part.input)
+  const command = stringValue(input.command)
+  const operation = command.match(/(?:^|[\s;&|])marvo-personalization\s+(list|add|update|remove)\b/)?.[1]
+  if (operation === 'list') return '查看个性化规则'
+  if (operation === 'add') return '添加个性化规则'
+  if (operation === 'update') return '更新个性化规则'
+  if (operation === 'remove') return '删除个性化规则'
+  return ''
 }
 
 function summarizeTargets(targets: string[]) {

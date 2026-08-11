@@ -12,6 +12,7 @@ export { default as XPrompts } from './XPrompts.vue'
 export { default as XRetry } from './XRetry.vue'
 export { default as XQuestionSummary } from './XQuestionSummary.vue'
 export { default as XSender } from './XSender.vue'
+export { default as XSubtaskCard } from './XSubtaskCard.vue'
 export { default as XThink } from './XThink.vue'
 export { default as XThoughtChain } from './XThoughtChain.vue'
 export { default as XWelcome } from './XWelcome.vue'
@@ -20,6 +21,7 @@ export type {
   XConversationAction,
   XConversationItem,
   XPromptItem,
+  XSubtaskStatus,
   XThoughtItem,
   XThoughtStatus,
 } from './types'

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { SessionStatus } from '@opencode-ai/sdk/v2/client'
 import { RobotOutlined, UserOutlined } from '@ant-design/icons-vue'
-import type { MessageInfo, MessagePart } from '../sdk'
+import type { AgentSession, AgentSessionError, MessageInfo, MessagePart } from '../sdk'
 import { buildAgentTimeline, reconcileAgentTimeline, type AgentTimelineItem } from './agentTimeline'
 import {
   XActionsCopy,
@@ -14,6 +14,7 @@ import {
   XMessageDivider,
   XQuestionSummary,
   XRetry,
+  XSubtaskCard,
   XThink,
   XThoughtChain,
   XWelcome,
@@ -30,7 +31,12 @@ const props = withDefaults(
     loading?: boolean
     compact?: boolean
     status?: SessionStatus
+    sessions?: AgentSession[]
+    sessionStatuses?: Record<string, SessionStatus | undefined>
+    sessionErrors?: Record<string, AgentSessionError | undefined>
     scrollResetKey?: string | number | null
+    emptyTitle?: string
+    emptyDescription?: string
   }>(),
   {
     sending: false,
@@ -39,9 +45,18 @@ const props = withDefaults(
     loading: false,
     compact: false,
     status: () => ({ type: 'idle' }),
+    sessions: () => [],
+    sessionStatuses: () => ({}),
+    sessionErrors: () => ({}),
     scrollResetKey: null,
+    emptyTitle: '有什么可以帮你？',
+    emptyDescription: '发送消息或添加图片、文件来开始对话',
   },
 )
+
+const emit = defineEmits<{
+  'open-subtask': [sessionID: string, title: string]
+}>()
 
 const activelyRunning = computed(() => props.sending && !props.stopping && !props.waiting)
 let previousTimeline: AgentTimelineItem[] = []
@@ -55,6 +70,9 @@ const timeline = computed(() => {
     running: activelyRunning.value,
     unsettled: props.sending,
     status: props.status,
+    sessions: props.sessions,
+    sessionStatuses: props.sessionStatuses,
+    sessionErrors: props.sessionErrors,
   })
   previousTimeline = reconcileAgentTimeline(previousTimeline, next)
   return previousTimeline
@@ -97,12 +115,7 @@ function formatTime(timestamp?: number) {
 
     <template v-else>
       <div v-if="timeline.length === 0" class="agent-message-empty">
-        <XWelcome
-          title="有什么可以帮你？"
-          description="发送消息或添加图片、文件来开始对话"
-          :icon="RobotOutlined"
-          :compact="compact"
-        />
+        <XWelcome :title="emptyTitle" :description="emptyDescription" :icon="RobotOutlined" :compact="compact" />
       </div>
 
       <template v-for="item in timeline" :key="item.key">
@@ -157,6 +170,17 @@ function formatTime(timestamp?: number) {
               </XThink>
 
               <XThoughtChain v-else-if="segment.type === 'action'" :items="segment.items" :compact="compact" />
+
+              <XSubtaskCard
+                v-else-if="segment.type === 'subtask'"
+                :title="segment.title"
+                :description="segment.description"
+                :status="segment.status"
+                :background="segment.background"
+                :clickable="!!segment.sessionID"
+                :compact="compact"
+                @open="emit('open-subtask', segment.sessionID, segment.description || segment.title)"
+              />
 
               <XRetry
                 v-else-if="segment.type === 'retry'"
@@ -250,6 +274,7 @@ function formatTime(timestamp?: number) {
   & + :deep(.x-question-summary),
   & + :deep(.x-retry),
   & + :deep(.x-thought-chain),
+  & + :deep(.x-subtask-card),
   & + :deep(.x-think) {
     margin-top: 14px;
   }

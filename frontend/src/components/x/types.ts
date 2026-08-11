@@ -36,6 +36,8 @@ export interface XPromptItem {
 
 export type XThoughtStatus = 'loading' | 'success' | 'warning' | 'error' | 'stopped' | 'default'
 
+export type XSubtaskStatus = 'running' | 'retry' | 'success' | 'error' | 'stopped' | 'default'
+
 export interface XThoughtItem {
   key: string
   title: string

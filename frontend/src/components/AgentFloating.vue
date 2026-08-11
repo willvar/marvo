@@ -17,6 +17,7 @@ import {
   PushpinOutlined,
   ReloadOutlined,
   CloseOutlined,
+  LeftOutlined,
   RobotOutlined,
 } from '@ant-design/icons-vue'
 
@@ -36,6 +37,7 @@ const open = ref(false)
 const error = ref('')
 const assistantSurface = ref<{ clear: () => void } | null>(null)
 const pinned = ref(localStorage.getItem(PINNED_STORAGE_KEY) === 'true')
+const subtaskStack = ref<Array<{ id: string; title: string }>>([])
 const fabRef = ref<HTMLElement>()
 const persistentElements = computed(() => [() => fabRef.value || null])
 const hidden = computed(() => route.path === '/agent')
@@ -52,14 +54,44 @@ const floatingStatus = computed(() => agent.statusForSession(agent.floatingSessi
 const floatingSending = computed(
   () => agent.floatingSending || floatingStatus.value?.type === 'busy' || floatingStatus.value?.type === 'retry',
 )
+const activeSubtask = computed(() => subtaskStack.value[subtaskStack.value.length - 1])
+const displayedSessionId = computed(() => activeSubtask.value?.id || agent.floatingSessionId)
+const displayedConversation = computed(() =>
+  activeSubtask.value ? agent.conversations[activeSubtask.value.id] : undefined,
+)
+const displayedMessages = computed(() =>
+  activeSubtask.value ? displayedConversation.value?.messages || [] : agent.floatingMessages,
+)
+const displayedParts = computed(() =>
+  activeSubtask.value ? displayedConversation.value?.parts || {} : agent.floatingParts,
+)
+const displayedStatus = computed(() => agent.statusForSession(displayedSessionId.value))
+const displayedSending = computed(() => {
+  if (!activeSubtask.value) return floatingSending.value
+  return displayedStatus.value?.type === 'busy' || displayedStatus.value?.type === 'retry'
+})
+const displayedBlocked = computed(() =>
+  displayedSessionId.value ? agent.hasPendingRequest(displayedSessionId.value) : false,
+)
+const displayedLoading = computed(() =>
+  activeSubtask.value ? !!displayedConversation.value?.loading && !displayedConversation.value.loaded : false,
+)
 const floatingTimelineHasError = computed(() =>
-  agent.floatingMessages.some((message) => message.error && !isAbortedAgentError(message.error)),
+  displayedMessages.value.some((message) => message.error && !isAbortedAgentError(message.error)),
 )
 const floatingRuntimeNotice = computed(() => {
   if (agent.sessionsError) {
     return { title: '无法加载对话', message: agent.sessionsError, variant: 'error' as const, retryable: true }
   }
   if (error.value) return { title: '操作未完成', message: error.value, variant: 'error' as const, retryable: false }
+  if (activeSubtask.value && displayedConversation.value?.error) {
+    return {
+      title: '子任务未能更新',
+      message: displayedConversation.value.error,
+      variant: 'warning' as const,
+      retryable: true,
+    }
+  }
   if (agent.globalError) {
     return {
       title: '智能体服务异常',
@@ -69,7 +101,7 @@ const floatingRuntimeNotice = computed(() => {
       retryable: true,
     }
   }
-  const sessionError = agent.errorForSession(agent.floatingSessionId)
+  const sessionError = agent.errorForSession(displayedSessionId.value)
   if (sessionError && !floatingTimelineHasError.value) {
     return {
       title: '本次执行未完成',
@@ -204,6 +236,12 @@ const welcomeDescription = computed(() =>
 )
 
 watch(pinned, (value) => localStorage.setItem(PINNED_STORAGE_KEY, String(value)))
+watch(
+  () => agent.floatingSessionId,
+  (id, previousID) => {
+    if (id !== previousID) subtaskStack.value = []
+  },
+)
 watch(hidden, (value) => {
   if (value) open.value = false
 })
@@ -228,11 +266,6 @@ async function togglePanel() {
   await showPanel()
 }
 
-function buildNoteContext() {
-  if (!currentNoteTitle.value) return undefined
-  return `Marvo-Note-Title: ${encodeURIComponent(currentNoteTitle.value)}\nCurrent note title (JSON): ${JSON.stringify(currentNoteTitle.value)}. Its body is index.md inside that title directory.`
-}
-
 async function send(text: string, files: AgentFilePartInput[] = []) {
   const value = text.trim()
   if ((!value && files.length === 0) || floatingSending.value || floatingBlocked.value) return
@@ -249,7 +282,7 @@ async function send(text: string, files: AgentFilePartInput[] = []) {
     await agent.initFloatingSession(currentNoteTitle.value)
   }
   agent.setFloatingNoteTitle(currentNoteTitle.value)
-  await agent.sendFloatingMessage(value, value, buildNoteContext(), files)
+  await agent.sendFloatingMessage(value, value, currentNoteTitle.value, files)
 }
 
 async function sendPrompt(text: string) {
@@ -266,6 +299,7 @@ async function newChat() {
     return
   }
   try {
+    subtaskStack.value = []
     await agent.resetFloatingSession()
     assistantSurface.value?.clear()
     error.value = ''
@@ -274,11 +308,29 @@ async function newChat() {
   }
 }
 
+async function openSubtask(sessionID: string, title: string) {
+  if (!sessionID || activeSubtask.value?.id === sessionID) return
+  subtaskStack.value = [...subtaskStack.value, { id: sessionID, title: title || '子任务' }]
+  error.value = ''
+  try {
+    await agent.ensureSessionLineage(sessionID)
+    await agent.loadConversation(sessionID)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '暂时无法加载子任务'
+  }
+}
+
+function backFromSubtask() {
+  subtaskStack.value = subtaskStack.value.slice(0, -1)
+  error.value = ''
+}
+
 async function recoverFloating() {
   error.value = ''
   try {
     await agent.reconnect()
-    await agent.restoreFloatingSession()
+    if (activeSubtask.value) await agent.loadConversation(activeSubtask.value.id)
+    else await agent.restoreFloatingSession()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '重新连接失败，请稍后再试'
   }
@@ -293,8 +345,14 @@ const panelStyle = computed(() => ({
 <template>
   <aside v-if="renderSidebar" class="agent-side-panel" aria-label="智能体侧栏">
     <div class="agent-float-header agent-side-header">
-      <h2 class="agent-float-title">智能体</h2>
-      <button type="button" class="agent-side-action" title="新对话" @click="newChat">
+      <div class="agent-float-heading">
+        <button v-if="activeSubtask" type="button" class="agent-float-back" @click="backFromSubtask">
+          <LeftOutlined aria-hidden="true" />
+          <span>{{ subtaskStack.length > 1 ? '上一级' : '主对话' }}</span>
+        </button>
+        <h2 class="agent-float-title" :title="activeSubtask?.title">{{ activeSubtask?.title || '智能体' }}</h2>
+      </div>
+      <button v-if="!activeSubtask" type="button" class="agent-side-action" title="新对话" @click="newChat">
         <ReloadOutlined aria-hidden="true" />
         <span>新对话</span>
       </button>
@@ -309,18 +367,24 @@ const panelStyle = computed(() => ({
       :welcome-title="welcomeTitle"
       :welcome-description="welcomeDescription"
       :prompt-items="promptItems"
-      :messages="agent.floatingMessages"
-      :parts="agent.floatingParts"
-      :sending="floatingSending"
-      :stopping="agent.floatingStopping"
-      :status="floatingStatus"
-      :blocked="floatingBlocked"
-      :session-id="agent.floatingSessionId"
+      :messages="displayedMessages"
+      :parts="displayedParts"
+      :sending="displayedSending"
+      :stopping="activeSubtask ? false : agent.floatingStopping"
+      :loading="displayedLoading"
+      :readonly="!!activeSubtask"
+      :status="displayedStatus"
+      :blocked="displayedBlocked"
+      :session-id="displayedSessionId"
+      :sessions="agent.allSessions"
+      :session-statuses="agent.sessionStatuses"
+      :session-errors="agent.sessionErrors"
       :submit-message="send"
       :stop-message="() => agent.abortFloatingSession()"
       @prompt="sendPrompt"
       @error="error = $event"
       @retry="recoverFloating"
+      @open-subtask="openSubtask"
     />
   </aside>
 
@@ -358,9 +422,19 @@ const panelStyle = computed(() => ({
           <Dialog.Positioner class="agent-drawer-positioner">
             <Dialog.Content id="agent-floating-panel" class="agent-float-panel agent-float-mobile">
               <div class="agent-float-header">
-                <Dialog.Title class="agent-float-title">智能体</Dialog.Title>
+                <div class="agent-float-heading">
+                  <button v-if="activeSubtask" type="button" class="agent-float-back" @click="backFromSubtask">
+                    <LeftOutlined aria-hidden="true" />
+                    <span>{{ subtaskStack.length > 1 ? '上一级' : '主对话' }}</span>
+                  </button>
+                  <Dialog.Title class="agent-float-title" :title="activeSubtask?.title">
+                    {{ activeSubtask?.title || '智能体' }}
+                  </Dialog.Title>
+                </div>
                 <div class="agent-float-actions">
-                  <button type="button" title="新对话" aria-label="新对话" @click="newChat"><ReloadOutlined /></button>
+                  <button v-if="!activeSubtask" type="button" title="新对话" aria-label="新对话" @click="newChat">
+                    <ReloadOutlined />
+                  </button>
                   <Dialog.CloseTrigger as-child>
                     <button type="button" title="关闭" aria-label="关闭"><CloseOutlined /></button>
                   </Dialog.CloseTrigger>
@@ -376,18 +450,24 @@ const panelStyle = computed(() => ({
                 :welcome-title="welcomeTitle"
                 :welcome-description="welcomeDescription"
                 :prompt-items="promptItems"
-                :messages="agent.floatingMessages"
-                :parts="agent.floatingParts"
-                :sending="floatingSending"
-                :stopping="agent.floatingStopping"
-                :status="floatingStatus"
-                :blocked="floatingBlocked"
-                :session-id="agent.floatingSessionId"
+                :messages="displayedMessages"
+                :parts="displayedParts"
+                :sending="displayedSending"
+                :stopping="activeSubtask ? false : agent.floatingStopping"
+                :loading="displayedLoading"
+                :readonly="!!activeSubtask"
+                :status="displayedStatus"
+                :blocked="displayedBlocked"
+                :session-id="displayedSessionId"
+                :sessions="agent.allSessions"
+                :session-statuses="agent.sessionStatuses"
+                :session-errors="agent.sessionErrors"
                 :submit-message="send"
                 :stop-message="() => agent.abortFloatingSession()"
                 @prompt="sendPrompt"
                 @error="error = $event"
                 @retry="recoverFloating"
+                @open-subtask="openSubtask"
               />
             </Dialog.Content>
           </Dialog.Positioner>
@@ -404,7 +484,15 @@ const panelStyle = computed(() => ({
             >
               <div class="agent-float-resize-handle" aria-hidden="true" @pointerdown="onResizeStart" />
               <div class="agent-float-header">
-                <Dialog.Title class="agent-float-title">智能体</Dialog.Title>
+                <div class="agent-float-heading">
+                  <button v-if="activeSubtask" type="button" class="agent-float-back" @click="backFromSubtask">
+                    <LeftOutlined aria-hidden="true" />
+                    <span>{{ subtaskStack.length > 1 ? '上一级' : '主对话' }}</span>
+                  </button>
+                  <Dialog.Title class="agent-float-title" :title="activeSubtask?.title">
+                    {{ activeSubtask?.title || '智能体' }}
+                  </Dialog.Title>
+                </div>
                 <div class="agent-float-actions">
                   <button
                     type="button"
@@ -415,7 +503,9 @@ const panelStyle = computed(() => ({
                   >
                     <PushpinOutlined />
                   </button>
-                  <button type="button" title="新对话" aria-label="新对话" @click="newChat"><ReloadOutlined /></button>
+                  <button v-if="!activeSubtask" type="button" title="新对话" aria-label="新对话" @click="newChat">
+                    <ReloadOutlined />
+                  </button>
                   <Dialog.CloseTrigger as-child>
                     <button type="button" title="关闭" aria-label="关闭"><CloseOutlined /></button>
                   </Dialog.CloseTrigger>
@@ -431,18 +521,24 @@ const panelStyle = computed(() => ({
                 :welcome-title="welcomeTitle"
                 :welcome-description="welcomeDescription"
                 :prompt-items="promptItems"
-                :messages="agent.floatingMessages"
-                :parts="agent.floatingParts"
-                :sending="floatingSending"
-                :stopping="agent.floatingStopping"
-                :status="floatingStatus"
-                :blocked="floatingBlocked"
-                :session-id="agent.floatingSessionId"
+                :messages="displayedMessages"
+                :parts="displayedParts"
+                :sending="displayedSending"
+                :stopping="activeSubtask ? false : agent.floatingStopping"
+                :loading="displayedLoading"
+                :readonly="!!activeSubtask"
+                :status="displayedStatus"
+                :blocked="displayedBlocked"
+                :session-id="displayedSessionId"
+                :sessions="agent.allSessions"
+                :session-statuses="agent.sessionStatuses"
+                :session-errors="agent.sessionErrors"
                 :submit-message="send"
                 :stop-message="() => agent.abortFloatingSession()"
                 @prompt="sendPrompt"
                 @error="error = $event"
                 @retry="recoverFloating"
+                @open-subtask="openSubtask"
               />
             </Dialog.Content>
           </Dialog.Positioner>
@@ -687,12 +783,49 @@ const panelStyle = computed(() => ({
 .agent-float-desktop > .agent-float-header {
   padding-left: 52px;
 }
+.agent-float-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-float-back {
+  min-height: 30px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  font: inherit;
+  font-size: var(--marvo-type-11);
+  -webkit-tap-highlight-color: transparent;
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 42%, transparent);
+    outline-offset: 1px;
+  }
+}
 .agent-float-title {
   margin: 0;
   min-width: 0;
+  overflow: hidden;
   font: inherit;
   font-size: var(--marvo-type-16);
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .agent-float-actions {
   display: flex;
