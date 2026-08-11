@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -278,6 +279,12 @@ func (ds *DeviceStore) ListDevices() []*ApprovedDevice {
 		copy.Token = ""
 		result = append(result, &copy)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ApprovedAt.Equal(result[j].ApprovedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].ApprovedAt.After(result[j].ApprovedAt)
+	})
 	return result
 }
 

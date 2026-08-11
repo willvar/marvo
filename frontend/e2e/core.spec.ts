@@ -941,6 +941,55 @@ test('回收站破坏性操作统一使用组件确认弹框', async ({ page }, 
   expect(nativeDialogs).toBe(0)
 })
 
+test('撤回设备批准需要组件确认', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-landscape')
+  const suffix = Date.now()
+  const deviceName = `Playwright 撤回确认 ${suffix}`
+  const localDeviceID = `marvo-playwright-revoke-${suffix}`
+  const application = await page.request.post('/api/auth/apply', {
+    data: {
+      local_device_id: localDeviceID,
+      device_name: deviceName,
+      device_info: { platform: 'Playwright' },
+    },
+  })
+  expect(application.ok()).toBeTruthy()
+
+  let nativeDialogs = 0
+  page.on('dialog', async (dialog) => {
+    nativeDialogs++
+    await dialog.dismiss()
+  })
+  await page.goto('/admin/login')
+  await page.getByPlaceholder('请输入密码').fill('e2e-admin-password')
+  await page.getByRole('button', { name: '进入' }).click()
+  await expect(page).toHaveURL(/\/admin$/)
+
+  const pendingRow = page.locator('tbody tr').filter({ hasText: deviceName })
+  await expect(pendingRow).toBeVisible()
+  await pendingRow.getByRole('button', { name: '批准', exact: true }).click()
+  await expect(pendingRow).toHaveCount(0)
+
+  await page.getByRole('button', { name: /已批准设备/ }).click()
+  const approvedRow = page.locator('tbody tr').filter({ hasText: deviceName })
+  await expect(approvedRow).toBeVisible()
+  await expect(approvedRow.locator('td').nth(1)).toHaveText(/^\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}$/)
+
+  await approvedRow.getByRole('button', { name: '撤回', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '撤回设备批准' })).toBeVisible()
+  await expect(page.getByText(`确定撤回「${deviceName}」的访问权限吗？`, { exact: false })).toBeVisible()
+  const revokeDialog = page.locator('.dialog-panel').filter({ hasText: '撤回设备批准' })
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(revokeDialog).not.toContainText('未命名设备')
+  await expect(page.getByRole('heading', { name: '撤回设备批准' })).toBeHidden()
+  await expect(approvedRow).toBeVisible()
+
+  await approvedRow.getByRole('button', { name: '撤回', exact: true }).click()
+  await page.getByRole('button', { name: '确认撤回', exact: true }).click()
+  await expect(approvedRow).toHaveCount(0)
+  expect(nativeDialogs).toBe(0)
+})
+
 test('路由资源版本失效时自动恢复到当前前端版本', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright stale route recovery')

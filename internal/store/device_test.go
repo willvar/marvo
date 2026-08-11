@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestApprovedDeviceTokenIsPrivateAndRevocationPersists(t *testing.T) {
@@ -54,5 +55,36 @@ func TestApprovedDeviceTokenIsPrivateAndRevocationPersists(t *testing.T) {
 	}
 	if NewDeviceStore(dataDir, secret).VerifyToken(approved.Token, signature) {
 		t.Fatal("revoked token returned after restart")
+	}
+}
+
+func TestListDevicesSortsByApprovalTimeNewestFirst(t *testing.T) {
+	devices := NewDeviceStore(t.TempDir(), "device-sort-session-secret")
+	approvalTimes := map[string]time.Time{
+		"browser-oldest": time.Date(2026, time.July, 30, 8, 0, 0, 0, time.UTC),
+		"browser-newest": time.Date(2026, time.August, 11, 8, 0, 0, 0, time.UTC),
+		"browser-middle": time.Date(2026, time.August, 5, 8, 0, 0, 0, time.UTC),
+	}
+	for localDeviceID, approvedAt := range approvalTimes {
+		request, err := devices.CreateRequest(localDeviceID, localDeviceID, DeviceInfo{})
+		if err != nil {
+			t.Fatalf("CreateRequest(%q) error = %v", localDeviceID, err)
+		}
+		approved, err := devices.ApproveRequest(request.ID)
+		if err != nil || approved == nil {
+			t.Fatalf("ApproveRequest(%q) = %#v, %v", localDeviceID, approved, err)
+		}
+		devices.approved[localDeviceID].ApprovedAt = approvedAt
+	}
+
+	got := devices.ListDevices()
+	want := []string{"browser-newest", "browser-middle", "browser-oldest"}
+	if len(got) != len(want) {
+		t.Fatalf("ListDevices() length = %d, want %d", len(got), len(want))
+	}
+	for i, localDeviceID := range want {
+		if got[i].LocalDeviceID != localDeviceID {
+			t.Fatalf("ListDevices()[%d].LocalDeviceID = %q, want %q", i, got[i].LocalDeviceID, localDeviceID)
+		}
 	}
 }

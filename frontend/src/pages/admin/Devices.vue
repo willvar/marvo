@@ -62,6 +62,10 @@ const devices = ref<ApprovedDevice[]>([])
 const devicesLoading = ref(true)
 const devicesError = ref('')
 const detail = ref<DeviceInfo | null>(null)
+const revokeTarget = ref<ApprovedDevice | null>(null)
+const revokeTargetName = ref('')
+const revoking = ref(false)
+const revokeError = ref('')
 const router = useRouter()
 let requestsInFlight = false
 let devicesInFlight = false
@@ -132,9 +136,36 @@ async function reject(id: string) {
   loadRequests()
 }
 
-async function revoke(local_device_id: string) {
-  await api.delete(`/api/admin/devices/${local_device_id}`)
-  loadDevices()
+function requestRevoke(device: ApprovedDevice) {
+  revokeError.value = ''
+  revokeTargetName.value = device.device_name || '未命名设备'
+  revokeTarget.value = device
+}
+
+function updateRevokeOpen(open: boolean) {
+  if (!open && !revoking.value) revokeTarget.value = null
+}
+
+async function confirmRevoke() {
+  const target = revokeTarget.value
+  if (!target || revoking.value) return
+
+  revoking.value = true
+  revokeError.value = ''
+  try {
+    await api.delete(`/api/admin/devices/${target.local_device_id}`)
+    devices.value = devices.value.filter((device) => device.local_device_id !== target.local_device_id)
+    revokeTarget.value = null
+    void loadDevices()
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      void router.replace('/admin/login')
+      return
+    }
+    revokeError.value = '撤回失败，请稍后重试'
+  } finally {
+    revoking.value = false
+  }
 }
 
 function showInfo(info: DeviceInfo) {
@@ -146,7 +177,13 @@ function updateDetailOpen(open: boolean) {
 }
 
 function fmt(t: string) {
-  return new Date(t).toLocaleString()
+  const date = new Date(t)
+  if (Number.isNaN(date.getTime())) return '-'
+
+  const pad = (value: number) => String(value).padStart(2, '0')
+  const day = [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join('.')
+  const time = [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join(':')
+  return `${day} ${time}`
 }
 </script>
 
@@ -219,7 +256,7 @@ function fmt(t: string) {
             </td>
             <td>{{ fmt(d.approved_at) }}</td>
             <td>
-              <button class="admin-btn admin-btn-danger" @click="revoke(d.local_device_id)">
+              <button class="admin-btn admin-btn-danger" @click="requestRevoke(d)">
                 <StopOutlined aria-hidden="true" />撤回
               </button>
             </td>
@@ -301,5 +338,59 @@ function fmt(t: string) {
         </Dialog.Positioner>
       </Teleport>
     </Dialog.Root>
+
+    <Dialog.Root
+      :open="!!revokeTarget"
+      lazy-mount
+      unmount-on-exit
+      :close-on-interact-outside="!revoking"
+      @update:open="updateRevokeOpen"
+    >
+      <Teleport to="body">
+        <Dialog.Backdrop class="dialog-backdrop" />
+        <Dialog.Positioner class="dialog-positioner">
+          <Dialog.Content class="dialog-panel" style="max-width: 420px">
+            <div class="dialog-header">
+              <Dialog.Title>撤回设备批准</Dialog.Title>
+              <Dialog.CloseTrigger class="dialog-close" :disabled="revoking"><CloseOutlined /></Dialog.CloseTrigger>
+            </div>
+            <div class="dialog-body">
+              <p class="admin-confirm-copy">
+                确定撤回「{{ revokeTargetName }}」的访问权限吗？该设备需要重新申请并批准后才能访问。
+              </p>
+              <p v-if="revokeError" class="admin-confirm-error" role="alert">{{ revokeError }}</p>
+              <div class="btn-group admin-confirm-actions">
+                <button class="admin-btn" type="button" :disabled="revoking" @click="revokeTarget = null">
+                  <CloseOutlined aria-hidden="true" />取消
+                </button>
+                <button class="admin-btn admin-btn-danger" type="button" :disabled="revoking" @click="confirmRevoke">
+                  <StopOutlined aria-hidden="true" />{{ revoking ? '撤回中...' : '确认撤回' }}
+                </button>
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Teleport>
+    </Dialog.Root>
   </div>
 </template>
+
+<style scoped lang="scss">
+.admin-confirm-copy {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.admin-confirm-error {
+  margin: 12px 0 0;
+  color: var(--text-danger);
+  font-size: var(--marvo-type-13);
+}
+
+.admin-confirm-actions {
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+</style>
