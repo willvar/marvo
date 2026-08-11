@@ -11,30 +11,50 @@ import {
   CloseOutlined,
   ControlOutlined,
   ApiOutlined,
+  DeleteOutlined,
   DownOutlined,
   LayoutOutlined,
   MessageOutlined,
+  PlusOutlined,
+  RobotOutlined,
   SaveOutlined,
-  UserOutlined,
 } from '@ant-design/icons-vue'
+import { v4 as uuidv4 } from 'uuid'
+import { useAgentPersonalizationStore } from '../stores/agentPersonalization'
 import { useAgentSettingsStore } from '../stores/agentSettings'
 import { useUIPreferencesStore, type AgentAssistantDisplayMode } from '../stores/uiPreferences'
-import type { AgentModelOption, AgentModelSelection } from '../sdk'
+import type { AgentModelOption, AgentModelSelection, AgentPersonalizationRule } from '../sdk'
 import AgentProviderSettings from './AgentProviderSettings.vue'
+import { XFullscreenTextarea } from './x'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ 'update:open': [open: boolean] }>()
 
 const MAX_PROMPT_BYTES = 64 * 1024
+const MAX_PERSONALIZATION_RULE_BYTES = 4 * 1024
+const MAX_PERSONALIZATION_RULES = 256
 const DEFAULT_VARIANT = '__model_default__'
+type AgentSettingsTab = 'style' | 'providers' | 'model' | 'advanced'
+const TAB_LABELS: Record<AgentSettingsTab, string> = {
+  style: '样式',
+  providers: '提供商',
+  model: '模型',
+  advanced: '进阶',
+}
 const settingsStore = useAgentSettingsStore()
+const personalizationStore = useAgentPersonalizationStore()
 const uiPreferences = useUIPreferencesStore()
-const activeTab = ref('personalization')
+const activeTab = ref<AgentSettingsTab>('style')
+const tabChangeOpen = ref(false)
+const tabChangeSourceTab = ref<AgentSettingsTab | null>(null)
+const pendingTab = ref<AgentSettingsTab | null>(null)
 const displayMode = ref<AgentAssistantDisplayMode>('floating')
+const styleSnapshot = ref<AgentAssistantDisplayMode>('floating')
 const loading = ref(false)
 const saving = ref(false)
-const advancedReady = ref(false)
-const advancedSnapshot = ref('')
+const settingsReady = ref(false)
+const modelSnapshot = ref('')
+const promptSnapshot = ref('')
 const error = ref('')
 const models = ref<AgentModelOption[]>([])
 const selectedValues = ref<string[]>([])
@@ -42,7 +62,15 @@ const selectedVariant = ref(DEFAULT_VARIANT)
 const globalPrompt = ref('')
 const unavailableModel = ref<AgentModelSelection | null>(null)
 const unavailableVariant = ref('')
+const personalizationRules = ref<AgentPersonalizationRule[]>([])
+const personalizationRevision = ref('')
+const personalizationSnapshot = ref('')
+const personalizationReady = ref(false)
+const personalizationLoading = ref(false)
+const personalizationError = ref('')
+const touchedPersonalizationRuleIDs = ref<Set<string>>(new Set())
 let loadSequence = 0
+let personalizationLoadSequence = 0
 
 const { collection, filter, set } = useListCollection<AgentModelOption>({
   initialItems: [],
@@ -67,14 +95,30 @@ const variantOptions = computed(() => [
 ])
 const promptBytes = computed(() => new TextEncoder().encode(globalPrompt.value).byteLength)
 const promptTooLarge = computed(() => promptBytes.value > MAX_PROMPT_BYTES)
-const advancedDirty = computed(() => advancedReady.value && advancedSnapshot.value !== advancedDraftSnapshot())
-const canSave = computed(() => {
-  if (saving.value || promptTooLarge.value) return false
-  if (activeTab.value === 'advanced' || advancedDirty.value) {
-    return advancedReady.value && !!selectedModel.value && !loading.value
+const styleDirty = computed(() => displayMode.value !== styleSnapshot.value)
+const modelDirty = computed(() => settingsReady.value && modelSnapshot.value !== modelDraftSnapshot())
+const promptDirty = computed(() => settingsReady.value && promptSnapshot.value !== globalPrompt.value)
+const personalizationDirty = computed(
+  () => personalizationReady.value && personalizationSnapshot.value !== personalizationDraftSnapshot(),
+)
+const advancedDirty = computed(() => promptDirty.value || personalizationDirty.value)
+const personalizationInvalid = computed(() => {
+  const texts = new Set<string>()
+  for (const rule of personalizationRules.value) {
+    const text = rule.text.trim()
+    if (!text || new TextEncoder().encode(text).byteLength > MAX_PERSONALIZATION_RULE_BYTES || texts.has(text))
+      return true
+    texts.add(text)
   }
-  return true
+  return false
 })
+const currentTabDirty = computed(() => {
+  if (activeTab.value === 'style') return styleDirty.value
+  if (activeTab.value === 'model') return modelDirty.value
+  if (activeTab.value === 'advanced') return advancedDirty.value
+  return false
+})
+const canSave = computed(() => !saving.value && currentTabDirty.value)
 
 watch(
   selectedModel,
@@ -91,9 +135,15 @@ watch(
   () => props.open,
   (open) => {
     if (!open) return
-    activeTab.value = 'personalization'
+    activeTab.value = 'style'
+    tabChangeOpen.value = false
+    tabChangeSourceTab.value = null
+    pendingTab.value = null
     displayMode.value = uiPreferences.agentAssistantDisplayMode
+    styleSnapshot.value = displayMode.value
+    touchedPersonalizationRuleIDs.value = new Set()
     void loadSettings()
+    void loadPersonalization()
   },
   { immediate: true },
 )
@@ -102,11 +152,33 @@ function modelKey(model: Pick<AgentModelOption, 'provider_id' | 'model_id'>) {
   return JSON.stringify([model.provider_id, model.model_id])
 }
 
+async function loadPersonalization() {
+  const sequence = ++personalizationLoadSequence
+  personalizationLoading.value = true
+  personalizationReady.value = false
+  personalizationError.value = ''
+  try {
+    const snapshot = await personalizationStore.load(true)
+    if (sequence !== personalizationLoadSequence || !props.open) return
+    personalizationRules.value = snapshot.rules.map((rule) => ({ ...rule }))
+    personalizationRevision.value = snapshot.revision
+    touchedPersonalizationRuleIDs.value = new Set()
+    personalizationReady.value = true
+    personalizationSnapshot.value = personalizationDraftSnapshot()
+  } catch (cause) {
+    if (sequence !== personalizationLoadSequence || !props.open) return
+    personalizationError.value = cause instanceof Error ? cause.message : '读取个性化规则失败'
+  } finally {
+    if (sequence === personalizationLoadSequence) personalizationLoading.value = false
+  }
+}
+
 async function loadSettings() {
   const sequence = ++loadSequence
   loading.value = true
-  advancedReady.value = false
-  advancedSnapshot.value = ''
+  settingsReady.value = false
+  modelSnapshot.value = ''
+  promptSnapshot.value = ''
   error.value = ''
   unavailableModel.value = null
   unavailableVariant.value = ''
@@ -133,8 +205,9 @@ async function loadSettings() {
       unavailableModel.value = settings.model
     }
     if (models.value.length === 0) error.value = 'OpenCode 当前没有已连接且可选择的模型。'
-    advancedReady.value = true
-    advancedSnapshot.value = advancedDraftSnapshot()
+    settingsReady.value = true
+    modelSnapshot.value = modelDraftSnapshot()
+    promptSnapshot.value = globalPrompt.value
   } catch (cause) {
     if (sequence !== loadSequence || !props.open) return
     error.value = cause instanceof Error ? cause.message : '读取智能体设置失败'
@@ -163,34 +236,180 @@ async function refreshModels() {
 }
 
 async function saveSettings() {
-  const model = selectedModel.value
-  if (!canSave.value) return
+  await saveCurrentTab(true)
+}
+
+async function saveCurrentTab(closeOnSuccess: boolean) {
+  if (!canSave.value) return false
+  const tab = activeTab.value
+  if (!validateCurrentTab(tab)) return false
+  let savePhase: 'personalization' | 'settings' | 'style' = tab === 'style' ? 'style' : 'settings'
   saving.value = true
   error.value = ''
+  personalizationError.value = ''
   try {
-    const saveAdvanced = !!model && advancedReady.value && (activeTab.value === 'advanced' || advancedDirty.value)
-    if (saveAdvanced) {
-      await settingsStore.save({
-        model: { provider_id: model.provider_id, model_id: model.model_id },
-        variant: selectedVariant.value === DEFAULT_VARIANT ? '' : selectedVariant.value,
-        global_prompt: globalPrompt.value,
-      })
+    if (tab === 'style') {
+      uiPreferences.setAgentAssistantDisplayMode(displayMode.value)
+      styleSnapshot.value = displayMode.value
+    } else if (tab === 'model') {
+      savePhase = 'settings'
+      await saveAgentSettings()
+    } else if (tab === 'advanced') {
+      if (personalizationDirty.value) {
+        savePhase = 'personalization'
+        const snapshot = await personalizationStore.save(
+          personalizationRules.value.map((rule) => ({ ...rule, text: rule.text.trim() })),
+          personalizationRevision.value,
+        )
+        personalizationRules.value = snapshot.rules.map((rule) => ({ ...rule }))
+        personalizationRevision.value = snapshot.revision
+        personalizationSnapshot.value = personalizationDraftSnapshot()
+      }
+      if (promptDirty.value) {
+        savePhase = 'settings'
+        await saveAgentSettings()
+      }
     }
-    uiPreferences.setAgentAssistantDisplayMode(displayMode.value)
-    emit('update:open', false)
+    if (closeOnSuccess) emit('update:open', false)
+    return true
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '保存智能体设置失败'
+    const message = cause instanceof Error ? cause.message : '保存智能体设置失败'
+    if (savePhase === 'personalization') {
+      personalizationError.value = message
+    } else {
+      error.value = message
+    }
+    return false
   } finally {
     saving.value = false
   }
 }
 
-function advancedDraftSnapshot() {
+function validateCurrentTab(tab: AgentSettingsTab) {
+  if (tab === 'model' && (!settingsReady.value || !selectedModel.value || loading.value)) {
+    error.value = '请选择智能体模型'
+    return false
+  }
+  if (tab !== 'advanced') return true
+  if (promptTooLarge.value) return false
+  if (personalizationDirty.value && personalizationInvalid.value) {
+    touchedPersonalizationRuleIDs.value = new Set(personalizationRules.value.map((rule) => rule.id))
+    return false
+  }
+  if (promptDirty.value && (!settingsReady.value || !selectedModel.value || loading.value)) {
+    error.value = '请先选择智能体模型'
+    return false
+  }
+  return true
+}
+
+async function saveAgentSettings() {
+  const model = selectedModel.value
+  if (!model) throw new Error('请选择智能体模型')
+  await settingsStore.save({
+    model: { provider_id: model.provider_id, model_id: model.model_id },
+    variant: selectedVariant.value === DEFAULT_VARIANT ? '' : selectedVariant.value,
+    global_prompt: globalPrompt.value,
+  })
+  modelSnapshot.value = modelDraftSnapshot()
+  promptSnapshot.value = globalPrompt.value
+}
+
+function personalizationDraftSnapshot() {
+  return JSON.stringify(personalizationRules.value.map(({ id, text }) => ({ id, text })))
+}
+
+function addPersonalizationRule() {
+  if (personalizationRules.value.length >= MAX_PERSONALIZATION_RULES) return
+  personalizationRules.value = [...personalizationRules.value, { id: uuidv4(), text: '' }]
+}
+
+function removePersonalizationRule(id: string) {
+  personalizationRules.value = personalizationRules.value.filter((rule) => rule.id !== id)
+  const touched = new Set(touchedPersonalizationRuleIDs.value)
+  touched.delete(id)
+  touchedPersonalizationRuleIDs.value = touched
+}
+
+function touchPersonalizationRule(id: string) {
+  const touched = new Set(touchedPersonalizationRuleIDs.value)
+  touched.add(id)
+  touchedPersonalizationRuleIDs.value = touched
+}
+
+function personalizationRuleInvalid(rule: AgentPersonalizationRule) {
+  if (!touchedPersonalizationRuleIDs.value.has(rule.id)) return false
+  const text = rule.text.trim()
+  if (!text || new TextEncoder().encode(text).byteLength > MAX_PERSONALIZATION_RULE_BYTES) return true
+  return personalizationRules.value.filter((candidate) => candidate.text.trim() === text).length > 1
+}
+
+function modelDraftSnapshot() {
   return JSON.stringify({
     model: selectedValues.value[0] || '',
     variant: selectedVariant.value,
-    prompt: globalPrompt.value,
   })
+}
+
+function requestTabChange(value: string) {
+  if (!['style', 'providers', 'model', 'advanced'].includes(value) || value === activeTab.value || saving.value) return
+  const nextTab = value as AgentSettingsTab
+  if (currentTabDirty.value) {
+    tabChangeSourceTab.value = activeTab.value
+    pendingTab.value = nextTab
+    tabChangeOpen.value = true
+    return
+  }
+  activeTab.value = nextTab
+}
+
+function restoreTabDraft(tab: AgentSettingsTab) {
+  if (tab === 'style') {
+    displayMode.value = styleSnapshot.value
+    return
+  }
+  if (tab === 'model' && modelSnapshot.value) {
+    const snapshot = JSON.parse(modelSnapshot.value) as { model: string; variant: string }
+    selectedValues.value = snapshot.model ? [snapshot.model] : []
+    selectedVariant.value = snapshot.variant || DEFAULT_VARIANT
+    return
+  }
+  if (tab !== 'advanced') return
+  globalPrompt.value = promptSnapshot.value
+  if (personalizationSnapshot.value) {
+    personalizationRules.value = JSON.parse(personalizationSnapshot.value) as AgentPersonalizationRule[]
+  }
+  touchedPersonalizationRuleIDs.value = new Set()
+  personalizationError.value = ''
+}
+
+function discardAndSwitchTab() {
+  const nextTab = pendingTab.value
+  if (!nextTab || saving.value) return
+  restoreTabDraft(activeTab.value)
+  activeTab.value = nextTab
+  tabChangeOpen.value = false
+}
+
+async function saveAndSwitchTab() {
+  const nextTab = pendingTab.value
+  if (!nextTab || saving.value) return
+  const saved = await saveCurrentTab(false)
+  if (saved) activeTab.value = nextTab
+  tabChangeOpen.value = false
+}
+
+function updateTabChangeOpen(open: boolean) {
+  if (!open && !saving.value) tabChangeOpen.value = false
+}
+
+function completeTabChangeClose() {
+  tabChangeSourceTab.value = null
+  pendingTab.value = null
+}
+
+function tabLabel(tab: AgentSettingsTab | null) {
+  return tab ? TAB_LABELS[tab] : ''
 }
 
 function updateOpen(open: boolean) {
@@ -244,7 +463,7 @@ function formatLimit(limit?: number) {
 </script>
 
 <template>
-  <Dialog.Root :open="open" lazy-mount unmount-on-exit @update:open="updateOpen">
+  <Dialog.Root :open="open" :close-on-interact-outside="false" lazy-mount unmount-on-exit @update:open="updateOpen">
     <Teleport to="body">
       <Dialog.Backdrop class="dialog-backdrop" />
       <Dialog.Positioner class="dialog-positioner agent-settings-positioner">
@@ -260,25 +479,34 @@ function formatLimit(limit?: number) {
           </div>
 
           <div class="agent-settings-form">
-            <Tabs.Root v-model="activeTab" class="agent-settings-tabs" activation-mode="manual">
+            <Tabs.Root
+              :model-value="activeTab"
+              class="agent-settings-tabs"
+              activation-mode="manual"
+              @update:model-value="requestTabChange"
+            >
               <Tabs.List class="agent-settings-tab-list" aria-label="智能体设置分类">
-                <Tabs.Trigger class="agent-settings-tab" value="personalization">
-                  <UserOutlined aria-hidden="true" />
-                  <span>个性化</span>
+                <Tabs.Trigger class="agent-settings-tab" value="style">
+                  <LayoutOutlined aria-hidden="true" />
+                  <span>样式</span>
                 </Tabs.Trigger>
                 <Tabs.Trigger class="agent-settings-tab" value="providers">
                   <ApiOutlined aria-hidden="true" />
-                  <span>提供商连接</span>
+                  <span>提供商</span>
+                </Tabs.Trigger>
+                <Tabs.Trigger class="agent-settings-tab" value="model">
+                  <RobotOutlined aria-hidden="true" />
+                  <span>模型</span>
                 </Tabs.Trigger>
                 <Tabs.Trigger class="agent-settings-tab" value="advanced">
                   <ControlOutlined aria-hidden="true" />
-                  <span>高阶设置</span>
+                  <span>进阶</span>
                 </Tabs.Trigger>
                 <Tabs.Indicator class="agent-settings-tab-indicator" />
               </Tabs.List>
 
               <div class="agent-settings-scroll">
-                <Tabs.Content class="agent-settings-tab-content" value="personalization">
+                <Tabs.Content class="agent-settings-tab-content" value="style">
                   <section class="agent-settings-section agent-personalization-section">
                     <div class="agent-settings-section-heading">
                       <div>
@@ -319,7 +547,7 @@ function formatLimit(limit?: number) {
                   <AgentProviderSettings :active="activeTab === 'providers'" @changed="refreshModels" />
                 </Tabs.Content>
 
-                <Tabs.Content class="agent-settings-tab-content" value="advanced">
+                <Tabs.Content class="agent-settings-tab-content" value="model">
                   <div v-if="loading" class="agent-settings-loading" aria-label="正在读取智能体设置">
                     <span class="page-loading-spinner" />
                     <span>正在读取 OpenCode 模型...</span>
@@ -347,6 +575,7 @@ function formatLimit(limit?: number) {
                         :positioning="{ placement: 'bottom-start', sameWidth: true }"
                         input-behavior="autohighlight"
                         open-on-click
+                        selection-behavior="clear"
                         @input-value-change="filter($event.inputValue)"
                         @open-change="handleComboboxOpen"
                       >
@@ -449,12 +678,24 @@ function formatLimit(limit?: number) {
                       </div>
                     </section>
 
+                    <div v-if="error" class="agent-settings-error" role="alert">{{ error }}</div>
+                  </template>
+                </Tabs.Content>
+
+                <Tabs.Content class="agent-settings-tab-content" value="advanced">
+                  <div v-if="loading" class="agent-settings-loading" aria-label="正在读取进阶设置">
+                    <span class="page-loading-spinner" />
+                    <span>正在读取进阶设置...</span>
+                  </div>
+
+                  <template v-else>
                     <section class="agent-settings-section">
                       <Field.Root :invalid="promptTooLarge">
                         <Field.Label class="agent-settings-field-label">全局提示词</Field.Label>
-                        <Field.Textarea
+                        <XFullscreenTextarea
                           v-model="globalPrompt"
                           class="agent-settings-prompt"
+                          title="全屏编辑全局提示词"
                           :aria-describedby="promptTooLarge ? 'agent-prompt-error' : 'agent-prompt-help'"
                           placeholder="例如：默认使用中文回答；修改笔记前先说明计划……"
                         />
@@ -470,6 +711,71 @@ function formatLimit(limit?: number) {
                           >全局提示词不能超过 64 KiB。</Field.ErrorText
                         >
                       </Field.Root>
+                    </section>
+
+                    <section class="agent-settings-section agent-personalization-rules-section">
+                      <div class="agent-settings-section-heading">
+                        <div>
+                          <h4>个性化规则</h4>
+                          <p>你与智能体共同维护的长期默认偏好；当前请求中的明确要求仍然优先。</p>
+                        </div>
+                        <span class="agent-settings-count">{{ personalizationRules.length }} 条</span>
+                      </div>
+
+                      <div v-if="personalizationLoading" class="agent-personalization-loading" role="status">
+                        <span class="page-loading-spinner" />
+                        <span>正在读取规则...</span>
+                      </div>
+
+                      <template v-else-if="personalizationReady">
+                        <div v-if="personalizationRules.length" class="agent-personalization-rules">
+                          <Field.Root
+                            v-for="(rule, index) in personalizationRules"
+                            :key="rule.id"
+                            class="agent-personalization-rule"
+                            :invalid="personalizationRuleInvalid(rule)"
+                          >
+                            <Field.Input
+                              v-model="rule.text"
+                              class="agent-personalization-input"
+                              :aria-label="`个性化规则 ${index + 1}`"
+                              placeholder="例如：面向用户时统一使用“智能体”这一称呼"
+                              @blur="touchPersonalizationRule(rule.id)"
+                            />
+                            <button
+                              type="button"
+                              class="agent-personalization-delete"
+                              :aria-label="`删除个性化规则 ${index + 1}`"
+                              @click="removePersonalizationRule(rule.id)"
+                            >
+                              <DeleteOutlined aria-hidden="true" />
+                              <span>删除</span>
+                            </button>
+                            <Field.ErrorText>规则不能为空、重复或超过 4 KiB。</Field.ErrorText>
+                          </Field.Root>
+                        </div>
+                        <div v-else class="agent-personalization-empty">
+                          尚无个性化规则，智能体也可以在收到长期偏好反馈后添加。
+                        </div>
+
+                        <button
+                          type="button"
+                          class="admin-btn agent-personalization-add"
+                          :disabled="personalizationRules.length >= MAX_PERSONALIZATION_RULES"
+                          @click="addPersonalizationRule"
+                        >
+                          <PlusOutlined aria-hidden="true" />
+                          <span>新增规则</span>
+                        </button>
+                      </template>
+
+                      <div
+                        v-if="personalizationError"
+                        class="agent-settings-error agent-personalization-error"
+                        role="alert"
+                      >
+                        {{ personalizationError }}
+                      </div>
                     </section>
 
                     <div v-if="error" class="agent-settings-error" role="alert">{{ error }}</div>
@@ -499,6 +805,59 @@ function formatLimit(limit?: number) {
               </button>
             </footer>
           </div>
+
+          <Dialog.Root
+            :open="tabChangeOpen"
+            :close-on-interact-outside="false"
+            lazy-mount
+            unmount-on-exit
+            @exit-complete="completeTabChangeClose"
+            @update:open="updateTabChangeOpen"
+          >
+            <Teleport to="body">
+              <Dialog.Backdrop class="dialog-backdrop agent-tab-change-backdrop" />
+              <Dialog.Positioner class="dialog-positioner agent-tab-change-positioner">
+                <Dialog.Content class="dialog-panel agent-tab-change-dialog">
+                  <div class="dialog-header">
+                    <div>
+                      <Dialog.Title>有未保存的设置</Dialog.Title>
+                      <Dialog.Description>
+                        “{{ tabLabel(tabChangeSourceTab) }}”中的修改尚未保存。保存或放弃后，再前往“{{
+                          tabLabel(pendingTab)
+                        }}”。
+                      </Dialog.Description>
+                    </div>
+                  </div>
+                  <div class="agent-tab-change-actions">
+                    <Dialog.CloseTrigger as-child>
+                      <button type="button" class="admin-btn" :disabled="saving">
+                        <CloseOutlined aria-hidden="true" />
+                        <span>继续编辑</span>
+                      </button>
+                    </Dialog.CloseTrigger>
+                    <button
+                      type="button"
+                      class="admin-btn admin-btn-danger"
+                      :disabled="saving"
+                      @click="discardAndSwitchTab"
+                    >
+                      <DeleteOutlined aria-hidden="true" />
+                      <span>放弃并切换</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="admin-btn admin-btn-primary"
+                      :disabled="!canSave"
+                      @click="saveAndSwitchTab"
+                    >
+                      <SaveOutlined aria-hidden="true" />
+                      <span>{{ saving ? '保存中...' : '保存并切换' }}</span>
+                    </button>
+                  </div>
+                </Dialog.Content>
+              </Dialog.Positioner>
+            </Teleport>
+          </Dialog.Root>
         </Dialog.Content>
       </Dialog.Positioner>
     </Teleport>
@@ -706,6 +1065,97 @@ function formatLimit(limit?: number) {
 }
 .agent-display-mode-control[data-state='checked'] {
   border: 5px solid var(--marvo-accent-color);
+}
+.agent-personalization-loading {
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: var(--marvo-type-12);
+}
+.agent-personalization-loading .page-loading-spinner {
+  position: static;
+}
+.agent-personalization-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.agent-personalization-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+.agent-personalization-input {
+  min-width: 0;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 11px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--marvo-type-12);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.agent-personalization-input:focus {
+  border-color: var(--text-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color) 13%, transparent);
+}
+.agent-personalization-rule[data-invalid] .agent-personalization-input {
+  border-color: var(--text-danger);
+}
+.agent-personalization-delete,
+.agent-personalization-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.agent-personalization-delete {
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--marvo-type-11);
+}
+.agent-personalization-delete:hover {
+  border-color: color-mix(in srgb, var(--text-danger) 42%, var(--border-primary));
+  color: var(--text-danger);
+}
+.agent-personalization-delete:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color) 18%, transparent);
+}
+.agent-personalization-rule [data-part='error-text'] {
+  grid-column: 1 / -1;
+  margin: -2px 0 1px;
+}
+.agent-personalization-empty {
+  padding: 18px;
+  border: 1px dashed var(--border-primary);
+  border-radius: 9px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: var(--marvo-type-12);
+  line-height: 1.6;
+}
+.agent-personalization-add {
+  margin-top: 11px;
+}
+.agent-personalization-error {
+  margin: 12px 0 0;
 }
 .agent-settings-field-label {
   display: block;
@@ -1002,6 +1452,34 @@ function formatLimit(limit?: number) {
   justify-content: center;
   gap: 7px;
 }
+.agent-tab-change-backdrop,
+.agent-tab-change-positioner {
+  --dialog-z-index: 1500;
+}
+.agent-tab-change-dialog {
+  max-width: 460px;
+}
+.agent-tab-change-dialog .dialog-header {
+  padding-bottom: 12px;
+}
+.agent-tab-change-dialog [data-part='description'] {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: var(--marvo-type-12);
+  line-height: 1.6;
+}
+.agent-tab-change-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 20px 20px;
+}
+.agent-tab-change-actions .admin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 
 @media (max-width: 600px) {
   .agent-settings-positioner {
@@ -1033,6 +1511,18 @@ function formatLimit(limit?: number) {
   .agent-settings-footer {
     padding-inline: 16px;
     padding-bottom: max(18px, env(safe-area-inset-bottom));
+  }
+  .agent-tab-change-positioner {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .agent-tab-change-dialog {
+    width: 100%;
+    max-width: none;
+    border-radius: 14px 14px 0 0;
+  }
+  .agent-tab-change-actions {
+    padding-bottom: max(20px, env(safe-area-inset-bottom));
   }
   .agent-settings-prompt-meta {
     align-items: flex-end;

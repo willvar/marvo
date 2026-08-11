@@ -13,7 +13,6 @@ import {
   DeleteOutlined,
   DownOutlined,
   LinkOutlined,
-  LockOutlined,
   ReloadOutlined,
 } from '@ant-design/icons-vue'
 import {
@@ -56,14 +55,17 @@ const selectedMethod = computed(
     availableMethods.value[0] ||
     null,
 )
-const connectedProviders = computed(() => providers.value.filter((provider) => provider.connected))
+const connectedProviders = computed(() =>
+  providers.value.filter((provider) => provider.connected).sort(compareProviders),
+)
 const providerOptions = computed(() => {
-  return [...providers.value].sort((left, right) => {
-    if (left.connected !== right.connected) return left.connected ? -1 : 1
-    const nameOrder = left.name.localeCompare(right.name)
-    return nameOrder || left.id.localeCompare(right.id)
-  })
+  return providers.value.filter((provider) => !provider.connected).sort(compareProviders)
 })
+
+function compareProviders(left: AgentProvider, right: AgentProvider) {
+  const nameOrder = left.name.localeCompare(right.name)
+  return nameOrder || left.id.localeCompare(right.id)
+}
 const {
   collection: providerCollection,
   filter: filterProviders,
@@ -139,8 +141,13 @@ async function loadProviders() {
     if (sequence !== loadSequence) return
     providers.value = Array.isArray(data?.providers) ? data.providers : []
     setProviderItems(providerOptions.value)
-    if (selectedProviderID.value && !providers.value.some((provider) => provider.id === selectedProviderID.value)) {
+    const selected = providers.value.find((provider) => provider.id === selectedProviderID.value)
+    if (selectedProviderID.value && !selected) {
       selectedProviderID.value = ''
+      providerValues.value = []
+    } else if (selected?.connected) {
+      selectedProviderID.value = ''
+      selectedMethodIndex.value = ''
       providerValues.value = []
     }
   } catch (cause) {
@@ -154,7 +161,10 @@ async function loadProviders() {
 function selectProvider(provider: AgentProvider) {
   if (attempt.value && attempt.value.provider_id !== provider.id) clearAttempt()
   selectedProviderID.value = provider.id
-  if (providerValues.value[0] !== provider.id) providerValues.value = [provider.id]
+  const nextValues = provider.connected ? [] : [provider.id]
+  if (providerValues.value[0] !== nextValues[0] || providerValues.value.length !== nextValues.length) {
+    providerValues.value = nextValues
+  }
   const method = provider.methods.find((candidate) => candidate.available)
   selectedMethodIndex.value = method ? String(method.index) : ''
   resetMethodFields()
@@ -378,7 +388,7 @@ onBeforeUnmount(stopPolling)
       <section class="provider-list-section">
         <div class="provider-list-heading">
           <div>
-            <h4>提供商连接</h4>
+            <h4>提供商</h4>
             <p>连接和断开操作立即生效，模型列表会自动刷新，无需另行保存。</p>
           </div>
           <button type="button" class="provider-refresh" :disabled="loading" @click="loadProviders">
@@ -390,14 +400,47 @@ onBeforeUnmount(stopPolling)
         <div v-if="notice" class="provider-inline-success" role="status">{{ notice }}</div>
         <div v-if="error" class="provider-inline-error" role="alert">{{ error }}</div>
 
+        <section class="provider-connected-section">
+          <div class="provider-subsection-heading">
+            <div>
+              <h5>已连接提供商</h5>
+              <p>选择一个提供商可查看连接状态或断开凭据。</p>
+            </div>
+            <span>{{ connectedProviders.length }} 个</span>
+          </div>
+
+          <div v-if="connectedProviders.length" class="provider-connected-list">
+            <div v-for="provider in connectedProviders" :key="provider.id" class="provider-connected-item">
+              <span class="provider-logo"><ApiOutlined aria-hidden="true" /></span>
+              <span class="provider-connected-item-main">
+                <strong>{{ provider.name }}</strong>
+                <span>{{ provider.id }} · {{ provider.model_count }} 个模型</span>
+              </span>
+              <span class="provider-status connected">{{ provider.can_disconnect ? '已连接' : '环境管理' }}</span>
+              <button
+                v-if="provider.can_disconnect"
+                type="button"
+                class="admin-btn provider-connected-disconnect"
+                :disabled="operating || attemptPending"
+                :aria-label="`断开 ${provider.name}`"
+                @click="disconnectTarget = provider"
+              >
+                <DeleteOutlined aria-hidden="true" />
+                <span>断开</span>
+              </button>
+            </div>
+          </div>
+          <p v-else class="provider-empty provider-connected-empty">尚未连接提供商。</p>
+        </section>
+
         <div class="provider-picker-heading">
-          <span>选择提供商</span>
-          <span>{{ providers.length }} 个 · 已连接 {{ connectedProviders.length }} 个</span>
+          <span>连接新提供商</span>
+          <span>{{ providerOptions.length }} 个可选</span>
         </div>
         <Combobox.Root
           v-model="providerValues"
           :collection="providerCollection"
-          :disabled="providers.length === 0 || operating || attemptPending"
+          :disabled="providerOptions.length === 0 || operating || attemptPending"
           :positioning="{ placement: 'bottom-start', sameWidth: true }"
           input-behavior="autohighlight"
           open-on-click
@@ -414,7 +457,7 @@ onBeforeUnmount(stopPolling)
           <Teleport to="body">
             <Combobox.Positioner class="provider-picker-positioner">
               <Combobox.Content class="provider-picker-content">
-                <Combobox.Empty class="provider-picker-empty">没有匹配的提供商</Combobox.Empty>
+                <Combobox.Empty class="provider-picker-empty">没有匹配的未连接提供商</Combobox.Empty>
                 <Combobox.Item
                   v-for="provider in providerCollection.items"
                   :key="provider.id"
@@ -425,7 +468,6 @@ onBeforeUnmount(stopPolling)
                   <span class="provider-picker-item-main">
                     <span class="provider-picker-name-line">
                       <Combobox.ItemText class="provider-picker-name">{{ provider.name }}</Combobox.ItemText>
-                      <span v-if="provider.connected" class="provider-status connected">已连接</span>
                     </span>
                     <span class="provider-picker-meta">{{ provider.id }} · {{ provider.model_count }} 个模型</span>
                   </span>
@@ -435,6 +477,7 @@ onBeforeUnmount(stopPolling)
           </Teleport>
         </Combobox.Root>
         <p v-if="providers.length === 0" class="provider-empty">OpenCode 当前没有可配置的提供商。</p>
+        <p v-else-if="providerOptions.length === 0" class="provider-empty">所有可用提供商均已连接。</p>
 
         <section v-if="attempt" class="provider-detail provider-oauth">
           <div class="provider-oauth-card" :data-status="attempt.status">
@@ -514,127 +557,108 @@ onBeforeUnmount(stopPolling)
           </template>
         </section>
 
-        <section v-else-if="selectedProvider" class="provider-detail">
+        <section v-else-if="selectedProvider && !selectedProvider.connected" class="provider-detail">
           <div class="provider-detail-title">
             <span class="provider-logo"><ApiOutlined aria-hidden="true" /></span>
             <div>
               <h4>{{ selectedProvider.name }}</h4>
               <p>{{ selectedProvider.id }} · {{ selectedProvider.model_count }} 个模型</p>
             </div>
-            <span v-if="selectedProvider.connected" class="provider-status connected">已连接</span>
           </div>
 
-          <template v-if="selectedProvider.connected">
-            <div class="provider-connected-copy">
-              <LockOutlined aria-hidden="true" />
-              <span>凭据由 OpenCode 保存在 Marvo 专用运行目录中，不会返回浏览器。</span>
-            </div>
-            <button
-              type="button"
-              class="admin-btn provider-disconnect-button"
-              :disabled="operating || !selectedProvider.can_disconnect"
-              @click="disconnectTarget = selectedProvider"
+          <RadioGroup.Root
+            v-if="availableMethods.length > 1"
+            v-model="selectedMethodIndex"
+            class="provider-methods"
+            aria-label="连接方式"
+          >
+            <RadioGroup.Item
+              v-for="method in availableMethods"
+              :key="method.index"
+              class="provider-method"
+              :value="String(method.index)"
             >
-              <DeleteOutlined aria-hidden="true" />
-              <span>{{ selectedProvider.can_disconnect ? '断开连接' : '由环境配置管理' }}</span>
-            </button>
-          </template>
+              <RadioGroup.ItemHiddenInput />
+              <RadioGroup.ItemControl><span /></RadioGroup.ItemControl>
+              <RadioGroup.ItemText>
+                <strong>{{ method.label }}</strong>
+                <span>{{ methodTypeLabel(method) }}</span>
+              </RadioGroup.ItemText>
+            </RadioGroup.Item>
+          </RadioGroup.Root>
 
-          <template v-else>
-            <RadioGroup.Root
-              v-if="availableMethods.length > 1"
-              v-model="selectedMethodIndex"
-              class="provider-methods"
-              aria-label="连接方式"
-            >
-              <RadioGroup.Item
-                v-for="method in availableMethods"
-                :key="method.index"
-                class="provider-method"
-                :value="String(method.index)"
-              >
-                <RadioGroup.ItemHiddenInput />
-                <RadioGroup.ItemControl><span /></RadioGroup.ItemControl>
-                <RadioGroup.ItemText>
-                  <strong>{{ method.label }}</strong>
-                  <span>{{ methodTypeLabel(method) }}</span>
-                </RadioGroup.ItemText>
-              </RadioGroup.Item>
-            </RadioGroup.Root>
-
-            <div v-if="selectedMethod" class="provider-credentials">
-              <template v-for="prompt in visiblePrompts" :key="prompt.key">
-                <Field.Root v-if="prompt.type === 'text'" class="provider-field">
-                  <Field.Label>{{ prompt.message || prompt.key }}</Field.Label>
-                  <Field.Input
-                    v-model="methodInputs[prompt.key]"
-                    :placeholder="prompt.placeholder"
-                    autocomplete="off"
-                    @keydown.enter.prevent.stop="connectSelected"
-                  />
-                </Field.Root>
-                <Select.Root
-                  v-else
-                  class="provider-field"
-                  :collection="promptCollection(prompt.key)"
-                  :model-value="methodInputs[prompt.key] ? [methodInputs[prompt.key]] : []"
-                  :positioning="{ placement: 'bottom-start', sameWidth: true }"
-                  @value-change="updatePromptSelection(prompt.key, $event.value)"
-                >
-                  <Select.HiddenSelect />
-                  <Select.Label>{{ prompt.message || prompt.key }}</Select.Label>
-                  <Select.Control>
-                    <Select.Trigger class="provider-select-trigger">
-                      <Select.ValueText :placeholder="prompt.placeholder || '请选择'" />
-                      <Select.Indicator><DownOutlined aria-hidden="true" /></Select.Indicator>
-                    </Select.Trigger>
-                  </Select.Control>
-                  <Teleport to="body">
-                    <Select.Positioner class="provider-select-positioner">
-                      <Select.Content class="provider-select-content">
-                        <Select.Item
-                          v-for="option in prompt.options"
-                          :key="option.value"
-                          :item="option"
-                          class="provider-select-item"
-                        >
-                          <Select.ItemText>
-                            <strong>{{ option.label }}</strong>
-                            <span v-if="option.hint">{{ option.hint }}</span>
-                          </Select.ItemText>
-                          <Select.ItemIndicator><CheckOutlined aria-hidden="true" /></Select.ItemIndicator>
-                        </Select.Item>
-                      </Select.Content>
-                    </Select.Positioner>
-                  </Teleport>
-                </Select.Root>
-              </template>
-
-              <Field.Root v-if="selectedMethod.type === 'api'" class="provider-field">
-                <Field.Label>{{ availableMethods.length > 1 ? '密钥' : 'API Key' }}</Field.Label>
+          <div v-if="selectedMethod" class="provider-credentials">
+            <template v-for="prompt in visiblePrompts" :key="prompt.key">
+              <Field.Root v-if="prompt.type === 'text'" class="provider-field">
+                <Field.Label>{{ prompt.message || prompt.key }}</Field.Label>
                 <Field.Input
-                  v-model="apiKey"
-                  type="password"
+                  v-model="methodInputs[prompt.key]"
+                  :placeholder="prompt.placeholder"
                   autocomplete="off"
-                  placeholder="输入密钥"
                   @keydown.enter.prevent.stop="connectSelected"
                 />
-                <Field.HelperText>只发送到 Marvo 后端并交由 OpenCode 保存。</Field.HelperText>
               </Field.Root>
-
-              <button
-                type="button"
-                class="admin-btn admin-btn-primary provider-connect-button"
-                :disabled="!canConnect"
-                @click="connectSelected"
+              <Select.Root
+                v-else
+                class="provider-field"
+                :collection="promptCollection(prompt.key)"
+                :model-value="methodInputs[prompt.key] ? [methodInputs[prompt.key]] : []"
+                :positioning="{ placement: 'bottom-start', sameWidth: true }"
+                @value-change="updatePromptSelection(prompt.key, $event.value)"
               >
-                <LinkOutlined v-if="selectedMethod.type === 'oauth'" aria-hidden="true" />
-                <ApiOutlined v-else aria-hidden="true" />
-                <span>{{ operating ? '连接中...' : selectedMethod.type === 'oauth' ? '开始授权' : '连接提供商' }}</span>
-              </button>
-            </div>
-            <p v-else class="provider-inline-error" role="status">当前版本暂不支持连接此提供商。</p>
-          </template>
+                <Select.HiddenSelect />
+                <Select.Label>{{ prompt.message || prompt.key }}</Select.Label>
+                <Select.Control>
+                  <Select.Trigger class="provider-select-trigger">
+                    <Select.ValueText :placeholder="prompt.placeholder || '请选择'" />
+                    <Select.Indicator><DownOutlined aria-hidden="true" /></Select.Indicator>
+                  </Select.Trigger>
+                </Select.Control>
+                <Teleport to="body">
+                  <Select.Positioner class="provider-select-positioner">
+                    <Select.Content class="provider-select-content">
+                      <Select.Item
+                        v-for="option in prompt.options"
+                        :key="option.value"
+                        :item="option"
+                        class="provider-select-item"
+                      >
+                        <Select.ItemText>
+                          <strong>{{ option.label }}</strong>
+                          <span v-if="option.hint">{{ option.hint }}</span>
+                        </Select.ItemText>
+                        <Select.ItemIndicator><CheckOutlined aria-hidden="true" /></Select.ItemIndicator>
+                      </Select.Item>
+                    </Select.Content>
+                  </Select.Positioner>
+                </Teleport>
+              </Select.Root>
+            </template>
+
+            <Field.Root v-if="selectedMethod.type === 'api'" class="provider-field">
+              <Field.Label>{{ availableMethods.length > 1 ? '密钥' : 'API Key' }}</Field.Label>
+              <Field.Input
+                v-model="apiKey"
+                type="password"
+                autocomplete="off"
+                placeholder="输入密钥"
+                @keydown.enter.prevent.stop="connectSelected"
+              />
+              <Field.HelperText>只发送到 Marvo 后端并交由 OpenCode 保存。</Field.HelperText>
+            </Field.Root>
+
+            <button
+              type="button"
+              class="admin-btn admin-btn-primary provider-connect-button"
+              :disabled="!canConnect"
+              @click="connectSelected"
+            >
+              <LinkOutlined v-if="selectedMethod.type === 'oauth'" aria-hidden="true" />
+              <ApiOutlined v-else aria-hidden="true" />
+              <span>{{ operating ? '连接中...' : selectedMethod.type === 'oauth' ? '开始授权' : '连接提供商' }}</span>
+            </button>
+          </div>
+          <p v-else class="provider-inline-error" role="status">当前版本暂不支持连接此提供商。</p>
         </section>
       </section>
     </template>
@@ -719,6 +743,27 @@ onBeforeUnmount(stopPolling)
   align-items: flex-start;
   gap: 16px;
 }
+.provider-subsection-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.provider-subsection-heading h5 {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: var(--marvo-type-13);
+}
+.provider-subsection-heading p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--marvo-type-11);
+}
+.provider-subsection-heading > span {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--marvo-type-11);
+}
 .provider-list-heading h4,
 .provider-detail-title h4,
 .provider-oauth-card h4 {
@@ -764,6 +809,57 @@ onBeforeUnmount(stopPolling)
 .provider-picker-heading span:last-child {
   color: var(--text-muted);
   font-weight: 400;
+}
+.provider-connected-section {
+  margin-top: 22px;
+}
+.provider-connected-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.provider-connected-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 9px;
+  outline: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-align: left;
+}
+.provider-connected-item-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+.provider-connected-item-main strong,
+.provider-connected-item-main > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-connected-item-main strong {
+  font-size: var(--marvo-type-12);
+}
+.provider-connected-item-main > span {
+  color: var(--text-muted);
+  font-size: var(--marvo-type-10);
+}
+.provider-connected-empty {
+  margin-top: 10px;
+}
+.provider-connected-disconnect {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-danger);
 }
 .provider-picker-label {
   position: absolute;
@@ -1064,27 +1160,6 @@ onBeforeUnmount(stopPolling)
   gap: 7px;
   margin-top: 16px;
   text-decoration: none;
-}
-.provider-connected-copy {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin-top: 18px;
-  padding: 11px 12px;
-  border-radius: 8px;
-  background: var(--bg-secondary);
-  color: var(--text-muted);
-  font-size: var(--marvo-type-12);
-  line-height: 1.5;
-}
-.provider-connected-copy svg {
-  flex: 0 0 auto;
-  margin-top: 2px;
-  color: var(--text-accent);
-}
-.provider-disconnect-button {
-  margin-top: 14px;
-  color: var(--text-danger);
 }
 .provider-oauth-card {
   align-items: flex-start;

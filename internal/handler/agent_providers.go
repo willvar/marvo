@@ -383,7 +383,7 @@ func (d *AgentDeps) DisconnectProvider(w http.ResponseWriter, r *http.Request) {
 		selected := d.settingsStore.Get().Model
 		if selected != nil && selected.ProviderID == provider.ID {
 			writeJSON(w, http.StatusConflict, map[string]any{
-				"error": "当前模型正在使用该提供商，请先在高阶设置中切换模型", "code": "agent_provider_in_use",
+				"error": "当前模型正在使用该提供商，请先在“模型”中切换模型", "code": "agent_provider_in_use",
 			})
 			return
 		}
