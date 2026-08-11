@@ -13,19 +13,12 @@ STATE_DIR="${MARVO_OPENCODE_STATE_DIR:-$HOME/.marvo/opencode-state}"
 OPENCODE_HOME="$STATE_DIR/home"
 OPENCODE_CONFIG_DIR="$OPENCODE_HOME/.config/opencode"
 CONTAINER_HOME="/home/$USER_NAME"
-AUTH_FILE="${MARVO_OPENCODE_AUTH_FILE:-$HOME/.local/share/opencode/auth.json}"
 
 mkdir -p "$DATADIR"
 mkdir -p "$OPENCODE_CONFIG_DIR" "$OPENCODE_HOME/.local/share/opencode"
 chmod 700 "$DATADIR" "$STATE_DIR" "$OPENCODE_HOME" "$OPENCODE_HOME/.config" "$OPENCODE_CONFIG_DIR" "$OPENCODE_HOME/.local" "$OPENCODE_HOME/.local/share" "$OPENCODE_HOME/.local/share/opencode"
 install -m 600 "$BASE_DIR/AGENTS.md" "$DATADIR/AGENTS.md"
 install -m 600 "$BASE_DIR/opencode.json" "$OPENCODE_CONFIG_DIR/opencode.json"
-if [ ! -f "$AUTH_FILE" ]; then
-  echo "OpenCode auth file not found: $AUTH_FILE" >&2
-  echo "Run opencode auth login on this host first, or set MARVO_OPENCODE_AUTH_FILE." >&2
-  exit 1
-fi
-install -m 600 "$AUTH_FILE" "$OPENCODE_HOME/.local/share/opencode/auth.json"
 
 ENV_ARGS=()
 ENV_ARGS+=(-e OPENCODE_ENABLE_EXA=1)

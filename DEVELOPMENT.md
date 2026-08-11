@@ -8,7 +8,6 @@ Marvo 现在只有一套 Vue 响应式用户界面：`frontend/`。`/`、`/note/
 - Node.js 与 npm
 - Docker（运行 OpenCode）
 - ffmpeg 与 ffprobe（后端处理 HEIC/HEIF、MOV/HEVC 时需要；开发机可不上传这些格式）
-- 已完成 `opencode auth login`，默认认证文件为 `~/.local/share/opencode/auth.json`
 
 ## 首次配置
 
@@ -42,6 +41,8 @@ make dev
 go run . -c config.yaml
 npm --prefix frontend run dev
 ~~~
+
+首次启动不要求宿主机执行 `opencode auth login`。批准设备后，在“智能体设置 → 提供商连接”中使用 API Key 或 OAuth 连接提供商；凭据由 OpenCode 写入 Marvo 专用的持久状态目录，前端不会读取或保存密钥。连接后再到“高阶设置”选择全局模型和推理强度。
 
 在平板、手机或其他局域网设备上进行生产形态验收时，使用：
 

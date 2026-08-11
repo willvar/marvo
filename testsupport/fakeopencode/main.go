@@ -24,11 +24,12 @@ type fakeMessage struct {
 }
 
 type fakeState struct {
-	mu       sync.Mutex
-	nextID   int
-	sessions map[string]fakeSession
-	messages map[string][]fakeMessage
-	statuses map[string]map[string]string
+	mu                 sync.Mutex
+	nextID             int
+	sessions           map[string]fakeSession
+	messages           map[string][]fakeMessage
+	statuses           map[string]map[string]string
+	connectedProviders map[string]bool
 }
 
 func newFakeState() *fakeState {
@@ -36,7 +37,28 @@ func newFakeState() *fakeState {
 		sessions: make(map[string]fakeSession),
 		messages: make(map[string][]fakeMessage),
 		statuses: make(map[string]map[string]string),
+		connectedProviders: map[string]bool{
+			"fake": true,
+		},
 	}
+}
+
+func (s *fakeState) providerIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]string, 0, len(s.connectedProviders))
+	for id, connected := range s.connectedProviders {
+		if connected {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func (s *fakeState) setProviderConnected(id string, connected bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connectedProviders[id] = connected
 }
 
 func (s *fakeState) listSessions() []fakeSession {
@@ -169,7 +191,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /provider", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"connected": []string{"fake"},
+			"connected": state.providerIDs(),
 			"default":   map[string]string{"fake": "vision"},
 			"all": []any{
 				map[string]any{
@@ -199,8 +221,156 @@ func main() {
 						},
 					},
 				},
+				fakeProvider("fake-key", "E2E API Key Provider"),
+				fakeProvider("fake-oauth-auto", "E2E Device OAuth Provider"),
+				fakeProvider("fake-oauth-code", "E2E Code OAuth Provider"),
+				fakeProvider("openai", "OpenAI"),
 			},
 		})
+	})
+	mux.HandleFunc("GET /api/integration", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("location[directory]") != "/workspace" {
+			http.Error(w, "missing workspace integration location", http.StatusBadRequest)
+			return
+		}
+		connected := map[string]bool{"fake": true}
+		integration := func(id, name string, methods []any) map[string]any {
+			connections := []any{}
+			if connected[id] {
+				connectionType := "credential"
+				if id == "fake" {
+					connectionType = "env"
+				}
+				connection := map[string]string{"type": connectionType}
+				if connectionType == "credential" {
+					connection["id"] = "credential-" + id
+					connection["label"] = "default"
+				} else {
+					connection["name"] = "E2E_PROVIDER_KEY"
+				}
+				connections = append(connections, connection)
+			}
+			return map[string]any{"id": id, "name": name, "methods": methods, "connections": connections}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data": []any{
+				integration("fake", "E2E Provider", []any{map[string]any{"type": "env", "names": []string{"E2E_PROVIDER_KEY"}}}),
+				integration("fake-key", "E2E API Key Provider", []any{map[string]any{"type": "key", "label": "Enter test API Key"}}),
+				integration("fake-oauth-auto", "E2E Device OAuth Provider", []any{map[string]any{"id": "device", "type": "oauth", "label": "Device authorization"}}),
+				integration("fake-oauth-code", "E2E Code OAuth Provider", []any{map[string]any{"id": "code", "type": "oauth", "label": "Authorization code"}}),
+				integration("openai", "OpenAI", []any{
+					map[string]any{"id": "browser", "type": "oauth", "label": "ChatGPT Pro/Plus (browser)"},
+					map[string]any{"id": "headless", "type": "oauth", "label": "ChatGPT Pro/Plus (headless)"},
+					map[string]any{"type": "key", "label": "Manually enter API Key"},
+				}),
+			},
+		})
+	})
+	mux.HandleFunc("GET /provider/auth", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"fake-key": []any{map[string]any{
+				"type": "api", "label": "Enter test API Key",
+				"prompts": []any{
+					map[string]any{
+						"type": "select", "key": "deployment", "message": "Test deployment",
+						"options": []any{
+							map[string]string{"label": "Cloud", "value": "cloud", "hint": "Default"},
+							map[string]string{"label": "Local", "value": "local", "hint": "Custom endpoint"},
+						},
+					},
+					map[string]any{
+						"type": "text", "key": "endpoint", "message": "Test endpoint", "placeholder": "http://localhost:9999",
+						"when": map[string]string{"key": "deployment", "op": "eq", "value": "local"},
+					},
+				},
+			}},
+			"fake-oauth-auto": []any{map[string]any{
+				"type": "oauth", "label": "Device authorization",
+			}},
+			"fake-oauth-code": []any{map[string]any{
+				"type": "oauth", "label": "Authorization code",
+			}},
+			"openai": []any{
+				map[string]any{"type": "oauth", "label": "ChatGPT Pro/Plus (browser)"},
+				map[string]any{"type": "oauth", "label": "ChatGPT Pro/Plus (headless)"},
+				map[string]any{"type": "api", "label": "Manually enter API Key"},
+			},
+		})
+	})
+	mux.HandleFunc("PUT /auth/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id != "fake-key" {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Type string `json:"type"`
+			Key  string `json:"key"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Type != "api" || body.Key != "e2e-api-key" {
+			http.Error(w, "invalid API credential", http.StatusBadRequest)
+			return
+		}
+		state.setProviderConnected(id, true)
+		writeJSON(w, http.StatusOK, true)
+	})
+	mux.HandleFunc("DELETE /auth/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "fake" {
+			http.Error(w, "default test provider cannot be disconnected", http.StatusConflict)
+			return
+		}
+		state.setProviderConnected(id, false)
+		writeJSON(w, http.StatusOK, true)
+	})
+	mux.HandleFunc("POST /provider/{id}/oauth/authorize", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Method int `json:"method"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Method != 0 {
+			http.Error(w, "invalid OAuth method", http.StatusBadRequest)
+			return
+		}
+		switch r.PathValue("id") {
+		case "fake-oauth-auto":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"url": "https://example.com/e2e-device", "method": "auto", "instructions": "Enter code: E2E-CODE",
+			})
+		case "fake-oauth-code":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"url": "https://example.com/e2e-code", "method": "code", "instructions": "Paste the authorization code after signing in.",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	mux.HandleFunc("POST /provider/{id}/oauth/callback", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Method int    `json:"method"`
+			Code   string `json:"code"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Method != 0 {
+			http.Error(w, "invalid OAuth callback", http.StatusBadRequest)
+			return
+		}
+		id := r.PathValue("id")
+		switch id {
+		case "fake-oauth-auto":
+			time.Sleep(250 * time.Millisecond)
+		case "fake-oauth-code":
+			if body.Code != "e2e-oauth-code" {
+				http.Error(w, "invalid authorization code", http.StatusUnauthorized)
+				return
+			}
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		state.setProviderConnected(id, true)
+		writeJSON(w, http.StatusOK, true)
+	})
+	mux.HandleFunc("POST /instance/dispose", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, true)
 	})
 	mux.HandleFunc("GET /config", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"model": "fake/vision"})
@@ -317,5 +487,23 @@ func main() {
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		panic(err)
+	}
+}
+
+func fakeProvider(id, name string) map[string]any {
+	return map[string]any{
+		"id": id, "name": name, "source": "api",
+		"models": map[string]any{
+			"model": map[string]any{
+				"id": "model", "providerID": id, "name": name + " Model", "family": "test", "status": "active",
+				"capabilities": map[string]any{
+					"attachment": false, "reasoning": true, "toolcall": true,
+					"input":  map[string]bool{"text": true, "audio": false, "image": false, "video": false, "pdf": false},
+					"output": map[string]bool{"text": true, "audio": false, "image": false, "video": false, "pdf": false},
+				},
+				"variants": map[string]any{"high": map[string]string{"reasoningEffort": "high"}},
+				"limit":    map[string]int{"context": 32000, "output": 8000},
+			},
+		},
 	}
 }

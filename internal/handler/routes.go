@@ -67,6 +67,13 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 	if deps.AgentDeps != nil {
 		mux.Handle("GET /api/agent/settings", auth(http.HandlerFunc(deps.AgentDeps.GetSettings)))
 		mux.Handle("PUT /api/agent/settings", auth(http.HandlerFunc(deps.AgentDeps.UpdateSettings)))
+		mux.Handle("GET /api/agent/providers", auth(http.HandlerFunc(deps.AgentDeps.ListProviders)))
+		mux.Handle("POST /api/agent/providers/{providerID}/connect/key", auth(http.HandlerFunc(deps.AgentDeps.ConnectProviderKey)))
+		mux.Handle("POST /api/agent/providers/{providerID}/connect/oauth", auth(http.HandlerFunc(deps.AgentDeps.StartProviderOAuth)))
+		mux.Handle("DELETE /api/agent/providers/{providerID}", auth(http.HandlerFunc(deps.AgentDeps.DisconnectProvider)))
+		mux.Handle("GET /api/agent/provider-attempts/{attemptID}", auth(http.HandlerFunc(deps.AgentDeps.GetProviderOAuthAttempt)))
+		mux.Handle("POST /api/agent/provider-attempts/{attemptID}/complete", auth(http.HandlerFunc(deps.AgentDeps.CompleteProviderOAuth)))
+		mux.Handle("DELETE /api/agent/provider-attempts/{attemptID}", auth(http.HandlerFunc(deps.AgentDeps.CancelProviderOAuth)))
 		mux.Handle("GET /api/agent/global/event", auth(http.HandlerFunc(deps.AgentDeps.ProxyGlobalSSE)))
 		mux.Handle("GET /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
 		mux.Handle("POST /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))

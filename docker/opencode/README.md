@@ -1,6 +1,6 @@
 # OpenCode Docker Image
 
-This image packages only the OpenCode runtime. Runtime configuration and auth files are not baked into the image.
+This image packages only the OpenCode runtime. Runtime configuration and credentials are not baked into the image.
 
 ## Build
 
@@ -28,13 +28,18 @@ bun add -g opencode-ai@1.18.15
 
 ## Runtime Config
 
-`start.sh` copies local config and the host OpenCode auth into the host state directory before starting the container. The OpenCode config directory and the canonical project `AGENTS.md` are mounted read-only inside the container:
+`start.sh` copies the local config into Marvo's host-side state directory before starting the container. The OpenCode config directory and the canonical project `AGENTS.md` are mounted read-only inside the container:
 
 ```text
 docker/opencode/opencode.json -> $MARVO_OPENCODE_STATE_DIR/home/.config/opencode/opencode.json
 docker/opencode/AGENTS.md -> /workspace/AGENTS.md (read-only bind mount)
-~/.local/share/opencode/auth.json -> $MARVO_OPENCODE_STATE_DIR/home/.local/share/opencode/auth.json
 ```
+
+Provider credentials are connected from the Marvo intelligent-agent settings.
+OpenCode writes them directly to its persistent Marvo-owned state under
+`$MARVO_OPENCODE_STATE_DIR/home/.local/share/opencode/`; `start.sh` never reads
+or overwrites the host user's global OpenCode credentials. A fresh deployment
+can therefore start before any provider has been connected.
 
 Marvo writes the user-configurable global prompt to the host-side
 `$MARVO_OPENCODE_STATE_DIR/home/.config/opencode/AGENTS.md`. OpenCode loads that
@@ -51,8 +56,6 @@ $HOME/.marvo/opencode-state
 
 This means provider/model changes can be made by editing `docker/opencode/opencode.json` and restarting the container. Rebuilding the image is not required.
 
-If your OpenCode Go auth file is elsewhere, set `MARVO_OPENCODE_AUTH_FILE` before running `start.sh`.
-
 ## Start
 
 ```bash
@@ -66,7 +69,6 @@ MARVO_OPENCODE_IMAGE       default: marvo-opencode:local
 MARVO_OPENCODE_PORT        default: 4096
 MARVO_DATA_DIR             default: $HOME/.marvo/data
 MARVO_OPENCODE_STATE_DIR   default: $HOME/.marvo/opencode-state
-MARVO_OPENCODE_AUTH_FILE   default: $HOME/.local/share/opencode/auth.json
 ```
 
 ## Offline Export

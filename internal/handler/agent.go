@@ -33,6 +33,9 @@ type AgentDeps struct {
 	sessionRuns      map[string]agentSessionRun
 	runMu            sync.Mutex
 	noteRuns         map[string]agentNoteRun
+	providerMu       sync.Mutex
+	providerAttempts map[string]*agentProviderOAuthAttempt
+	providerBusy     map[string]string
 }
 
 type agentNoteRun struct {
@@ -55,6 +58,8 @@ func NewAgentDeps(
 		globalPromptFile: globalPromptFile,
 		sessionRuns:      make(map[string]agentSessionRun),
 		noteRuns:         make(map[string]agentNoteRun),
+		providerAttempts: make(map[string]*agentProviderOAuthAttempt),
+		providerBusy:     make(map[string]string),
 	}
 }
 

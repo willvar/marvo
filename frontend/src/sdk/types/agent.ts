@@ -92,4 +92,61 @@ export interface AgentSettingsUpdate {
   global_prompt: string
 }
 
+export interface AgentProviderPromptOption {
+  label: string
+  value: string
+  hint?: string
+}
+
+interface AgentProviderPromptWhen {
+  key: string
+  op: string
+  value: string
+}
+
+interface AgentProviderPrompt {
+  type: 'text' | 'select'
+  key: string
+  message: string
+  placeholder?: string
+  options?: AgentProviderPromptOption[]
+  when?: AgentProviderPromptWhen
+}
+
+export interface AgentProviderMethod {
+  index: number
+  type: 'api' | 'oauth'
+  label: string
+  prompts: AgentProviderPrompt[]
+  available: boolean
+  unavailable_reason?: string
+}
+
+export interface AgentProvider {
+  id: string
+  name: string
+  source: string
+  connected: boolean
+  can_disconnect: boolean
+  model_count: number
+  methods: AgentProviderMethod[]
+}
+
+type AgentProviderOAuthStatus = 'pending' | 'succeeded' | 'failed' | 'expired' | 'cancelled'
+
+export interface AgentProviderOAuthAttempt {
+  id: string
+  provider_id: string
+  provider_name: string
+  method_label: string
+  mode: 'auto' | 'code'
+  url: string
+  instructions: string
+  code?: string
+  status: AgentProviderOAuthStatus
+  error?: string
+  created_at: number
+  expires_at: number
+}
+
 export type { PermissionRequest, QuestionRequest }

@@ -10,6 +10,7 @@ import {
   CheckOutlined,
   CloseOutlined,
   ControlOutlined,
+  ApiOutlined,
   DownOutlined,
   LayoutOutlined,
   MessageOutlined,
@@ -19,6 +20,7 @@ import {
 import { useAgentSettingsStore } from '../stores/agentSettings'
 import { useUIPreferencesStore, type AgentAssistantDisplayMode } from '../stores/uiPreferences'
 import type { AgentModelOption, AgentModelSelection } from '../sdk'
+import AgentProviderSettings from './AgentProviderSettings.vue'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ 'update:open': [open: boolean] }>()
@@ -141,6 +143,25 @@ async function loadSettings() {
   }
 }
 
+async function refreshModels() {
+  try {
+    const settings = await settingsStore.load(true)
+    const refreshed = Array.isArray(settings.models)
+      ? settings.models.map((model) => ({ ...model, variants: Array.isArray(model.variants) ? model.variants : [] }))
+      : []
+    const currentKey = selectedValues.value[0] || ''
+    models.value = refreshed
+    set(refreshed)
+    if (currentKey && !refreshed.some((model) => modelKey(model) === currentKey)) {
+      selectedValues.value = settings.model_available && settings.model ? [modelKey(settings.model)] : []
+      selectedVariant.value = DEFAULT_VARIANT
+    }
+    if (refreshed.length > 0 && error.value === 'OpenCode 当前没有已连接且可选择的模型。') error.value = ''
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '刷新智能体模型失败'
+  }
+}
+
 async function saveSettings() {
   const model = selectedModel.value
   if (!canSave.value) return
@@ -238,12 +259,16 @@ function formatLimit(limit?: number) {
             /></Dialog.CloseTrigger>
           </div>
 
-          <form class="agent-settings-form" @submit.prevent="saveSettings">
+          <div class="agent-settings-form">
             <Tabs.Root v-model="activeTab" class="agent-settings-tabs" activation-mode="manual">
               <Tabs.List class="agent-settings-tab-list" aria-label="智能体设置分类">
                 <Tabs.Trigger class="agent-settings-tab" value="personalization">
                   <UserOutlined aria-hidden="true" />
                   <span>个性化</span>
+                </Tabs.Trigger>
+                <Tabs.Trigger class="agent-settings-tab" value="providers">
+                  <ApiOutlined aria-hidden="true" />
+                  <span>提供商连接</span>
                 </Tabs.Trigger>
                 <Tabs.Trigger class="agent-settings-tab" value="advanced">
                   <ControlOutlined aria-hidden="true" />
@@ -288,6 +313,10 @@ function formatLimit(limit?: number) {
                       </RadioGroup.Item>
                     </RadioGroup.Root>
                   </section>
+                </Tabs.Content>
+
+                <Tabs.Content class="agent-settings-tab-content" value="providers">
+                  <AgentProviderSettings :active="activeTab === 'providers'" @changed="refreshModels" />
                 </Tabs.Content>
 
                 <Tabs.Content class="agent-settings-tab-content" value="advanced">
@@ -449,7 +478,7 @@ function formatLimit(limit?: number) {
               </div>
             </Tabs.Root>
 
-            <footer class="agent-settings-footer">
+            <footer v-if="activeTab !== 'providers'" class="agent-settings-footer">
               <button
                 type="button"
                 class="admin-btn agent-settings-action"
@@ -459,12 +488,17 @@ function formatLimit(limit?: number) {
                 <CloseOutlined aria-hidden="true" />
                 <span>取消</span>
               </button>
-              <button type="submit" class="admin-btn admin-btn-primary agent-settings-action" :disabled="!canSave">
+              <button
+                type="button"
+                class="admin-btn admin-btn-primary agent-settings-action"
+                :disabled="!canSave"
+                @click="saveSettings"
+              >
                 <SaveOutlined aria-hidden="true" />
                 <span>{{ saving ? '保存中...' : '保存设置' }}</span>
               </button>
             </footer>
-          </form>
+          </div>
         </Dialog.Content>
       </Dialog.Positioner>
     </Teleport>

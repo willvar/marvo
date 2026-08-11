@@ -15,6 +15,10 @@ export {
   type AgentModelOption,
   type AgentSettingsResponse,
   type AgentSettingsUpdate,
+  type AgentProvider,
+  type AgentProviderMethod,
+  type AgentProviderPromptOption,
+  type AgentProviderOAuthAttempt,
 } from './types/agent'
 export { conciseAgentErrorDetail, formatAgentError, isAbortedAgentError, unwrapAgentError } from './agentErrors'
 export { toMarkdownAssetPath, toNoteAssetUrl, toRelativeAssetPath } from './utils/noteAssets'

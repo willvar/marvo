@@ -67,6 +67,7 @@ type openCodeProviderResponse struct {
 type openCodeProvider struct {
 	ID     string                   `json:"id"`
 	Name   string                   `json:"name"`
+	Source string                   `json:"source"`
 	Models map[string]openCodeModel `json:"models"`
 }
 

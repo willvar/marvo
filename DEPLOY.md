@@ -37,7 +37,7 @@ cd docker/opencode
 ./start.sh
 ~~~
 
-`start.sh` 只把 OpenCode 暴露到 `127.0.0.1:4096`，并把 `AGENTS.md` 同步到笔记工作区。模型或 provider 由服务器管理员在 `docker/opencode/opencode.json` 管理。
+`start.sh` 只把 OpenCode 暴露到 `127.0.0.1:4096`，并把 `AGENTS.md` 同步到笔记工作区。它不复制宿主机的 OpenCode 认证文件；批准设备可在“智能体设置 → 提供商连接”中完成 API Key 或 OAuth 连接，凭据由 OpenCode 保存在 Marvo 专用状态目录。`docker/opencode/opencode.json` 仍用于服务器侧的 provider 定义和基础运行配置。
 
 ## 后端配置
 
