@@ -67,6 +67,8 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 	if deps.AgentDeps != nil {
 		mux.Handle("GET /api/agent/settings", auth(http.HandlerFunc(deps.AgentDeps.GetSettings)))
 		mux.Handle("PUT /api/agent/settings", auth(http.HandlerFunc(deps.AgentDeps.UpdateSettings)))
+		mux.Handle("GET /api/agent/personalization", auth(http.HandlerFunc(deps.AgentDeps.GetPersonalization)))
+		mux.Handle("PUT /api/agent/personalization", auth(http.HandlerFunc(deps.AgentDeps.UpdatePersonalization)))
 		mux.Handle("GET /api/agent/providers", auth(http.HandlerFunc(deps.AgentDeps.ListProviders)))
 		mux.Handle("POST /api/agent/providers/{providerID}/connect/key", auth(http.HandlerFunc(deps.AgentDeps.ConnectProviderKey)))
 		mux.Handle("POST /api/agent/providers/{providerID}/connect/oauth", auth(http.HandlerFunc(deps.AgentDeps.StartProviderOAuth)))

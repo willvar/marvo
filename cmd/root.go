@@ -46,6 +46,11 @@ func Execute() {
 		slog.Error("failed to load Agent settings", "error", err)
 		os.Exit(1)
 	}
+	agentPersonalizationStore, err := store.NewAgentPersonalizationStore(cfg.Server.DataDir)
+	if err != nil {
+		slog.Error("failed to load Agent personalization", "error", err)
+		os.Exit(1)
+	}
 	agentGlobalPromptFile, err := store.NewAgentGlobalPromptFile(cfg.OpenCode.GlobalInstructionsFile)
 	if err != nil {
 		slog.Error("failed to initialize Agent global prompt file", "error", err, "path", cfg.OpenCode.GlobalInstructionsFile)
@@ -104,6 +109,7 @@ func Execute() {
 			cfg.OpenCode.URL,
 			shuttingDown,
 			agentSettingsStore,
+			agentPersonalizationStore,
 			agentGlobalPromptFile,
 		),
 		DeviceStore: store.NewDeviceStore(cfg.Server.DataDir, cfg.Server.SessionSecret),

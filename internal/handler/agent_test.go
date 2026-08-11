@@ -15,14 +15,36 @@ import (
 	"time"
 )
 
-func TestPromptNoteContext(t *testing.T) {
-	body := []byte(`{"system":"client context\nMarvo-Note-Title: %E6%B5%8B%E8%AF%95%20note"}`)
-	sessionID, title := promptNoteContext("session/ses_1/prompt_async", body)
-	if sessionID != "ses_1" || title != "测试 note" {
-		t.Fatalf("promptNoteContext() = %q, %q", sessionID, title)
+func TestApplyMarvoPromptContext(t *testing.T) {
+	body := []byte(`{"system":"client supplied system","marvoContext":{"note":{"title":"测试 note"},"viewport":{"width":1366,"height":768,"devicePixelRatio":1.5}},"parts":[]}`)
+	result, title, err := applyMarvoPromptContext("session/ses_1/prompt_async", http.MethodPost, body)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if sessionID, title := promptNoteContext("session/ses_1/prompt_async", []byte(`{"system":"Marvo-Note-Title: ..%2Fsecret"}`)); sessionID != "" || title != "" {
-		t.Fatalf("unsafe title accepted: %q, %q", sessionID, title)
+	if title != "测试 note" {
+		t.Fatalf("note title = %q", title)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := payload["marvoContext"]; exists {
+		t.Fatal("Marvo context was forwarded upstream")
+	}
+	system, _ := payload["system"].(string)
+	if strings.Contains(system, "client supplied system") || !strings.Contains(system, `"title":"测试 note"`) ||
+		!strings.Contains(system, `"devicePixelRatio":1.5`) {
+		t.Fatalf("normalized system = %q", system)
+	}
+
+	for _, invalid := range []string{
+		`{"marvoContext":{"note":{"title":"../secret"}}}`,
+		`{"marvoContext":{"viewport":{"width":0,"height":768,"devicePixelRatio":1}}}`,
+		`{"marvoContext":{"unexpected":true}}`,
+	} {
+		if _, _, err := applyMarvoPromptContext("session/ses_1/prompt_async", http.MethodPost, []byte(invalid)); err == nil {
+			t.Fatalf("invalid context accepted: %s", invalid)
+		}
 	}
 }
 
@@ -73,7 +95,7 @@ func TestAgentSettingsListsConnectedModelsAndPersistsSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, globalPromptFile)
+	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, nil, globalPromptFile)
 
 	getRequest := httptest.NewRequest(http.MethodGet, "/api/agent/settings", nil)
 	getResponse := httptest.NewRecorder()
@@ -169,8 +191,21 @@ func TestAgentProxyInjectsSavedModelAndLoadsGlobalPromptFromOpenCodeRules(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, globalPromptFile)
-	body := `{"model":{"providerID":"old-provider","modelID":"old-model"},"variant":"low","system":"Marvo-Note-Title: actual-note\nClient context","parts":[{"type":"text","text":"hello"}]}`
+	personalization, err := store.NewAgentPersonalizationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	personalizationSnapshot, err := personalization.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := personalization.Save(personalizationSnapshot.Revision, []store.PersonalizationRule{{
+		Text: "统一使用“智能体”这一称呼。",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, personalization, globalPromptFile)
+	body := `{"model":{"providerID":"old-provider","modelID":"old-model"},"variant":"low","system":"client supplied system","marvoContext":{"note":{"title":"actual-note"},"viewport":{"width":1366,"height":768,"devicePixelRatio":1}},"parts":[{"type":"text","text":"hello"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/session/ses_1/prompt_async", strings.NewReader(body))
 	req.SetPathValue("path", "session/ses_1/prompt_async")
 	response := httptest.NewRecorder()
@@ -186,14 +221,18 @@ func TestAgentProxyInjectsSavedModelAndLoadsGlobalPromptFromOpenCodeRules(t *tes
 		t.Fatalf("injected variant = %#v, want high", received["variant"])
 	}
 	system, _ := received["system"].(string)
-	if system != "Marvo-Note-Title: actual-note\nClient context" {
+	if strings.Contains(system, "client supplied system") || !strings.Contains(system, `"title":"actual-note"`) ||
+		!strings.Contains(system, `"width":1366`) {
 		t.Fatalf("injected system = %q", system)
 	}
 	globalInstructions, err := os.ReadFile(globalPromptPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(globalInstructions), "始终使用中文") || strings.Contains(system, "始终使用中文") {
+	instructions := string(globalInstructions)
+	if !strings.Contains(instructions, "始终使用中文") || !strings.Contains(instructions, "统一使用“智能体”") ||
+		strings.Index(instructions, "统一使用“智能体”") >= strings.Index(instructions, "始终使用中文") ||
+		strings.Contains(system, "始终使用中文") {
 		t.Fatalf("global instructions = %q, request system = %q", globalInstructions, system)
 	}
 	deps.runMu.Lock()
@@ -228,19 +267,19 @@ func TestGlobalPromptActivationWaitsForRunningSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := globalPromptFile.Sync(oldSettings.GlobalPrompt); err != nil {
+	if err := globalPromptFile.SyncPreferences(oldSettings.GlobalPrompt, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := settingsStore.Save(store.AgentSettings{GlobalPrompt: "新偏好"}); err != nil {
 		t.Fatal(err)
 	}
-	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, globalPromptFile)
+	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, nil, globalPromptFile)
 
 	pending, err := deps.activateSavedGlobalPrompt(context.Background())
 	if err != nil || !pending {
 		t.Fatalf("busy activation pending = %v, error = %v", pending, err)
 	}
-	if matches, err := globalPromptFile.Matches(oldSettings.GlobalPrompt); err != nil || !matches {
+	if matches, err := globalPromptFile.MatchesPreferences(oldSettings.GlobalPrompt, nil); err != nil || !matches {
 		t.Fatalf("active prompt changed during a run: match = %v, error = %v", matches, err)
 	}
 	if err := deps.beginAgentPrompt(context.Background(), "ses_new"); !errors.Is(err, errAgentGlobalPromptPending) {
@@ -252,7 +291,7 @@ func TestGlobalPromptActivationWaitsForRunningSessions(t *testing.T) {
 	if err != nil || pending {
 		t.Fatalf("idle activation pending = %v, error = %v", pending, err)
 	}
-	if matches, err := globalPromptFile.Matches("新偏好"); err != nil || !matches {
+	if matches, err := globalPromptFile.MatchesPreferences("新偏好", nil); err != nil || !matches {
 		t.Fatalf("new prompt was not activated: match = %v, error = %v", matches, err)
 	}
 }
@@ -319,7 +358,7 @@ func TestAgentProxyCompactsLongContextBeforeAttachmentPrompt(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, nil)
+	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, nil, nil)
 	body := `{"parts":[{"type":"text","text":"inspect"},{"type":"file","mime":"image/png","filename":"photo.png","url":"data:image/png;base64,AA=="}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/session/ses_long/prompt_async", strings.NewReader(body))
 	req.SetPathValue("path", "session/ses_long/prompt_async")
@@ -363,7 +402,7 @@ func TestAgentProxyInjectsOpenCodeModelBeforeSettingsAreSaved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, nil)
+	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/session/ses_1/prompt_async", strings.NewReader(`{"variant":"client-value","parts":[{"type":"text","text":"hello"}]}`))
 	req.SetPathValue("path", "session/ses_1/prompt_async")
 	response := httptest.NewRecorder()
@@ -404,9 +443,9 @@ func TestAgentProxyAllowsDifferentNotesButLocksSameNote(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	deps := NewAgentDeps(upstream.URL, make(chan struct{}), nil, nil)
+	deps := NewAgentDeps(upstream.URL, make(chan struct{}), nil, nil, nil)
 	request := func(sessionID, title string) *httptest.ResponseRecorder {
-		body := `{"system":"Marvo-Note-Title: ` + title + `","parts":[{"type":"text","text":"test"}]}`
+		body := `{"marvoContext":{"note":{"title":"` + title + `"}},"parts":[{"type":"text","text":"test"}]}`
 		req := httptest.NewRequest(http.MethodPost, "/api/agent/session/"+sessionID+"/prompt_async", strings.NewReader(body))
 		req.SetPathValue("path", "session/"+sessionID+"/prompt_async")
 		recorder := httptest.NewRecorder()
@@ -461,7 +500,7 @@ func TestAgentShareRoutesAreRemovedWithoutCallingOpenCode(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
-	deps := NewAgentDeps(upstream.URL, make(chan struct{}), nil, nil)
+	deps := NewAgentDeps(upstream.URL, make(chan struct{}), nil, nil, nil)
 	for _, path := range []string{"session/ses_1/share", "session/ses_1/unshare"} {
 		req := httptest.NewRequest(http.MethodPost, "/api/agent/"+path, nil)
 		req.SetPathValue("path", path)

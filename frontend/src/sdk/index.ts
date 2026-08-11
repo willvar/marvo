@@ -1,5 +1,11 @@
 export { api, ApiError } from './api/useApi'
-export { agentApi, createSSEConnection, type AgentFilePartInput, type SSEEvent } from './api/agentApi'
+export {
+  agentApi,
+  createSSEConnection,
+  type AgentFilePartInput,
+  type AgentPromptContext,
+  type SSEEvent,
+} from './api/agentApi'
 export { setUnauthorizedHandler } from './api/unauthorized'
 export { connect, disconnect, on, subscribe, unsubscribe } from './collab'
 export { type NoteInfo, type NoteDetail, type SearchResult, type MediaAsset, type TrashEntry } from './types'
@@ -15,6 +21,8 @@ export {
   type AgentModelOption,
   type AgentSettingsResponse,
   type AgentSettingsUpdate,
+  type AgentPersonalizationRule,
+  type AgentPersonalizationResponse,
   type AgentProvider,
   type AgentProviderMethod,
   type AgentProviderPromptOption,

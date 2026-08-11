@@ -51,6 +51,7 @@ docker run -d \
   --mount "type=bind,src=$OPENCODE_CONFIG_DIR,dst=$CONTAINER_HOME/.config/opencode,readonly" \
   -v "$DATADIR:/workspace" \
   --mount "type=bind,src=$BASE_DIR/AGENTS.md,dst=/workspace/AGENTS.md,readonly" \
+  --mount "type=bind,src=$BASE_DIR/bin/marvo-personalization,dst=/usr/local/bin/marvo-personalization,readonly" \
   -w /workspace \
   "${ENV_ARGS[@]}" \
   "$IMAGE"

@@ -33,6 +33,7 @@ bun add -g opencode-ai@1.18.15
 ```text
 docker/opencode/opencode.json -> $MARVO_OPENCODE_STATE_DIR/home/.config/opencode/opencode.json
 docker/opencode/AGENTS.md -> /workspace/AGENTS.md (read-only bind mount)
+docker/opencode/bin/marvo-personalization -> /usr/local/bin/marvo-personalization (read-only bind mount)
 ```
 
 Provider credentials are connected from the Marvo intelligent-agent settings.
@@ -47,6 +48,10 @@ global file before `/workspace/AGENTS.md`, so the project rules remain the final
 application constraints without a prompt-order plugin. The host server can
 atomically update the file while the config directory stays read-only inside
 the container.
+
+The read-only `marvo-personalization` helper lets the Agent manage the same
+natural-language rule list shown in Marvo settings without exposing the JSON
+storage format in prompts or adding runtime package dependencies.
 
 Default state directory:
 

@@ -50,7 +50,7 @@ func TestBrowserContentWriteStillUsesRevisionWhileNoteAgentIsBusy(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent := NewAgentDeps("http://unused.invalid", make(chan struct{}), nil, nil)
+	agent := NewAgentDeps("http://unused.invalid", make(chan struct{}), nil, nil, nil)
 	agent.noteRuns["busy-note"] = agentNoteRun{SessionID: "ses_busy", Reserved: time.Now()}
 	deps := &Dependencies{NoteStore: noteStore, AgentDeps: agent}
 	body, _ := json.Marshal(map[string]string{

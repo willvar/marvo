@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"marvo/internal/store"
 	"net/http"
 	"time"
 )
@@ -60,7 +61,15 @@ func (d *AgentDeps) releaseAgentPrompt(sessionID string) {
 
 func (d *AgentDeps) syncGlobalPromptLocked(ctx context.Context) (bool, error) {
 	prompt := d.settingsStore.Get().GlobalPrompt
-	matches, err := d.globalPromptFile.Matches(prompt)
+	var rules []store.PersonalizationRule
+	if d.personalization != nil {
+		snapshot, err := d.personalization.Get()
+		if err != nil {
+			return false, err
+		}
+		rules = snapshot.Rules
+	}
+	matches, err := d.globalPromptFile.MatchesPreferences(prompt, rules)
 	if err != nil {
 		return false, err
 	}
@@ -74,7 +83,7 @@ func (d *AgentDeps) syncGlobalPromptLocked(ctx context.Context) (bool, error) {
 	if d.hasActiveAgentRunLocked(statuses) {
 		return true, nil
 	}
-	if err := d.globalPromptFile.Sync(prompt); err != nil {
+	if err := d.globalPromptFile.SyncPreferences(prompt, rules); err != nil {
 		return false, err
 	}
 	return false, nil

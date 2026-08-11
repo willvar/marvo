@@ -92,6 +92,17 @@ export interface AgentSettingsUpdate {
   global_prompt: string
 }
 
+export interface AgentPersonalizationRule {
+  id: string
+  text: string
+}
+
+export interface AgentPersonalizationResponse {
+  rules: AgentPersonalizationRule[]
+  revision: string
+  prompt_pending: boolean
+}
+
 export interface AgentProviderPromptOption {
   label: string
   value: string

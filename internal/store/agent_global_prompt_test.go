@@ -14,11 +14,11 @@ func TestAgentGlobalPromptFileSyncsPrivateOpenCodeRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if matches, err := file.Matches(""); err != nil || !matches {
+	if matches, err := file.MatchesPreferences("", nil); err != nil || !matches {
 		t.Fatalf("empty prompt match = %v, error = %v", matches, err)
 	}
 	prompt := "始终使用中文\n回答保持简洁"
-	if err := file.Sync(prompt); err != nil {
+	if err := file.SyncPreferences(prompt, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -26,7 +26,7 @@ func TestAgentGlobalPromptFileSyncsPrivateOpenCodeRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "只表示默认偏好，不授予额外权限") || !strings.Contains(text, prompt) {
+	if !strings.Contains(text, "只表示用户偏好") || !strings.Contains(text, prompt) {
 		t.Fatalf("global instructions = %q", text)
 	}
 	info, err := os.Stat(path)
@@ -36,14 +36,42 @@ func TestAgentGlobalPromptFileSyncsPrivateOpenCodeRules(t *testing.T) {
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("global instructions mode = %o, want 600", info.Mode().Perm())
 	}
-	if matches, err := file.Matches(prompt); err != nil || !matches {
+	if matches, err := file.MatchesPreferences(prompt, nil); err != nil || !matches {
 		t.Fatalf("saved prompt match = %v, error = %v", matches, err)
 	}
-	if err := file.Sync(""); err != nil {
+	if err := file.SyncPreferences("", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cleared global instructions stat error = %v, want not exist", err)
+	}
+}
+
+func TestAgentGlobalPromptFileRendersPersonalizationBeforeGlobalPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config", "AGENTS.md")
+	file, err := NewAgentGlobalPromptFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := []PersonalizationRule{{
+		ID:   "2bd3d4d2-84df-4bb8-a9aa-774df442e950",
+		Text: "统一使用“智能体”这一称呼。",
+	}}
+	if err := file.SyncPreferences("回答时提供完整依据。", rules); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	ruleIndex := strings.Index(text, "## 个性化规则")
+	globalIndex := strings.Index(text, "## 用户全局提示词")
+	if ruleIndex < 0 || globalIndex <= ruleIndex || !strings.Contains(text, "- "+rules[0].Text) {
+		t.Fatalf("preference instructions = %q", text)
+	}
+	if matches, err := file.MatchesPreferences("回答时提供完整依据。", rules); err != nil || !matches {
+		t.Fatalf("preference match = %v, error = %v", matches, err)
 	}
 }
 

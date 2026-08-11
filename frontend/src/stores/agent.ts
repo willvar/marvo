@@ -10,6 +10,7 @@ import {
   isAbortedAgentError,
   type AgentConnectionState,
   type AgentFilePartInput,
+  type AgentPromptContext,
   type SSEEvent,
   type AgentSession,
   type AgentSessionError,
@@ -225,16 +226,17 @@ function groupQuestions(raw: any) {
   return grouped
 }
 
-function browserContextSystem() {
-  if (typeof window === 'undefined') return undefined
-  const vw = Math.round(window.innerWidth)
-  const vh = Math.round(window.innerHeight)
-  const dpr = Math.round(window.devicePixelRatio * 100) / 100
-  return `Client context: viewport=${vw}x${vh}px, devicePixelRatio=${dpr}`
-}
-
-function systemContext(extra?: string) {
-  return [browserContextSystem(), extra].filter(Boolean).join('\n') || undefined
+function promptContext(noteTitle = ''): AgentPromptContext | undefined {
+  const context: AgentPromptContext = {}
+  if (typeof window !== 'undefined') {
+    context.viewport = {
+      width: Math.round(window.innerWidth),
+      height: Math.round(window.innerHeight),
+      devicePixelRatio: Math.round(window.devicePixelRatio * 100) / 100,
+    }
+  }
+  if (noteTitle) context.note = { title: noteTitle }
+  return context.viewport || context.note ? context : undefined
 }
 
 export const useAgentStore = defineStore('agent', {
@@ -708,7 +710,7 @@ export const useAgentStore = defineStore('agent', {
       else localStorage.removeItem(FLOATING_NOTE_KEY)
     },
 
-    async sendFloatingMessage(text: string, displayText?: string, context?: string, files: AgentFilePartInput[] = []) {
+    async sendFloatingMessage(text: string, displayText?: string, noteTitle = '', files: AgentFilePartInput[] = []) {
       const sessionID = this.floatingSessionId
       if (!sessionID) return
       this.globalError = null
@@ -738,7 +740,7 @@ export const useAgentStore = defineStore('agent', {
         await agentApi.sendMessage(sessionID, {
           parts: [...(text ? [{ type: 'text' as const, text }] : []), ...files],
           agent: 'build',
-          system: systemContext(context),
+          marvoContext: promptContext(noteTitle),
         })
       } catch (error) {
         if (addedLocalMessage) {
@@ -839,7 +841,7 @@ export const useAgentStore = defineStore('agent', {
         await agentApi.sendMessage(sessionID, {
           parts: [...(text ? [{ type: 'text' as const, text }] : []), ...files],
           agent: 'build',
-          system: systemContext(),
+          marvoContext: promptContext(),
         })
       } catch (error) {
         if (addedLocalMessage) {

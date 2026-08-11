@@ -8,9 +8,21 @@ import {
   type TextPartInput,
 } from '@opencode-ai/sdk/v2/client'
 import { notifyUnauthorized } from './unauthorized'
+import { api } from './useApi'
 
 export type SSEEvent = Extract<GlobalEvent['payload'], { properties: unknown }>
 export type AgentFilePartInput = FilePartInput
+
+export interface AgentPromptContext {
+  note?: {
+    title: string
+  }
+  viewport?: {
+    width: number
+    height: number
+    devicePixelRatio: number
+  }
+}
 
 type ClientResult<T> = { data?: T; error?: unknown }
 
@@ -38,8 +50,8 @@ export type SendMessageRequest = {
   noReply?: boolean
   tools?: Record<string, boolean>
   format?: OutputFormat
-  system?: string
   variant?: string
+  marvoContext?: AgentPromptContext
   parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
 }
 
@@ -77,7 +89,7 @@ export const agentApi = {
   getSessionStatuses: () => responseData(client.session.status()),
   getMessages: (sessionId: string) => responseData(client.session.messages({ sessionID: sessionId })),
   sendMessage: (sessionId: string, data: SendMessageRequest) =>
-    responseData(client.session.promptAsync({ sessionID: sessionId, ...data })),
+    api.post(`/api/agent/session/${encodeURIComponent(sessionId)}/prompt_async`, data),
   abortSession: (sessionId: string) => responseData(client.session.abort({ sessionID: sessionId })),
 
   listPermissions: () => responseData(client.permission.list()),

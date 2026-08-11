@@ -163,7 +163,7 @@ func newProviderTestDeps(t *testing.T, upstreamURL string) *AgentDeps {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewAgentDeps(upstreamURL, make(chan struct{}), settingsStore, globalPromptFile)
+	return NewAgentDeps(upstreamURL, make(chan struct{}), settingsStore, nil, globalPromptFile)
 }
 
 func TestAgentProviderCatalogAndAPIKeyConnection(t *testing.T) {

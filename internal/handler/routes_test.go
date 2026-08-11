@@ -11,7 +11,7 @@ func TestRoutesRegistered(t *testing.T) {
 	mux := http.NewServeMux()
 
 	deps := &Dependencies{
-		AgentDeps:   NewAgentDeps("http://127.0.0.1:4096", make(chan struct{}), nil, nil),
+		AgentDeps:   NewAgentDeps("http://127.0.0.1:4096", make(chan struct{}), nil, nil, nil),
 		DeviceStore: store.NewDeviceStore(t.TempDir(), "test-secret"),
 	}
 	RegisterRoutes(mux, deps)
@@ -26,6 +26,8 @@ func TestRoutesRegistered(t *testing.T) {
 		{"POST", "/api/send"},
 		{"GET", "/api/agent/settings"},
 		{"PUT", "/api/agent/settings"},
+		{"GET", "/api/agent/personalization"},
+		{"PUT", "/api/agent/personalization"},
 	} {
 		req, _ := http.NewRequest(r.method, r.path, nil)
 		_, pattern := mux.Handler(req)
