@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { expect, test } from '@playwright/test'
-import { approvedDeviceContext, approveDevice, platformContext, workspaceAPI } from './helpers'
+import {
+  approvedDeviceContext,
+  approveDevice,
+  expectDialogTextRetainedDuringClose,
+  platformContext,
+  workspaceAPI,
+} from './helpers'
 
 const isolationPassword = 'multiuser-e2e-password'
 
@@ -10,9 +16,11 @@ test('平台管理员可将旧版数据无覆盖迁移到指定用户', async ({
   await approveDevice(page, 'Playwright legacy migration')
 
   await page.goto('/admin/login')
+  await expect(page).toHaveTitle('平台登录 · Marvo')
   await page.getByPlaceholder('请输入密码').fill('e2e-admin-password')
   await page.getByRole('button', { name: '进入' }).click()
   await expect(page).toHaveURL(/\/admin$/)
+  await expect(page).toHaveTitle('用户管理 · Marvo')
   await expect(page.getByText('检测到可迁移的旧版单用户数据')).toBeVisible()
 
   const row = page.locator('tbody tr').filter({ hasText: 'Playwright 用户空间' })
@@ -24,6 +32,11 @@ test('平台管理员可将旧版数据无覆盖迁移到指定用户', async ({
   expect(actionBoxes.length).toBeGreaterThanOrEqual(5)
   expect(Math.max(...actionBoxes.map(({ top }) => top)) - Math.min(...actionBoxes.map(({ top }) => top))).toBeLessThan(
     2,
+  )
+  await row.getByRole('button', { name: '重置凭据' }).click()
+  const credentialsDialog = page.getByRole('dialog', { name: '重置用户凭据' })
+  await expectDialogTextRetainedDuringClose(page, credentialsDialog, 'Playwright 用户空间', () =>
+    credentialsDialog.getByRole('button', { name: '取消', exact: true }).click(),
   )
   await row.getByRole('button', { name: '迁移旧数据' }).click()
   await expect(page.getByRole('heading', { name: '迁移旧版数据' })).toBeVisible()

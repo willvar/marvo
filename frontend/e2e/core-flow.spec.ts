@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
   approveDevice,
+  authenticateUserAdministrator,
   closeCompactSidebar,
   openSidebar,
   workspaceAPI,
@@ -13,7 +14,14 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   const suffix = testInfo.project.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
   let title = `E2E ${suffix} core`
   let encodedTitle = encodeURIComponent(title)
+  const brand = `知识空间 ${suffix}`
   await approveDevice(page, `Playwright ${suffix}`)
+  await authenticateUserAdministrator(page)
+  const brandUpdate = await page.request.put(workspaceAPI('/api/admin/brand'), { data: { name: brand } })
+  expect(brandUpdate.ok()).toBeTruthy()
+  await page.reload()
+  await expect(page.locator('.dsh-logo')).toHaveText(brand)
+  await expect(page).toHaveTitle(`工作区 · ${brand}`)
 
   await expect(page.locator('.dsh-header-title-input')).toHaveCount(0)
   await expect(page.locator('.home-welcome')).toBeVisible()
@@ -28,19 +36,23 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await openSidebar(page)
   await expect(page.locator('.dsh-footer')).not.toContainText('智能体')
   const footerButtons = page.locator('.dsh-footer-button')
-  await expect(footerButtons).toHaveCount(1)
+  await expect(footerButtons).toHaveCount(2)
   await expect(footerButtons.nth(0)).toHaveText(/回收站/)
+  await expect(footerButtons.nth(1)).toHaveText(/管理后台/)
   await expect(page.locator('.dsh-footer')).not.toContainText('智能体设置')
   await closeCompactSidebar(page)
   await page.locator('.dsh-header-agent').click()
   await expect(page).toHaveURL(workspaceURL('/agent'))
+  await expect(page).toHaveTitle(`智能体 · ${brand}`)
   const staticHeaderTitle = page.locator('.dsh-header-title')
   await expect(staticHeaderTitle).toHaveText('智能体对话')
   await expect(staticHeaderTitle).not.toHaveClass(/is-clickable/)
   await expect(staticHeaderTitle).not.toHaveAttribute('title')
   expect(await staticHeaderTitle.evaluate((element) => element.tagName)).toBe('SPAN')
   expect(await staticHeaderTitle.evaluate((element) => getComputedStyle(element).cursor)).not.toBe('pointer')
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await expect(page.getByRole('button', { name: '设置', exact: true })).toHaveCount(0)
+  await page.goto(workspacePath('/admin/agent'))
+  await expect(page).toHaveTitle(`智能体设置 · Playwright 用户空间 · Marvo`)
   await expect(page.getByRole('heading', { name: '智能体设置' })).toBeVisible()
   await expect(page.getByRole('button', { name: '新增规则' })).toBeHidden()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
@@ -98,13 +110,13 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page.getByRole('heading', { name: '智能体设置' })).toBeVisible()
   await expect(page.getByLabel('全局提示词', { exact: true })).toHaveValue(expandedGlobalPrompt)
   await page.getByRole('button', { name: '保存设置' }).click()
-  await expect(page.getByRole('heading', { name: '智能体设置' })).toBeHidden()
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
+  await page.reload()
   await page.getByRole('tab', { name: '进阶' }).click()
   await expect(page.getByLabel('全局提示词', { exact: true })).toHaveValue(expandedGlobalPrompt)
   await expect(page.locator('.agent-personalization-input').last()).toHaveValue(personalizationRule)
-  await page.getByRole('button', { name: '取消' }).click()
-  await expect(page.locator('.dsh-header-agent')).toBeVisible()
+  await page.goto(workspacePath('/agent'))
+  await expect(page.locator('.dsh-header-agent')).toHaveCount(0)
   await openSidebar(page)
   const search = page.getByPlaceholder('搜索或新建...')
   await search.fill('非法/标题')
@@ -114,6 +126,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await search.fill(title)
   await search.press('Enter')
   await expect(page).toHaveURL(new RegExp(`/note/${encodedTitle}$`))
+  await expect(page).toHaveTitle(`${title} · ${brand}`)
   const editableHeaderTitle = page.locator('.dsh-header-title')
   await expect(editableHeaderTitle).toHaveText(title)
   await expect(editableHeaderTitle).toHaveClass(/is-clickable/)
@@ -138,6 +151,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await page.locator('.dsh-header-title-input').fill(title)
   await page.locator('.dsh-header-title-input').press('Enter')
   await expect(page).toHaveURL(new RegExp(`/note/${encodedTitle}$`))
+  await expect(page).toHaveTitle(`${title} · ${brand}`)
   await expect(page.locator('.dsh-header-title')).toHaveText(title)
   expect((await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(previousTitle)}`))).status()).toBe(404)
   expect((await page.request.get(workspaceAPI(`/api/notes/${encodedTitle}`))).ok()).toBeTruthy()
@@ -233,6 +247,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page).toHaveURL(workspaceURL())
 
   await page.goto(workspacePath('/trash'))
+  await expect(page).toHaveTitle(`回收站 · ${brand}`)
   await page.getByRole('button', { name: '恢复', exact: true }).click()
   await expect(page.getByLabel('新标题')).toHaveValue(title)
   await page.getByRole('button', { name: '确认恢复' }).click()

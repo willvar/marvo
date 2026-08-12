@@ -12,7 +12,7 @@ func TestLayoutCreatesPrivateUserBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const userID = "68d91e16-9701-4b89-81e8-8510d807e132"
+	const userID = "68d91e1697014b8981e8"
 	paths, err := layout.EnsureUser(userID)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestLayoutRejectsSymlinkedUserBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const userID = "4f990906-6371-4ff6-b785-fb880a9910b3"
+	const userID = "4f99090663714ff6b785"
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "users", userID)); err != nil {
 		t.Fatal(err)
@@ -54,5 +54,39 @@ func TestLayoutRejectsInvalidUserID(t *testing.T) {
 	}
 	if _, err := layout.EnsureUser("../other-user"); err == nil {
 		t.Fatal("path-like user id was accepted")
+	}
+}
+
+func TestUserUsageCountsRegularFilesWithoutFollowingSymlinks(t *testing.T) {
+	root := t.TempDir()
+	layout, err := OpenLayout(filepath.Join(root, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const userID = "20a903a6f7864975ac2e"
+	paths, err := layout.EnsureUser(userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.Workspace, "note.md"), []byte("12345"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.App, "settings.json"), []byte("1234567"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.WriteFile(outside, []byte("must not count"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(paths.Agent, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	used, err := layout.UserUsage(userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used != 12 {
+		t.Fatalf("UserUsage() = %d, want 12", used)
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"marvo/internal/userid"
 )
 
 type fakeSession struct {
@@ -494,7 +496,7 @@ func main() {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		trimmed := strings.TrimPrefix(r.URL.Path, "/user/")
 		userID, runtimePath, scoped := strings.Cut(trimmed, "/")
-		if !strings.HasPrefix(r.URL.Path, "/user/") || !scoped || len(userID) != 36 {
+		if !strings.HasPrefix(r.URL.Path, "/user/") || !scoped || !userid.Valid(userID) {
 			defaultHandler.ServeHTTP(w, r)
 			return
 		}

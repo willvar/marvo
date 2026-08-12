@@ -41,6 +41,8 @@ func TestRoutesExposeOnlyPlatformControlAndUserScopedContent(t *testing.T) {
 		{http.MethodGet, "/api/user/" + user.User.ID + "/events"},
 		{http.MethodPost, "/api/user/" + user.User.ID + "/send"},
 		{http.MethodGet, "/api/user/" + user.User.ID + "/agent/settings"},
+		{http.MethodGet, "/api/user/" + user.User.ID + "/admin/space"},
+		{http.MethodPatch, "/api/user/" + user.User.ID + "/admin/devices/device-id"},
 	} {
 		request, _ := http.NewRequest(route.method, route.path, nil)
 		if _, pattern := mux.Handler(request); pattern == "" {

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const gatewayTestUserID = "f20ac70d-6a6a-4b3c-9e1e-684ee832ea43"
+const gatewayTestUserID = "f20ac70d6a6a4b3c9e1e"
 
 type staticRuntimeProvider struct {
 	target *RuntimeTarget

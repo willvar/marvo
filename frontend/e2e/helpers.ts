@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { expect, request, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, request, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
 const backendURL = 'http://127.0.0.1:15090'
 const approvedTestDeviceID = 'marvo-playwright-approved-device'
@@ -33,6 +33,42 @@ export function workspaceAPI(path: string) {
 export function workspaceAPIRegex(path: string) {
   if (!path.startsWith('/api/')) throw new Error(`not an API path: ${path}`)
   return `/api/user/[^/]+${path.slice('/api'.length)}`
+}
+
+export async function expectDialogTextRetainedDuringClose(
+  page: Page,
+  dialog: Locator,
+  expectedText: string,
+  close: () => Promise<void>,
+) {
+  const key = `dialog-${Date.now()}-${Math.random()}`
+  await dialog.evaluate(
+    (element, { expectedText: expected, key: stateKey }) => {
+      const state = window as Window & { __marvoDialogCloseChecks?: Record<string, boolean> }
+      const container = element.closest('[data-part="positioner"]') || element
+      state.__marvoDialogCloseChecks ||= {}
+      state.__marvoDialogCloseChecks[stateKey] = false
+      const observer = new MutationObserver(() => {
+        if (container.isConnected && !container.textContent?.includes(expected)) {
+          state.__marvoDialogCloseChecks![stateKey] = true
+        }
+      })
+      observer.observe(container, { childList: true, characterData: true, subtree: true })
+      window.setTimeout(() => observer.disconnect(), 500)
+    },
+    { expectedText, key },
+  )
+
+  await close()
+  await expect(dialog).toBeHidden()
+  await page.waitForTimeout(180)
+  const changed = await page.evaluate((stateKey) => {
+    const state = window as Window & { __marvoDialogCloseChecks?: Record<string, boolean> }
+    const result = state.__marvoDialogCloseChecks?.[stateKey] ?? false
+    if (state.__marvoDialogCloseChecks) delete state.__marvoDialogCloseChecks[stateKey]
+    return result
+  }, key)
+  expect(changed).toBe(false)
 }
 
 export async function platformContext() {
@@ -99,8 +135,8 @@ async function loginUserAdministrator(
   password = userPassword,
   resetCredentials = true,
 ) {
-  // Resetting only the management credentials gives every isolated test run a
-  // fresh TOTP enrollment. Approved device credentials are intentionally not
+  // Resetting only the management credentials gives isolated tests a known
+  // password-only login. Approved device credentials are intentionally not
   // affected by this operation.
   if (resetCredentials) {
     const reset = await admin.post(`/api/admin/users/${userID}/credentials`, {
@@ -112,18 +148,11 @@ async function loginUserAdministrator(
     data: { password },
   })
   expect(verify.ok()).toBeTruthy()
-  const challenge = (await verify.json()) as {
+  const loginState = (await verify.json()) as {
+    authenticated?: boolean
     challenge_token: string
-    totp_setup?: { secret: string }
   }
-  expect(challenge.totp_setup?.secret).toBeTruthy()
-  const login = await admin.post(`/api/user/${userID}/auth`, {
-    data: {
-      challenge_token: challenge.challenge_token,
-      code: totpCode(challenge.totp_setup!.secret),
-    },
-  })
-  expect(login.ok()).toBeTruthy()
+  expect(loginState.authenticated).toBe(true)
 }
 
 export async function approvedDeviceContext(
@@ -170,18 +199,8 @@ export async function authenticateUserAdministrator(page: Page) {
     data: { password: userPassword },
   })
   expect(verify.ok()).toBeTruthy()
-  const challenge = (await verify.json()) as {
-    challenge_token: string
-    totp_setup?: { secret: string }
-  }
-  expect(challenge.totp_setup?.secret).toBeTruthy()
-  const login = await page.request.post(workspaceAPI('/api/auth'), {
-    data: {
-      challenge_token: challenge.challenge_token,
-      code: totpCode(challenge.totp_setup!.secret),
-    },
-  })
-  expect(login.ok()).toBeTruthy()
+  const loginState = (await verify.json()) as { authenticated?: boolean }
+  expect(loginState.authenticated).toBe(true)
 }
 
 export async function approveDevice(page: Page, deviceName: string) {

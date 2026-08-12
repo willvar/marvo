@@ -140,6 +140,52 @@ func TestUnreferencedPlaceholderAbandonsAndRemovesAllFiles(t *testing.T) {
 	}
 }
 
+func TestSavedRemovalReconcilesReadyAssetFromFilesystem(t *testing.T) {
+	id, err := NewAssetID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	noteStore, note := createMediaNote(t, "![image](assets/"+id+".png)")
+	manager := NewManager(noteStore)
+	defer manager.Close()
+	if _, err := manager.Reserve(note.Note.Title, note.InstanceToken, id, "pixel.png", "image/png"); err != nil {
+		t.Fatalf("Reserve() error = %v", err)
+	}
+	png, err := base64.StdEncoding.DecodeString(onePixelPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Upload(context.Background(), note.Note.Title, note.InstanceToken, id, int64(len(png)), bytes.NewReader(png)); err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+	ready := waitForAssetState(t, manager, note.Note.Title, note.InstanceToken, id, StateReady, 5*time.Second)
+	if ready.Filename == "" {
+		t.Fatal("ready asset has no filename")
+	}
+	updated, err := noteStore.UpdateContentCAS(note.Note.Title, note.InstanceToken, note.ContentRevision, "image removed")
+	if err != nil {
+		t.Fatalf("UpdateContentCAS() error = %v", err)
+	}
+	manager.ReconcileNote(note.Note.Title, updated.InstanceToken)
+
+	if _, err := manager.Get(note.Note.Title, updated.InstanceToken, id); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Get() after saved removal error = %v, want not exist", err)
+	}
+	assetsDir, err := noteStore.AssetsDirCAS(note.Note.Title, updated.InstanceToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(assetsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), id) {
+			t.Fatalf("saved removal left asset file behind: %s", entry.Name())
+		}
+	}
+}
+
 func TestCorruptUploadFailsAndDropsRawUpload(t *testing.T) {
 	id, err := NewAssetID()
 	if err != nil {

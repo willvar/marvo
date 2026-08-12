@@ -1,11 +1,28 @@
 import { expect, test } from '@playwright/test'
 import { platformContext, totpCode } from './helpers'
 
-test('用户首次绑定身份验证器时显示本地生成的 TOTP 二维码', async ({ page }, testInfo) => {
+test('非法用户 ID 不会渲染用户后台或请求无作用域管理接口', async ({ page }) => {
+  const unscopedUserAdminRequests: string[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path === '/api/admin/me' || path === '/api/admin/brand' || path === '/api/admin/space') {
+      unscopedUserAdminRequests.push(path)
+    }
+  })
+
+  await page.goto('/user/78164094-cb60-441a-af24-be5df372dc26/admin/settings')
+
+  await expect(page).toHaveURL('/admin/login')
+  await expect(page.getByRole('heading', { name: 'Marvo Admin' })).toBeVisible()
+  expect(unscopedUserAdminRequests).toEqual([])
+})
+
+test('用户可在后台管理密码与可选身份验证器', async ({ page }, testInfo) => {
   const platform = await platformContext()
-  const password = 'totp-qrcode-e2e-password'
+  const password = 'totp-security-e2e-password'
+  const changedPassword = 'totp-security-e2e-password-changed'
   try {
-    const userName = `二维码验证 ${testInfo.project.name}`
+    const userName = `安全设置 ${testInfo.project.name}`
     const created = await platform.post('/api/admin/users', {
       data: { name: userName, password },
     })
@@ -13,15 +30,65 @@ test('用户首次绑定身份验证器时显示本地生成的 TOTP 二维码',
     const user = (await created.json()).user as { id: string }
 
     await page.goto(`/user/${user.id}/login?mode=admin`)
+    await expect(page).toHaveTitle('用户后台登录 · Marvo')
     await page.getByPlaceholder('用户密码').fill(password)
-    const verified = page.waitForResponse(
+    await page.getByRole('button', { name: '登录', exact: true }).click()
+    await expect(page).toHaveURL(`/user/${user.id}/admin`)
+    await expect(page).toHaveTitle(`设备审批 · ${userName} · Marvo`)
+    await expect(page.locator('.admin-sidebar-brand')).toContainText('Marvo')
+    await expect(page.getByRole('heading', { name: '访问机制' })).toBeVisible()
+    await expect(page.getByText('后台身份与工作区设备凭据相互独立')).toBeVisible()
+    await expect
+      .poll(() =>
+        page.locator('.device-auth-explainer').evaluate((explainer) => {
+          const tabs = document.querySelector('.admin-tabs')
+          return !!tabs && !!(explainer.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING)
+        }),
+      )
+      .toBe(true)
+    await expect(page.getByRole('link', { name: '智能体设置' })).toHaveAttribute('href', `/user/${user.id}/admin/agent`)
+
+    const account = page.locator('.admin-header-user')
+    await expect(account).toHaveAttribute('aria-label', userName)
+    await expect(account.locator('.admin-header-user-name')).toHaveText(userName)
+    if (testInfo.project.name === 'chromium-landscape') {
+      await expect(account.locator('.admin-header-user-name')).toBeVisible()
+    } else {
+      await account.click()
+      await expect(page.locator('.admin-header-dropdown-identity')).toHaveText(userName)
+      await account.click()
+    }
+
+    await page.getByRole('link', { name: '空间信息' }).click()
+    await expect(page).toHaveURL(`/user/${user.id}/admin/settings`)
+    await expect(page).toHaveTitle(`空间信息 · ${userName} · Marvo`)
+    await expect(page.getByRole('heading', { name: '空间占用' })).toBeVisible()
+    await expect(page.locator('.user-space-usage-value')).toContainText(/B|KiB|MiB|GiB|TiB/)
+    await expect(page.getByText('当前未设置空间容量上限')).toBeVisible()
+    const brandField = page.getByLabel('品牌名称')
+    await expect(brandField).toHaveValue('Marvo')
+    await brandField.fill(`知识空间 ${testInfo.project.name}`)
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.getByRole('status')).toHaveText('品牌名称已保存')
+    await expect(page.locator('.admin-sidebar-brand')).toContainText('Marvo')
+
+    await page.getByRole('link', { name: '安全设置' }).click()
+    await expect(page).toHaveURL(`/user/${user.id}/admin/security`)
+    await expect(page).toHaveTitle(`安全设置 · ${userName} · Marvo`)
+    const authenticatorCard = page
+      .locator('.security-settings-card')
+      .filter({ has: page.getByRole('heading', { name: '身份验证器' }) })
+    await expect(authenticatorCard.getByText('未绑定', { exact: true })).toBeVisible()
+
+    await authenticatorCard.getByLabel('确认当前密码').fill(password)
+    const setupResponse = page.waitForResponse(
       (response) =>
-        response.url().includes(`/api/user/${user.id}/auth/verify`) && response.request().method() === 'POST',
+        response.url().includes(`/api/user/${user.id}/admin/security/totp`) &&
+        !response.url().endsWith('/confirm') &&
+        response.request().method() === 'POST',
     )
-    await page.getByRole('button', { name: '下一步' }).click()
-    const response = await verified
-    expect(response.ok()).toBeTruthy()
-    const setup = (await response.json()).totp_setup as { secret: string; uri: string }
+    await authenticatorCard.getByRole('button', { name: '生成绑定二维码' }).click()
+    const setup = (await (await setupResponse).json()).totp_setup as { secret: string; uri: string }
 
     const uri = new URL(setup.uri)
     expect(uri.protocol).toBe('otpauth:')
@@ -32,27 +99,83 @@ test('用户首次绑定身份验证器时显示本地生成的 TOTP 二维码',
     expect(uri.searchParams.get('digits')).toBe('6')
     expect(uri.searchParams.get('period')).toBe('30')
 
-    const qrCode = page.getByRole('img', { name: '身份验证器设置二维码' })
+    const qrCode = authenticatorCard.getByRole('img', { name: '身份验证器设置二维码' })
     await expect(qrCode).toBeVisible()
     await expect(qrCode.locator('svg')).toBeVisible()
-    await expect(page.getByText(setup.secret, { exact: true })).toBeVisible()
+    await expect(authenticatorCard.getByText(setup.secret, { exact: true })).toBeVisible()
     const bounds = await qrCode.boundingBox()
     expect(bounds).not.toBeNull()
     expect(bounds!.x).toBeGreaterThanOrEqual(0)
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width)
 
-    await page.getByPlaceholder('6 位验证码').fill(totpCode(setup.secret))
-    await page.getByRole('button', { name: '进入设备管理' }).click()
+    const currentCode = totpCode(setup.secret)
+    await authenticatorCard.getByLabel('6 位验证码').fill(currentCode)
+    await authenticatorCard.getByRole('button', { name: '确认绑定' }).click()
+    await expect(authenticatorCard.getByText('已绑定', { exact: true })).toBeVisible()
+
+    const passwordCard = page
+      .locator('.security-settings-card')
+      .filter({ has: page.getByRole('heading', { name: '登录密码' }) })
+    await passwordCard.getByLabel('当前密码').fill(password)
+    await passwordCard.getByLabel('新密码', { exact: true }).fill(changedPassword)
+    await passwordCard.getByLabel('确认新密码').fill(changedPassword)
+    await passwordCard.getByRole('button', { name: '修改密码' }).click()
+    await expect(passwordCard.getByRole('status')).toHaveText('密码已修改')
+    await expect(authenticatorCard.getByText('已绑定', { exact: true })).toBeVisible()
+
+    await authenticatorCard.getByLabel('确认当前密码').fill(changedPassword)
+    await authenticatorCard.getByLabel('当前 6 位验证码').fill(currentCode)
+    await authenticatorCard.getByRole('button', { name: '解绑身份验证器' }).click()
+    await expect(authenticatorCard.getByText('未绑定', { exact: true })).toBeVisible()
+
+    await account.click()
+    await page.getByRole('button', { name: '退出登录' }).click()
+    await expect(page).toHaveURL(new RegExp(`/user/${user.id}/login\\?`))
+    await page.getByPlaceholder('用户密码').fill(changedPassword)
+    await page.getByRole('button', { name: '登录', exact: true }).click()
     await expect(page).toHaveURL(`/user/${user.id}/admin`)
-    const account = page.locator('.admin-header-user')
-    await expect(account).toHaveAttribute('aria-label', userName)
-    await expect(account.locator('.admin-header-user-name')).toHaveText(userName)
-    if (testInfo.project.name === 'chromium-landscape') {
-      await expect(account.locator('.admin-header-user-name')).toBeVisible()
-    } else {
-      await account.click()
-      await expect(page.locator('.admin-header-dropdown-identity')).toHaveText(userName)
-    }
+
+    const sidebarLinks = page.locator('.admin-sidebar-nav a')
+    const firstLinkBounds = await sidebarLinks.nth(0).boundingBox()
+    const secondLinkBounds = await sidebarLinks.nth(1).boundingBox()
+    expect(firstLinkBounds).not.toBeNull()
+    expect(secondLinkBounds).not.toBeNull()
+    expect(secondLinkBounds!.y - (firstLinkBounds!.y + firstLinkBounds!.height)).toBeGreaterThanOrEqual(6)
+
+    await page.getByRole('button', { name: '进入工作区' }).click()
+    const authorizationDialog = page.getByRole('dialog', { name: '授权当前设备' })
+    await expect(authorizationDialog).toBeVisible()
+    await expect(authorizationDialog).toContainText(
+      '如果这是临时或公用设备，使用完后请返回后台撤回当前设备授权，并及时退出后台登录。',
+    )
+    const firstWorkspacePromise = page.context().waitForEvent('page')
+    await authorizationDialog.getByRole('button', { name: '授权并进入' }).click()
+    const firstWorkspace = await firstWorkspacePromise
+    await expect(firstWorkspace).toHaveURL(`/user/${user.id}`)
+    await expect(page).toHaveURL(`/user/${user.id}/admin`)
+    await expect(authorizationDialog).toBeHidden()
+    await firstWorkspace.close()
+
+    await page.getByRole('button', { name: /已批准设备/ }).click()
+    const localDeviceID = await page.evaluate(() => localStorage.getItem('marvo_local_device_id'))
+    expect(localDeviceID).toBeTruthy()
+    const currentDeviceRow = page.locator(`tbody tr[data-device-id="${localDeviceID}"]`)
+    await expect(currentDeviceRow).toBeVisible()
+    await currentDeviceRow.getByRole('button', { name: '编辑', exact: true }).click()
+    await currentDeviceRow.getByLabel('设备名称').fill(`当前设备 ${testInfo.project.name}`)
+    await currentDeviceRow.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(currentDeviceRow).toContainText(`当前设备 ${testInfo.project.name}`)
+
+    const workspaceEntry = page.getByRole('link', { name: '进入工作区' })
+    await expect(workspaceEntry).toHaveAttribute('target', '_blank')
+    await expect(workspaceEntry).toHaveAttribute('rel', 'noopener noreferrer')
+    const secondWorkspacePromise = page.context().waitForEvent('page')
+    await workspaceEntry.click()
+    const secondWorkspace = await secondWorkspacePromise
+    await expect(secondWorkspace).toHaveURL(`/user/${user.id}`)
+    await expect(page).toHaveURL(`/user/${user.id}/admin`)
+    await expect(authorizationDialog).toBeHidden()
+    await secondWorkspace.close()
   } finally {
     await platform.dispose()
   }

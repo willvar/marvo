@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -149,6 +150,8 @@ func TestUserAdminSessionIsBoundToUserAndAuthVersion(t *testing.T) {
 	fixture := newMultiuserFixture(t)
 	userA := fixture.createUser(t, "User A")
 	userB := fixture.createUser(t, "User B")
+	deviceSession := fixture.approveDevice(t, userA.User.ID, "browser-a")
+	fixture.approveDevice(t, userA.User.ID, "browser-b")
 
 	verify := serveJSON(t, fixture.mux, http.MethodPost, "/api/user/"+userA.User.ID+"/auth/verify", map[string]any{
 		"password": "a sufficiently long password",
@@ -156,25 +159,11 @@ func TestUserAdminSessionIsBoundToUserAndAuthVersion(t *testing.T) {
 	if verify.Code != http.StatusOK {
 		t.Fatalf("verify status = %d, body = %s", verify.Code, verify.Body.String())
 	}
-	var challenge struct {
-		Token string `json:"challenge_token"`
-		TOTP  struct {
-			Secret string `json:"secret"`
-		} `json:"totp_setup"`
-	}
-	if err := json.Unmarshal(verify.Body.Bytes(), &challenge); err != nil {
-		t.Fatal(err)
-	}
-	code := testTOTPCode(t, challenge.TOTP.Secret, time.Now())
-	login := serveJSON(t, fixture.mux, http.MethodPost, "/api/user/"+userA.User.ID+"/auth", map[string]any{
-		"challenge_token": challenge.Token,
-		"code":            code,
-	})
-	if login.Code != http.StatusOK {
-		t.Fatalf("login status = %d, body = %s", login.Code, login.Body.String())
+	if !bytes.Contains(verify.Body.Bytes(), []byte(`"authenticated":true`)) {
+		t.Fatalf("password-only login response = %s", verify.Body.String())
 	}
 	var session *http.Cookie
-	for _, cookie := range login.Result().Cookies() {
+	for _, cookie := range verify.Result().Cookies() {
 		if cookie.Name == userAdminCookieName(userA.User.ID) {
 			session = cookie
 		}
@@ -191,22 +180,220 @@ func TestUserAdminSessionIsBoundToUserAndAuthVersion(t *testing.T) {
 	if crossedIdentity.Code != http.StatusUnauthorized {
 		t.Fatalf("A admin session read B identity with status %d", crossedIdentity.Code)
 	}
+	deviceOnlySettings := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/agent/personalization", nil, deviceSession)
+	if deviceOnlySettings.Code != http.StatusUnauthorized {
+		t.Fatalf("device session accessed agent settings with status %d", deviceOnlySettings.Code)
+	}
+	adminSettings := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/agent/personalization", nil, session)
+	if adminSettings.Code != http.StatusOK {
+		t.Fatalf("admin session agent settings status = %d, body = %s", adminSettings.Code, adminSettings.Body.String())
+	}
 
 	ownAdmin := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/devices", nil, session)
 	if ownAdmin.Code != http.StatusOK {
 		t.Fatalf("own admin status = %d, body = %s", ownAdmin.Code, ownAdmin.Body.String())
 	}
+	renamedDevice := serveJSON(t, fixture.mux, http.MethodPatch, "/api/user/"+userA.User.ID+"/admin/devices/browser-a", map[string]any{
+		"device_name": "  Work tablet  ",
+	}, session)
+	if renamedDevice.Code != http.StatusOK || !bytes.Contains(renamedDevice.Body.Bytes(), []byte(`"device_name":"Work tablet"`)) {
+		t.Fatalf("rename device status = %d, body = %s", renamedDevice.Code, renamedDevice.Body.String())
+	}
+	duplicateName := serveJSON(t, fixture.mux, http.MethodPatch, "/api/user/"+userA.User.ID+"/admin/devices/browser-b", map[string]any{
+		"device_name": "WORK TABLET",
+	}, session)
+	if duplicateName.Code != http.StatusConflict {
+		t.Fatalf("duplicate device name status = %d, body = %s", duplicateName.Code, duplicateName.Body.String())
+	}
 	otherAdmin := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userB.User.ID+"/admin/devices", nil, session)
 	if otherAdmin.Code != http.StatusUnauthorized {
 		t.Fatalf("A admin session accessed B with status %d", otherAdmin.Code)
+	}
+	crossedRename := serveJSON(t, fixture.mux, http.MethodPatch, "/api/user/"+userB.User.ID+"/admin/devices/browser-a", map[string]any{
+		"device_name": "Crossed",
+	}, session)
+	if crossedRename.Code != http.StatusUnauthorized {
+		t.Fatalf("A admin session renamed B device with status %d", crossedRename.Code)
+	}
+
+	updatedBrand := serveJSON(t, fixture.mux, http.MethodPut, "/api/user/"+userA.User.ID+"/admin/brand", map[string]any{
+		"name": "User A Notes",
+	}, session)
+	if updatedBrand.Code != http.StatusOK || !bytes.Contains(updatedBrand.Body.Bytes(), []byte("User A Notes")) {
+		t.Fatalf("brand update status = %d, body = %s", updatedBrand.Code, updatedBrand.Body.String())
+	}
+	crossedBrand := serveJSON(t, fixture.mux, http.MethodPut, "/api/user/"+userB.User.ID+"/admin/brand", map[string]any{
+		"name": "Crossed",
+	}, session)
+	if crossedBrand.Code != http.StatusUnauthorized {
+		t.Fatalf("A admin session changed B brand with status %d", crossedBrand.Code)
+	}
+	spaceA, err := fixture.registry.Resolve(context.Background(), userA.User.ID)
+	if err != nil || spaceA.BrandStore.Get().Name != "User A Notes" {
+		t.Fatalf("stored brand = %#v, error = %v", spaceA.BrandStore.Get(), err)
+	}
+	spaceB, err := fixture.registry.Resolve(context.Background(), userB.User.ID)
+	if err != nil || spaceB.BrandStore.Get().Name != store.DefaultBrandName {
+		t.Fatalf("B brand = %#v, error = %v", spaceB.BrandStore.Get(), err)
+	}
+	if err := os.WriteFile(filepath.Join(spaceA.Paths.Workspace, "usage-probe.bin"), bytes.Repeat([]byte("x"), 4096), 0600); err != nil {
+		t.Fatal(err)
+	}
+	spaceInfo := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/space", nil, session)
+	if spaceInfo.Code != http.StatusOK {
+		t.Fatalf("space info status = %d, body = %s", spaceInfo.Code, spaceInfo.Body.String())
+	}
+	var usage struct {
+		Space struct {
+			UsedBytes     int64  `json:"used_bytes"`
+			CapacityBytes *int64 `json:"capacity_bytes"`
+		} `json:"space"`
+	}
+	if err := json.Unmarshal(spaceInfo.Body.Bytes(), &usage); err != nil {
+		t.Fatal(err)
+	}
+	if usage.Space.UsedBytes < 4096 || usage.Space.CapacityBytes != nil {
+		t.Fatalf("space usage = %#v", usage.Space)
+	}
+
+	security := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/security", nil, session)
+	if security.Code != http.StatusOK || !bytes.Contains(security.Body.Bytes(), []byte(`"totp_configured":false`)) {
+		t.Fatalf("security status = %d, body = %s", security.Code, security.Body.String())
+	}
+	beginTOTP := serveJSON(t, fixture.mux, http.MethodPost, "/api/user/"+userA.User.ID+"/admin/security/totp", map[string]any{
+		"password": "a sufficiently long password",
+	}, session)
+	if beginTOTP.Code != http.StatusOK {
+		t.Fatalf("begin TOTP status = %d, body = %s", beginTOTP.Code, beginTOTP.Body.String())
+	}
+	var setup struct {
+		TOTP struct {
+			Secret string `json:"secret"`
+		} `json:"totp_setup"`
+	}
+	if err := json.Unmarshal(beginTOTP.Body.Bytes(), &setup); err != nil {
+		t.Fatal(err)
+	}
+	confirmTOTP := serveJSON(t, fixture.mux, http.MethodPost, "/api/user/"+userA.User.ID+"/admin/security/totp/confirm", map[string]any{
+		"code": testTOTPCode(t, setup.TOTP.Secret, time.Now()),
+	}, session)
+	if confirmTOTP.Code != http.StatusOK {
+		t.Fatalf("confirm TOTP status = %d, body = %s", confirmTOTP.Code, confirmTOTP.Body.String())
+	}
+	var configuredSession *http.Cookie
+	for _, cookie := range confirmTOTP.Result().Cookies() {
+		if cookie.Name == userAdminCookieName(userA.User.ID) {
+			configuredSession = cookie
+		}
+	}
+	if configuredSession == nil {
+		t.Fatal("TOTP confirmation did not refresh the user session")
+	}
+	staleAfterTOTPSetup := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/security", nil, session)
+	if staleAfterTOTPSetup.Code != http.StatusUnauthorized {
+		t.Fatalf("pre-TOTP-setup session status = %d", staleAfterTOTPSetup.Code)
+	}
+	changedPassword := "a changed password value"
+	change := serveJSON(t, fixture.mux, http.MethodPut, "/api/user/"+userA.User.ID+"/admin/security/password", map[string]any{
+		"current_password": "a sufficiently long password",
+		"new_password":     changedPassword,
+	}, configuredSession)
+	if change.Code != http.StatusOK {
+		t.Fatalf("password change status = %d, body = %s", change.Code, change.Body.String())
+	}
+	var changedSession *http.Cookie
+	for _, cookie := range change.Result().Cookies() {
+		if cookie.Name == userAdminCookieName(userA.User.ID) {
+			changedSession = cookie
+		}
+	}
+	if changedSession == nil {
+		t.Fatal("password change did not refresh the user session")
+	}
+	staleAfterPasswordChange := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/security", nil, session)
+	if staleAfterPasswordChange.Code != http.StatusUnauthorized {
+		t.Fatalf("pre-password-change session status = %d", staleAfterPasswordChange.Code)
+	}
+	configuredSecurity := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/security", nil, changedSession)
+	if configuredSecurity.Code != http.StatusOK || !bytes.Contains(configuredSecurity.Body.Bytes(), []byte(`"totp_configured":true`)) {
+		t.Fatalf("configured security status = %d, body = %s", configuredSecurity.Code, configuredSecurity.Body.String())
+	}
+	removeTOTP := serveJSON(t, fixture.mux, http.MethodDelete, "/api/user/"+userA.User.ID+"/admin/security/totp", map[string]any{
+		"password": changedPassword,
+		"code":     testTOTPCode(t, setup.TOTP.Secret, time.Now()),
+	}, changedSession)
+	if removeTOTP.Code != http.StatusOK {
+		t.Fatalf("remove TOTP status = %d, body = %s", removeTOTP.Code, removeTOTP.Body.String())
+	}
+	var unconfiguredSession *http.Cookie
+	for _, cookie := range removeTOTP.Result().Cookies() {
+		if cookie.Name == userAdminCookieName(userA.User.ID) {
+			unconfiguredSession = cookie
+		}
+	}
+	if unconfiguredSession == nil {
+		t.Fatal("TOTP removal did not refresh the user session")
+	}
+	passwordOnlyAgain := serveJSON(t, fixture.mux, http.MethodPost, "/api/user/"+userA.User.ID+"/auth/verify", map[string]any{
+		"password": changedPassword,
+	})
+	if passwordOnlyAgain.Code != http.StatusOK || !bytes.Contains(passwordOnlyAgain.Body.Bytes(), []byte(`"authenticated":true`)) {
+		t.Fatalf("password-only login after TOTP removal = %d, body = %s", passwordOnlyAgain.Code, passwordOnlyAgain.Body.String())
 	}
 
 	if _, err := fixture.control.ResetUserCredentials(context.Background(), userA.User.ID, "a replacement password value"); err != nil {
 		t.Fatal(err)
 	}
-	staleAdmin := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/devices", nil, session)
+	staleAdmin := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/devices", nil, unconfiguredSession)
 	if staleAdmin.Code != http.StatusUnauthorized {
 		t.Fatalf("stale admin session status = %d", staleAdmin.Code)
+	}
+}
+
+func TestConfiguredTOTPRequiresAndAcceptsSecondLoginStep(t *testing.T) {
+	fixture := newMultiuserFixture(t)
+	user := fixture.createUser(t, "TOTP user")
+	enrollment, err := fixture.control.BeginUserTOTPEnrollment(
+		context.Background(), user.User.ID, "a sufficiently long password",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Minute)
+	if _, err := fixture.control.ConfirmUserTOTPEnrollment(
+		context.Background(), user.User.ID, testTOTPCode(t, enrollment.TOTPSecret, past), past,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	verify := serveJSON(t, fixture.mux, http.MethodPost, "/api/user/"+user.User.ID+"/auth/verify", map[string]any{
+		"password": "a sufficiently long password",
+	})
+	if verify.Code != http.StatusOK || !bytes.Contains(verify.Body.Bytes(), []byte(`"authenticated":false`)) {
+		t.Fatalf("TOTP verify response = %d, body = %s", verify.Code, verify.Body.String())
+	}
+	if len(verify.Result().Cookies()) != 0 {
+		t.Fatal("password step unexpectedly created an administrator session")
+	}
+	var challenge struct {
+		Token string `json:"challenge_token"`
+	}
+	if err := json.Unmarshal(verify.Body.Bytes(), &challenge); err != nil {
+		t.Fatal(err)
+	}
+	login := serveJSON(t, fixture.mux, http.MethodPost, "/api/user/"+user.User.ID+"/auth", map[string]any{
+		"challenge_token": challenge.Token,
+		"code":            testTOTPCode(t, enrollment.TOTPSecret, time.Now()),
+	})
+	if login.Code != http.StatusOK {
+		t.Fatalf("TOTP login response = %d, body = %s", login.Code, login.Body.String())
+	}
+	foundSession := false
+	for _, cookie := range login.Result().Cookies() {
+		foundSession = foundSession || cookie.Name == userAdminCookieName(user.User.ID)
+	}
+	if !foundSession {
+		t.Fatal("TOTP login did not create an administrator session")
 	}
 }
 

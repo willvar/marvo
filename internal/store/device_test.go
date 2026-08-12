@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,116 @@ func TestApprovedDeviceTokenIsPrivateAndRevocationPersists(t *testing.T) {
 	}
 	if NewDeviceStore(dataDir, secret).VerifyToken(approved.Token, signature) {
 		t.Fatal("revoked token returned after restart")
+	}
+}
+
+func TestDeviceNamesStayUniqueAndRenamingPreservesAuthorization(t *testing.T) {
+	dataDir := t.TempDir()
+	const secret = "device-name-test-session-secret"
+	devices := NewDeviceStore(dataDir, secret)
+
+	approve := func(localDeviceID, name string) *ApprovedDevice {
+		t.Helper()
+		request, err := devices.CreateRequest(localDeviceID, name, DeviceInfo{})
+		if err != nil {
+			t.Fatalf("CreateRequest(%q, %q) error = %v", localDeviceID, name, err)
+		}
+		approved, err := devices.ApproveRequest(request.ID)
+		if err != nil || approved == nil {
+			t.Fatalf("ApproveRequest(%q) = %#v, %v", localDeviceID, approved, err)
+		}
+		return approved
+	}
+
+	first := approve("browser-1", "Café")
+	second := approve("browser-2", "CAFÉ")
+	if second.DeviceName != "CAFÉ (2)" {
+		t.Fatalf("colliding approval name = %q, want %q", second.DeviceName, "CAFÉ (2)")
+	}
+
+	if _, err := devices.RenameDevice(second.LocalDeviceID, "Cafe\u0301"); !errors.Is(err, ErrDeviceNameConflict) {
+		t.Fatalf("RenameDevice() decomposed duplicate error = %v, want ErrDeviceNameConflict", err)
+	}
+	if _, err := devices.RenameDevice(second.LocalDeviceID, " "); !errors.Is(err, ErrInvalidDeviceName) {
+		t.Fatalf("RenameDevice() empty error = %v, want ErrInvalidDeviceName", err)
+	}
+	if _, err := devices.RenameDevice(second.LocalDeviceID, strings.Repeat("名", MaxDeviceNameRunes+1)); !errors.Is(err, ErrInvalidDeviceName) {
+		t.Fatalf("RenameDevice() long error = %v, want ErrInvalidDeviceName", err)
+	}
+
+	signature := devices.SignToken(second.Token)
+	renamed, err := devices.RenameDevice(second.LocalDeviceID, "  工作平板  ")
+	if err != nil || renamed == nil {
+		t.Fatalf("RenameDevice() = %#v, %v", renamed, err)
+	}
+	if renamed.DeviceName != "工作平板" || renamed.Token != "" {
+		t.Fatalf("renamed public device = %#v", renamed)
+	}
+	if !devices.VerifyToken(second.Token, signature) {
+		t.Fatal("renaming invalidated the approved device token")
+	}
+	if !devices.VerifyToken(first.Token, devices.SignToken(first.Token)) {
+		t.Fatal("renaming another device invalidated the first token")
+	}
+
+	reloaded := NewDeviceStore(dataDir, secret)
+	listed := reloaded.ListDevices()
+	if len(listed) != 2 {
+		t.Fatalf("reloaded device count = %d, want 2", len(listed))
+	}
+	for _, device := range listed {
+		if device.LocalDeviceID == second.LocalDeviceID && device.DeviceName != "工作平板" {
+			t.Fatalf("persisted device name = %q, want 工作平板", device.DeviceName)
+		}
+	}
+}
+
+func TestLoadingExistingDevicesNormalizesDuplicateNames(t *testing.T) {
+	dataDir := t.TempDir()
+	deviceFilePath := filepath.Join(dataDir, ".devices.json")
+	oldest := time.Date(2026, time.July, 30, 8, 0, 0, 0, time.UTC)
+	newest := oldest.Add(time.Hour)
+	contents := deviceFile{
+		Pending: map[string]*PendingRequest{},
+		Approved: map[string]*approvedDeviceRecord{
+			"browser-oldest": {
+				ID: "device-oldest", LocalDeviceID: "browser-oldest", DeviceName: " Café ",
+				Token: "token-oldest", ApprovedAt: oldest,
+			},
+			"browser-newest": {
+				ID: "device-newest", LocalDeviceID: "browser-newest", DeviceName: "CAFE\u0301",
+				Token: "token-newest", ApprovedAt: newest,
+			},
+		},
+	}
+	encoded, err := json.Marshal(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(deviceFilePath, encoded, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := NewDeviceStore(dataDir, "device-name-migration-secret")
+	listed := devices.ListDevices()
+	if len(listed) != 2 {
+		t.Fatalf("ListDevices() length = %d, want 2", len(listed))
+	}
+	names := make(map[string]string, len(listed))
+	for _, device := range listed {
+		names[device.LocalDeviceID] = device.DeviceName
+	}
+	if names["browser-oldest"] != "Café" || names["browser-newest"] != "CAFÉ (2)" {
+		t.Fatalf("normalized loaded names = %#v", names)
+	}
+
+	reloaded := NewDeviceStore(dataDir, "device-name-migration-secret")
+	reloadedNames := make(map[string]string)
+	for _, device := range reloaded.ListDevices() {
+		reloadedNames[device.LocalDeviceID] = device.DeviceName
+	}
+	if reloadedNames["browser-oldest"] != "Café" || reloadedNames["browser-newest"] != "CAFÉ (2)" {
+		t.Fatalf("persisted normalized names = %#v", reloadedNames)
 	}
 }
 

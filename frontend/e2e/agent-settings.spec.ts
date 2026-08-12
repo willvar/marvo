@@ -1,29 +1,126 @@
 import { expect, test } from '@playwright/test'
-import { approveDevice, workspacePath } from './helpers'
+import {
+  approveDevice,
+  authenticateUserAdministrator,
+  expectDialogTextRetainedDuringClose,
+  workspacePath,
+} from './helpers'
 
-test('1366×768 下 Agent 设置始终显示保存操作区', async ({ page }, testInfo) => {
+test('智能体设置在单页展示所有分区并始终显示统一保存', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await page.setViewportSize({ width: 1366, height: 768 })
-  await approveDevice(page, 'Playwright Agent settings viewport')
-  await page.goto(workspacePath('/agent'))
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await authenticateUserAdministrator(page)
+  await page.goto(workspacePath('/admin/agent'))
 
   const saveButton = page.getByRole('button', { name: '保存设置' })
+  await expect(page.locator('.agent-settings-page-heading').getByRole('button', { name: '保存设置' })).toBeVisible()
+  await expect(page.getByRole('tablist')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '当前设备的智能体布局' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '提供商', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '模型', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '全局提示词' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '个性化规则' })).toBeVisible()
+
+  const actionButtons = page.locator('.agent-settings-page-actions .agent-settings-action')
+  const [discardBounds, saveBounds] = await Promise.all([
+    actionButtons.nth(0).boundingBox(),
+    actionButtons.nth(1).boundingBox(),
+  ])
+  expect(discardBounds).not.toBeNull()
+  expect(saveBounds).not.toBeNull()
+  expect(Math.abs(discardBounds!.width - saveBounds!.width)).toBeLessThanOrEqual(1)
+  expect(Math.abs(discardBounds!.height - saveBounds!.height)).toBeLessThanOrEqual(1)
+
+  await page.getByRole('heading', { name: '个性化规则' }).scrollIntoViewIfNeeded()
   await expect(saveButton).toBeVisible()
-  const bounds = await saveButton.boundingBox()
-  expect(bounds).not.toBeNull()
-  expect(bounds!.y).toBeGreaterThanOrEqual(0)
-  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(768)
+  const buttonBounds = await saveButton.boundingBox()
+  expect(buttonBounds).not.toBeNull()
+  expect(buttonBounds!.y).toBeGreaterThanOrEqual(56)
+  expect(buttonBounds!.y + buttonBounds!.height).toBeLessThanOrEqual(768)
+})
+
+test('2560×1440 下设置页用满可用宽度并对齐双栏板块', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-landscape')
+  await page.setViewportSize({ width: 2560, height: 1440 })
+  await authenticateUserAdministrator(page)
+  await page.goto(workspacePath('/admin/agent'))
+
+  const settingsPage = page.locator('.agent-settings-page')
+  const styleLayout = page.locator('.agent-style-layout')
+  const runtimeLayout = page.locator('.agent-runtime-grid')
+  const advancedLayout = page.locator('.agent-advanced-grid')
+  await expect(settingsPage).toBeVisible()
+  const [pageBounds, styleColumns, runtimeColumns, advancedColumns] = await Promise.all([
+    settingsPage.boundingBox(),
+    styleLayout.evaluate((element) => getComputedStyle(element).gridTemplateColumns),
+    runtimeLayout.evaluate((element) => getComputedStyle(element).gridTemplateColumns),
+    advancedLayout.evaluate((element) => getComputedStyle(element).gridTemplateColumns),
+  ])
+  expect(pageBounds).not.toBeNull()
+  expect(pageBounds!.width).toBeGreaterThanOrEqual(2250)
+  expect(styleColumns.split(' ')).toHaveLength(2)
+  expect(runtimeColumns.split(' ')).toHaveLength(2)
+  expect(advancedColumns.split(' ')).toHaveLength(2)
+
+  const [providerBounds, modelBounds] = await Promise.all([
+    page.locator('.provider-list-section').boundingBox(),
+    page.locator('.agent-model-section').boundingBox(),
+  ])
+  expect(providerBounds).not.toBeNull()
+  expect(modelBounds).not.toBeNull()
+  expect(Math.abs(providerBounds!.height - modelBounds!.height)).toBeLessThanOrEqual(1)
+  const advancedCards = page.locator('.agent-advanced-grid > .agent-settings-section')
+  const [promptBounds, rulesBounds] = await Promise.all([
+    advancedCards.nth(0).boundingBox(),
+    advancedCards.nth(1).boundingBox(),
+  ])
+  expect(promptBounds).not.toBeNull()
+  expect(rulesBounds).not.toBeNull()
+  expect(Math.abs(promptBounds!.height - rulesBounds!.height)).toBeLessThanOrEqual(1)
+  await expect(page.locator('.agent-settings-prompt')).toHaveCSS('max-height', 'none')
+})
+
+test('一次保存同时提交本机布局与后端智能体设置', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-landscape')
+  await page.setViewportSize({ width: 1366, height: 768 })
+  await authenticateUserAdministrator(page)
+  await page.goto(workspacePath('/admin/agent'))
+
+  const prompt = page.locator('.agent-settings-prompt')
+  const saveButton = page.getByRole('button', { name: '保存设置' })
+  await expect(prompt).toBeVisible()
+  await expect(saveButton).toBeDisabled()
+  const originalPrompt = await prompt.inputValue()
+  const floating = page.getByRole('radio', { name: /^浮动按钮/ })
+  const sidebar = page.getByRole('radio', { name: /^内容右侧栏/ })
+  const floatingOption = page
+    .locator('.agent-display-mode-item')
+    .filter({ has: page.locator('input[value="floating"]') })
+  const sidebarOption = page.locator('.agent-display-mode-item').filter({ has: page.locator('input[value="sidebar"]') })
+  const originalMode = (await floating.isChecked()) ? 'floating' : 'sidebar'
+  await (originalMode === 'floating' ? sidebarOption : floatingOption).click()
+  await prompt.fill(`${originalPrompt}\nPlaywright 统一保存`.trim())
+
+  await expect(saveButton).toBeEnabled()
+  await saveButton.click()
+  await expect(saveButton).toBeDisabled()
+  await page.reload()
+  await expect(prompt).toHaveValue(`${originalPrompt}\nPlaywright 统一保存`.trim())
+  await expect(originalMode === 'floating' ? sidebar : floating).toBeChecked()
+
+  await (originalMode === 'floating' ? floatingOption : sidebarOption).click()
+  await prompt.fill(originalPrompt)
+  await saveButton.click()
+  await expect(saveButton).toBeDisabled()
 })
 
 test('智能体样式设置切换并记忆浮动按钮与内容右侧栏', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await page.setViewportSize({ width: 1366, height: 768 })
   await approveDevice(page, 'Playwright Agent display mode')
-  await page.goto(workspacePath('/agent'))
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await authenticateUserAdministrator(page)
+  await page.goto(workspacePath('/admin/agent'))
 
-  await expect(page.getByRole('tab', { name: '样式' })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
   await page
     .locator('.agent-display-mode-item')
@@ -31,16 +128,8 @@ test('智能体样式设置切换并记忆浮动按钮与内容右侧栏', async
     .click()
   await expect(page.getByRole('radio', { name: /^内容右侧栏/ })).toBeChecked()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
-  await page.getByRole('tab', { name: '模型' }).click()
-  await expect(page.getByRole('heading', { name: '有未保存的设置' })).toBeVisible()
-  await page.getByRole('button', { name: '继续编辑' }).click()
-  await expect(page.getByRole('tab', { name: '样式' })).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByRole('radio', { name: /^内容右侧栏/ })).toBeChecked()
-  await page.getByRole('tab', { name: '模型' }).click()
-  await page.getByRole('button', { name: '保存并切换' }).click()
-  await expect(page.getByRole('tab', { name: '模型' })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('button', { name: '保存设置' }).click()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
-  await page.getByRole('button', { name: '取消' }).click()
   await page.goto(workspacePath())
   await expect(page.locator('.agent-side-panel')).toBeVisible()
   await expect(page.locator('.agent-fab')).toHaveCount(0)
@@ -51,21 +140,22 @@ test('智能体样式设置切换并记忆浮动按钮与内容右侧栏', async
   await expect(page.locator('.agent-fab')).toBeVisible()
   await page.setViewportSize({ width: 1366, height: 768 })
   await expect(page.locator('.agent-side-panel')).toBeVisible()
+  const synchronizedWorkspace = await page.context().newPage()
+  await synchronizedWorkspace.setViewportSize({ width: 1366, height: 768 })
+  await synchronizedWorkspace.goto(workspacePath())
+  await expect(synchronizedWorkspace.locator('.agent-side-panel')).toBeVisible()
 
   await page.goto(workspacePath('/agent'))
   await expect(page.locator('.agent-side-panel')).toHaveCount(0)
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await expect(page.getByRole('button', { name: '设置', exact: true })).toHaveCount(0)
+  await page.goto(workspacePath('/admin/agent'))
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
   await page
     .locator('.agent-display-mode-item')
     .filter({ has: page.locator('input[value="floating"]') })
     .click()
   await expect(page.getByRole('radio', { name: /^浮动按钮/ })).toBeChecked()
-  await page.getByRole('tab', { name: '模型' }).click()
-  await expect(page.getByRole('heading', { name: '有未保存的设置' })).toBeVisible()
-  await page.getByRole('button', { name: '放弃并切换' }).click()
-  await expect(page.getByRole('tab', { name: '模型' })).toHaveAttribute('aria-selected', 'true')
-  await page.getByRole('tab', { name: '样式' }).click()
+  await page.getByRole('button', { name: '放弃修改' }).click()
   await expect(page.getByRole('radio', { name: /^内容右侧栏/ })).toBeChecked()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
   await page
@@ -73,6 +163,9 @@ test('智能体样式设置切换并记忆浮动按钮与内容右侧栏', async
     .filter({ has: page.locator('input[value="floating"]') })
     .click()
   await page.getByRole('button', { name: '保存设置' }).click()
+  await expect(synchronizedWorkspace.locator('.agent-fab')).toBeVisible()
+  await expect(synchronizedWorkspace.locator('.agent-side-panel')).toHaveCount(0)
+  await synchronizedWorkspace.close()
   await page.goto(workspacePath())
   await expect(page.locator('.agent-fab')).toBeVisible()
   await expect(page.locator('.agent-side-panel')).toHaveCount(0)
@@ -81,14 +174,12 @@ test('智能体样式设置切换并记忆浮动按钮与内容右侧栏', async
 test('智能体设置可连接 API Key 与 OAuth 提供商并即时刷新模型', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await page.setViewportSize({ width: 1366, height: 768 })
-  await approveDevice(page, 'Playwright Agent provider connections')
-  await page.goto(workspacePath('/agent'))
-  await page.getByRole('button', { name: '设置', exact: true }).click()
-  await page.getByRole('tab', { name: '提供商' }).click()
+  await authenticateUserAdministrator(page)
+  await page.goto(workspacePath('/admin/agent'))
 
   await expect(page.getByText('连接和断开操作立即生效，模型列表会自动刷新，无需另行保存。')).toBeVisible()
-  await expect(page.locator('.agent-settings-footer')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '保存设置', exact: true })).toHaveCount(0)
+  await expect(page.locator('.agent-settings-page-actions')).toBeVisible()
+  await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeDisabled()
 
   const providerInput = () => page.getByRole('combobox', { name: '选择提供商' })
   const selectProvider = async (name: string) => {
@@ -142,6 +233,19 @@ test('智能体设置可连接 API Key 与 OAuth 提供商并即时刷新模型'
   })
   await page.getByRole('button', { name: '断开 E2E API Key Provider', exact: true }).click()
   await expect(page.getByRole('heading', { name: '断开提供商' })).toBeVisible()
+  const disconnectDescription = page.getByText('将从 OpenCode 删除 E2E API Key Provider 的连接凭据。之后可重新连接。', {
+    exact: true,
+  })
+  await expect(disconnectDescription).toBeVisible()
+  await expectDialogTextRetainedDuringClose(
+    page,
+    page.getByRole('dialog', { name: '断开提供商' }),
+    'E2E API Key Provider',
+    () => page.getByRole('button', { name: '取消', exact: true }).click(),
+  )
+
+  await page.getByRole('button', { name: '断开 E2E API Key Provider', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '断开提供商' })).toBeVisible()
   await page.getByRole('button', { name: '确认断开', exact: true }).click()
   await expect(providerInput()).toBeVisible()
   expect(nativeDialogs).toBe(0)
@@ -161,7 +265,6 @@ test('智能体设置可连接 API Key 与 OAuth 提供商并即时刷新模型'
   await page.getByRole('button', { name: '完成连接', exact: true }).click()
   await expect(page.locator('.provider-connected-item').filter({ hasText: 'E2E Code OAuth Provider' })).toHaveCount(1)
 
-  await page.getByRole('tab', { name: '模型' }).click()
   const modelInput = page.getByRole('combobox', { name: '选择智能体模型' })
   await modelInput.click()
   await modelInput.fill('E2E Code OAuth Provider Model')
@@ -173,34 +276,34 @@ test('智能体设置可连接 API Key 与 OAuth 提供商并即时刷新模型'
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(768)
 })
 
-test('提供商选择器在竖屏中不越界且即时操作无需底部保存', async ({ page }, testInfo) => {
+test('提供商选择器在竖屏中横向不越界且即时操作无需底部保存', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === 'chromium-landscape')
-  await approveDevice(page, 'Playwright portrait provider settings')
-  await page.goto(workspacePath('/agent'))
-  await page.getByRole('button', { name: '设置', exact: true }).click()
-  await page.getByRole('tab', { name: '提供商' }).click()
+  await authenticateUserAdministrator(page)
+  await page.goto(workspacePath('/admin/agent'))
 
   const search = page.getByRole('combobox', { name: '选择提供商' })
-  const closeButton = page.getByRole('button', { name: '关闭智能体设置' })
+  const settingsPage = page.locator('.agent-settings-page')
   await expect(search).toBeVisible()
-  await expect(closeButton).toBeVisible()
-  await expect(page.locator('.agent-settings-footer')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '保存设置', exact: true })).toHaveCount(0)
+  await expect(settingsPage).toBeVisible()
+  await expect(page.locator('.agent-settings-page-actions')).toBeVisible()
+  await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeDisabled()
 
   await search.click()
   await search.fill('E2E API Key Provider')
   const option = page.locator('.provider-picker-item').filter({ hasText: 'E2E API Key Provider' })
   await expect(option).toBeVisible()
 
-  const [searchBounds, optionBounds, closeBounds] = await Promise.all([
+  const [searchBounds, optionBounds, pageBounds] = await Promise.all([
     search.boundingBox(),
     option.boundingBox(),
-    closeButton.boundingBox(),
+    settingsPage.boundingBox(),
   ])
-  for (const bounds of [searchBounds, optionBounds, closeBounds]) {
+  for (const bounds of [searchBounds, optionBounds, pageBounds]) {
     expect(bounds).not.toBeNull()
     expect(bounds!.x).toBeGreaterThanOrEqual(0)
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390)
+  }
+  for (const bounds of [searchBounds, optionBounds]) {
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(844)
   }
 })
@@ -255,4 +358,21 @@ test('1366×768 触摸缩放浮动 Agent 窗口不会溢出视口顶部', async 
   expect(panelBounds!.width).toBeGreaterThan(initialPanelBounds!.width)
   expect(panelBounds!.y).toBeGreaterThanOrEqual(15)
   expect(panelBounds!.y + panelBounds!.height).toBeLessThanOrEqual(681)
+})
+
+test('未固定的浮动智能体在点击笔记区域后关闭', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-landscape')
+  await page.setViewportSize({ width: 2560, height: 1440 })
+  await approveDevice(page, 'Playwright floating Agent outside interaction')
+  await page.evaluate(() => localStorage.removeItem('marvo.agentFloating.pinned'))
+  await page.reload()
+
+  const floatButton = page.locator('.agent-fab')
+  const panel = page.locator('.agent-float-desktop')
+  await floatButton.click()
+  await expect(panel).toBeVisible()
+
+  await page.locator('.dsh-content').click({ position: { x: 24, y: 24 } })
+  await expect(panel).toBeHidden()
+  await expect(floatButton).toHaveAttribute('aria-expanded', 'false')
 })

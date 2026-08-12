@@ -7,7 +7,7 @@
     "build": "vite build",
     "preview": "vite preview --port 5080",
     "typecheck": "vue-tsc --noEmit",
-    "lint": "oxlint src e2e playwright.config.ts vite.config.ts --deny-warnings",
+    "lint": "oxlint src e2e playwright.config.ts vite.config.ts --deny-warnings && node scripts/check-dialog-lifecycle.mjs",
     "deadcode": "knip --reporter compact",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -1,6 +1,13 @@
 import { expect, test } from '@playwright/test'
 import { toMarkdownAssetPath, toNoteAssetUrl } from '../src/sdk/utils/noteAssets'
-import { approveDevice, authenticateUserAdministrator, workspaceAPI, workspacePath, workspaceURL } from './helpers'
+import {
+  approveDevice,
+  authenticateUserAdministrator,
+  expectDialogTextRetainedDuringClose,
+  workspaceAPI,
+  workspacePath,
+  workspaceURL,
+} from './helpers'
 
 test('中文媒体路径不会被重复编码', () => {
   const expected = '/api/notes/%E6%96%B0%E4%B8%AD%E5%9B%BD/assets/%E6%97%B6%E9%97%B4%E7%BA%BF.svg'
@@ -185,7 +192,7 @@ test('笔记列表品牌栏与内容标题栏保持对齐', async ({ page }, tes
     composerBounds!.x + composerBounds!.width,
   )
   const [footerButtonBounds, senderBounds] = await Promise.all([
-    page.locator('.dsh-footer-button').boundingBox(),
+    page.getByRole('link', { name: '管理后台' }).boundingBox(),
     page.locator('.agent-chat-input .x-sender').boundingBox(),
   ])
   expect(footerButtonBounds!.y + footerButtonBounds!.height).toBe(senderBounds!.y + senderBounds!.height)
@@ -208,7 +215,7 @@ test('笔记列表品牌栏与内容标题栏保持对齐', async ({ page }, tes
     alignedHeaderActionBounds!.y + alignedHeaderActionBounds!.height / 2,
   )
   const sideSenderBounds = await page.locator('.agent-side-panel .x-sender').boundingBox()
-  const alignedFooterButtonBounds = await page.locator('.dsh-footer-button').boundingBox()
+  const alignedFooterButtonBounds = await page.getByRole('link', { name: '管理后台' }).boundingBox()
   expect(sideSenderBounds!.y + sideSenderBounds!.height).toBe(
     alignedFooterButtonBounds!.y + alignedFooterButtonBounds!.height,
   )
@@ -317,6 +324,10 @@ test('回收站破坏性操作统一使用组件确认弹框', async ({ page }, 
   const singleCard = page.locator('.trash-card').filter({ hasText: titles[1] })
   await singleCard.getByRole('button', { name: '永久删除' }).click()
   await expect(page.getByRole('heading', { name: '永久删除笔记' })).toBeVisible()
+  await expectDialogTextRetainedDuringClose(page, page.getByRole('dialog', { name: '永久删除笔记' }), titles[1], () =>
+    page.getByRole('button', { name: '取消', exact: true }).click(),
+  )
+  await singleCard.getByRole('button', { name: '永久删除' }).click()
   await page.getByRole('button', { name: '确认永久删除' }).click()
   await expect(singleCard).toHaveCount(0)
 
@@ -329,6 +340,7 @@ test('回收站破坏性操作统一使用组件确认弹框', async ({ page }, 
 
 test('撤回设备批准需要组件确认', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
+  await page.setViewportSize({ width: 1366, height: 768 })
   await approveDevice(page, 'Playwright device administration')
   const suffix = Date.now()
   const deviceName = `Playwright 撤回确认 ${suffix}`
@@ -347,9 +359,29 @@ test('撤回设备批准需要组件确认', async ({ page }, testInfo) => {
     nativeDialogs++
     await dialog.dismiss()
   })
+
+  await page.goto(workspacePath())
+  const adminEntry = page.getByRole('link', { name: '管理后台' })
+  await expect(adminEntry).toBeVisible()
+  await expect(adminEntry).toHaveAttribute('target', '_blank')
+  await expect(adminEntry).toHaveAttribute('rel', 'noopener noreferrer')
+  const loginPagePromise = page.context().waitForEvent('page')
+  await adminEntry.click()
+  const loginPage = await loginPagePromise
+  await expect.poll(() => new URL(loginPage.url()).pathname).toBe(workspacePath('/login'))
+  expect(new URL(loginPage.url()).searchParams.get('mode')).toBe('admin')
+  await expect(page).toHaveURL(workspaceURL())
+  await loginPage.close()
+
   await authenticateUserAdministrator(page)
+  await page.goto(workspacePath())
+  const adminPagePromise = page.context().waitForEvent('page')
+  await page.getByRole('link', { name: '管理后台' }).click()
+  const adminPage = await adminPagePromise
+  await expect(adminPage).toHaveURL(workspaceURL('/admin'))
+  await expect(page).toHaveURL(workspaceURL())
+  await adminPage.close()
   await page.goto(workspacePath('/admin'))
-  await expect(page).toHaveURL(workspaceURL('/admin'))
 
   const pendingRow = page.locator('tbody tr').filter({ hasText: deviceName })
   await expect(pendingRow).toBeVisible()
@@ -357,17 +389,58 @@ test('撤回设备批准需要组件确认', async ({ page }, testInfo) => {
   await expect(pendingRow).toHaveCount(0)
 
   await page.getByRole('button', { name: /已批准设备/ }).click()
-  const approvedRow = page.locator('tbody tr').filter({ hasText: deviceName })
+  const approvedRow = page.locator(`tbody tr[data-device-id="${localDeviceID}"]`)
   await expect(approvedRow).toBeVisible()
   await expect(approvedRow.locator('td').nth(1)).toHaveText(/^\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}$/)
 
+  const listedDevices = (await (await page.request.get(workspaceAPI('/api/admin/devices'))).json()).devices as Array<{
+    local_device_id: string
+    device_name: string
+  }>
+  const existingName = listedDevices.find((device) => device.local_device_id !== localDeviceID)?.device_name
+  expect(existingName).toBeTruthy()
+  const normalActionTops = await approvedRow
+    .locator('.btn-group .admin-btn')
+    .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().top))
+  expect(normalActionTops).toHaveLength(2)
+  expect(Math.max(...normalActionTops) - Math.min(...normalActionTops)).toBeLessThan(2)
+  await approvedRow.getByRole('button', { name: '编辑', exact: true }).click()
+  const nameInput = approvedRow.getByLabel('设备名称')
+  await expect(nameInput).toBeFocused()
+  const editingActionTops = await approvedRow
+    .locator('.btn-group .admin-btn')
+    .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().top))
+  expect(editingActionTops).toHaveLength(2)
+  expect(Math.max(...editingActionTops) - Math.min(...editingActionTops)).toBeLessThan(2)
+  await nameInput.fill(existingName!)
+  await approvedRow.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(approvedRow.getByRole('alert')).toHaveText('设备名称不能与其他已批准设备重复')
+
+  const renamedDevice = `工作平板 ${suffix}`
+  await nameInput.fill(`  ${renamedDevice}  `)
+  await nameInput.press('Enter')
+  await expect(approvedRow).toBeVisible()
+  await expect(approvedRow).toContainText(renamedDevice)
+  await expect(approvedRow.getByRole('button', { name: '编辑', exact: true })).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: /已批准设备/ }).click()
+  await expect(approvedRow).toBeVisible()
+  await expect(approvedRow).toContainText(renamedDevice)
+
+  await approvedRow.locator('td').first().locator('a').click()
+  const detailDialog = page.getByRole('dialog', { name: '设备信息' })
+  await expect(detailDialog).toContainText('Playwright')
+  await expectDialogTextRetainedDuringClose(page, detailDialog, 'Playwright', () =>
+    detailDialog.locator('.dialog-close').click(),
+  )
+
   await approvedRow.getByRole('button', { name: '撤回', exact: true }).click()
   await expect(page.getByRole('heading', { name: '撤回设备批准' })).toBeVisible()
-  await expect(page.getByText(`确定撤回「${deviceName}」的访问权限吗？`, { exact: false })).toBeVisible()
+  await expect(page.getByText(`确定撤回「${renamedDevice}」的访问权限吗？`, { exact: false })).toBeVisible()
   const revokeDialog = page.locator('.dialog-panel').filter({ hasText: '撤回设备批准' })
-  await page.getByRole('button', { name: '取消', exact: true }).click()
-  await expect(revokeDialog).not.toContainText('未命名设备')
-  await expect(page.getByRole('heading', { name: '撤回设备批准' })).toBeHidden()
+  await expectDialogTextRetainedDuringClose(page, revokeDialog, renamedDevice, () =>
+    page.getByRole('button', { name: '取消', exact: true }).click(),
+  )
   await expect(approvedRow).toBeVisible()
 
   await approvedRow.getByRole('button', { name: '撤回', exact: true }).click()

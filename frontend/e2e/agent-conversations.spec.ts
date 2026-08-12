@@ -2,11 +2,35 @@ import { expect, test } from '@playwright/test'
 import {
   approveDevice,
   createLongAgentSession,
+  expectDialogTextRetainedDuringClose,
   workspaceAPI,
   workspaceAPIRegex,
   workspacePath,
   workspaceURL,
 } from './helpers'
+
+test('删除会话弹框关闭时保留目标会话名称', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-landscape')
+  await approveDevice(page, 'Playwright Agent delete dialog')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
+  expect(created.ok()).toBeTruthy()
+  const session = (await created.json()) as { id: string }
+  const title = `E2E 待删除会话 ${Date.now()}`
+  const renamed = await page.request.patch(workspaceAPI(`/api/agent/session/${session.id}`), { data: { title } })
+  expect(renamed.ok()).toBeTruthy()
+  await page.goto(workspacePath('/agent'))
+
+  const conversation = page.locator(`.x-conversations-item[data-key="${session.id}"]`)
+  await expect(conversation).toHaveAttribute('title', title)
+  await conversation.getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '删除' }).click()
+  const deleteDialog = page.getByRole('dialog', { name: '删除会话' })
+  await expect(deleteDialog).toContainText(title)
+  await expectDialogTextRetainedDuringClose(page, deleteDialog, title, () =>
+    deleteDialog.getByRole('button', { name: '取消', exact: true }).click(),
+  )
+  await expect(conversation).toBeVisible()
+})
 
 test('进入和切换长 Agent 会话后定位到消息底部', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')

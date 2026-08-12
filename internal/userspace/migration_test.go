@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-const migrationTestUserID = "b8c42977-bc4e-4977-9e04-ef3926b53c6c"
+const migrationTestUserID = "b8c42977bc4e49779e04"
 
 func TestLegacyMigrationCopiesUserDataWithoutLegacySystemFiles(t *testing.T) {
 	stateRoot := filepath.Join(t.TempDir(), "state")
