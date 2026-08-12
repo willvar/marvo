@@ -24,6 +24,7 @@ type Dependencies struct {
 	Media        *media.Manager
 	AgentDeps    *AgentDeps
 	DeviceStore  *store.DeviceStore
+	BrandStore   *store.BrandStore
 	Legacy       userspace.LegacySources
 	migrationMu  sync.Mutex
 	securityMu   sync.Mutex
@@ -91,6 +92,7 @@ func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.Handle("GET /api/user/{userID}/notes/{title}", content((*Dependencies).GetNote))
 	mux.Handle("GET /api/user/{userID}/notes/{title}/assets/{filename}", content((*Dependencies).GetAttachment))
 	mux.Handle("GET /api/user/{userID}/theme", content((*Dependencies).GetTheme))
+	mux.Handle("GET /api/user/{userID}/brand", content((*Dependencies).GetBrand))
 	mux.Handle("GET /api/user/{userID}/search", content((*Dependencies).SearchNotes))
 	mux.Handle("POST /api/user/{userID}/notes", content((*Dependencies).CreateNote))
 	mux.Handle("PUT /api/user/{userID}/notes/{title}/content", content((*Dependencies).UpdateNoteContent))
@@ -109,17 +111,17 @@ func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.Handle("GET /api/user/{userID}/events", content((*Dependencies).HandleSSE))
 	mux.Handle("POST /api/user/{userID}/send", content((*Dependencies).HandleSend))
 
-	mux.Handle("GET /api/user/{userID}/agent/settings", content((*Dependencies).AgentGetSettings))
-	mux.Handle("PUT /api/user/{userID}/agent/settings", content((*Dependencies).AgentUpdateSettings))
-	mux.Handle("GET /api/user/{userID}/agent/personalization", content((*Dependencies).AgentGetPersonalization))
-	mux.Handle("PUT /api/user/{userID}/agent/personalization", content((*Dependencies).AgentUpdatePersonalization))
-	mux.Handle("GET /api/user/{userID}/agent/providers", content((*Dependencies).AgentListProviders))
-	mux.Handle("POST /api/user/{userID}/agent/providers/{providerID}/connect/key", content((*Dependencies).AgentConnectProviderKey))
-	mux.Handle("POST /api/user/{userID}/agent/providers/{providerID}/connect/oauth", content((*Dependencies).AgentStartProviderOAuth))
-	mux.Handle("DELETE /api/user/{userID}/agent/providers/{providerID}", content((*Dependencies).AgentDisconnectProvider))
-	mux.Handle("GET /api/user/{userID}/agent/provider-attempts/{attemptID}", content((*Dependencies).AgentGetProviderOAuthAttempt))
-	mux.Handle("POST /api/user/{userID}/agent/provider-attempts/{attemptID}/complete", content((*Dependencies).AgentCompleteProviderOAuth))
-	mux.Handle("DELETE /api/user/{userID}/agent/provider-attempts/{attemptID}", content((*Dependencies).AgentCancelProviderOAuth))
+	mux.Handle("GET /api/user/{userID}/agent/settings", management((*Dependencies).AgentGetSettings))
+	mux.Handle("PUT /api/user/{userID}/agent/settings", management((*Dependencies).AgentUpdateSettings))
+	mux.Handle("GET /api/user/{userID}/agent/personalization", management((*Dependencies).AgentGetPersonalization))
+	mux.Handle("PUT /api/user/{userID}/agent/personalization", management((*Dependencies).AgentUpdatePersonalization))
+	mux.Handle("GET /api/user/{userID}/agent/providers", management((*Dependencies).AgentListProviders))
+	mux.Handle("POST /api/user/{userID}/agent/providers/{providerID}/connect/key", management((*Dependencies).AgentConnectProviderKey))
+	mux.Handle("POST /api/user/{userID}/agent/providers/{providerID}/connect/oauth", management((*Dependencies).AgentStartProviderOAuth))
+	mux.Handle("DELETE /api/user/{userID}/agent/providers/{providerID}", management((*Dependencies).AgentDisconnectProvider))
+	mux.Handle("GET /api/user/{userID}/agent/provider-attempts/{attemptID}", management((*Dependencies).AgentGetProviderOAuthAttempt))
+	mux.Handle("POST /api/user/{userID}/agent/provider-attempts/{attemptID}/complete", management((*Dependencies).AgentCompleteProviderOAuth))
+	mux.Handle("DELETE /api/user/{userID}/agent/provider-attempts/{attemptID}", management((*Dependencies).AgentCancelProviderOAuth))
 	mux.Handle("GET /api/user/{userID}/agent/global/event", content((*Dependencies).AgentProxyGlobalSSE))
 	mux.Handle("GET /api/user/{userID}/agent/{path...}", content((*Dependencies).AgentProxyJSON))
 	mux.Handle("POST /api/user/{userID}/agent/{path...}", content((*Dependencies).AgentProxyJSON))
@@ -129,8 +131,17 @@ func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
 
 	mux.Handle("GET /api/user/{userID}/admin/requests", management((*Dependencies).ListRequests))
 	mux.Handle("GET /api/user/{userID}/admin/me", management((*Dependencies).GetUserAdminIdentity))
+	mux.Handle("GET /api/user/{userID}/admin/space", management((*Dependencies).GetSpaceInfo))
+	mux.Handle("GET /api/user/{userID}/admin/brand", management((*Dependencies).GetBrand))
+	mux.Handle("PUT /api/user/{userID}/admin/brand", management((*Dependencies).UpdateBrand))
+	mux.Handle("GET /api/user/{userID}/admin/security", management((*Dependencies).GetUserSecurity))
+	mux.Handle("PUT /api/user/{userID}/admin/security/password", management((*Dependencies).ChangeUserPassword))
+	mux.Handle("POST /api/user/{userID}/admin/security/totp", management((*Dependencies).BeginUserTOTPEnrollment))
+	mux.Handle("POST /api/user/{userID}/admin/security/totp/confirm", management((*Dependencies).ConfirmUserTOTPEnrollment))
+	mux.Handle("DELETE /api/user/{userID}/admin/security/totp", management((*Dependencies).DisableUserTOTP))
 	mux.Handle("POST /api/user/{userID}/admin/requests/{id}/approve", management((*Dependencies).ApproveRequest))
 	mux.Handle("POST /api/user/{userID}/admin/requests/{id}/reject", management((*Dependencies).RejectRequest))
 	mux.Handle("GET /api/user/{userID}/admin/devices", management((*Dependencies).ListDevices))
+	mux.Handle("PATCH /api/user/{userID}/admin/devices/{id}", management((*Dependencies).RenameDevice))
 	mux.Handle("DELETE /api/user/{userID}/admin/devices/{id}", management((*Dependencies).RevokeDevice))
 }

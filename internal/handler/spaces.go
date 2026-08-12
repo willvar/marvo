@@ -30,6 +30,7 @@ type UserSpace struct {
 	Media       *media.Manager
 	AgentDeps   *AgentDeps
 	DeviceStore *store.DeviceStore
+	BrandStore  *store.BrandStore
 	watcher     *store.NoteWatcher
 	closeOnce   sync.Once
 }
@@ -135,6 +136,12 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 	cleanup := func() {
 		space.Close()
 	}
+	brandStore, err := store.NewBrandStore(paths.App)
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("%w: load brand settings: %v", ErrUserSpaceUnavailable, err)
+	}
+	space.BrandStore = brandStore
 
 	settings, err := store.NewAgentSettingsStore(paths.App)
 	if err != nil {
@@ -318,6 +325,7 @@ func (d *Dependencies) Scoped(handler scopedHandler) http.Handler {
 			Media:        space.Media,
 			AgentDeps:    space.AgentDeps,
 			DeviceStore:  space.DeviceStore,
+			BrandStore:   space.BrandStore,
 			securityRoot: d,
 		}
 		handler(scoped, w, r)
@@ -347,15 +355,5 @@ func validateUserDeviceCookie(r *http.Request, space *UserSpace) bool {
 }
 
 func userDeviceCookieName(userID string) string {
-	return "marvo_user_device_" + removeUserIDHyphens(userID)
-}
-
-func removeUserIDHyphens(userID string) string {
-	result := make([]byte, 0, len(userID))
-	for index := range len(userID) {
-		if userID[index] != '-' {
-			result = append(result, userID[index])
-		}
-	}
-	return string(result)
+	return "marvo_user_device_" + userID
 }

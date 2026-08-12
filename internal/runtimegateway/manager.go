@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"marvo/internal/userid"
 )
 
 const (
@@ -331,7 +333,7 @@ func (m *RuntimeManager) userLock(userID string) *sync.Mutex {
 }
 
 func runtimeContainerName(userID string) string {
-	return "marvo-agent-" + strings.ReplaceAll(userID, "-", "")
+	return "marvo-agent-" + userID
 }
 
 func runtimePassword(secret, userID string) string {
@@ -341,16 +343,5 @@ func runtimePassword(secret, userID string) string {
 }
 
 func validUserID(id string) bool {
-	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' || id[14] != '4' {
-		return false
-	}
-	for index, character := range id {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			continue
-		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
-			return false
-		}
-	}
-	return id[19] == '8' || id[19] == '9' || id[19] == 'a' || id[19] == 'b'
+	return userid.Valid(id)
 }

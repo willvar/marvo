@@ -7,12 +7,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 type DeviceInfo struct {
@@ -81,7 +85,13 @@ type deviceFile struct {
 	Approved map[string]*approvedDeviceRecord `json:"approved"`
 }
 
-var ErrTooManyPendingDevices = errors.New("too many pending device applications")
+const MaxDeviceNameRunes = 50
+
+var (
+	ErrTooManyPendingDevices = errors.New("too many pending device applications")
+	ErrInvalidDeviceName     = errors.New("invalid device name")
+	ErrDeviceNameConflict    = errors.New("device name already exists")
+)
 
 func NewDeviceStore(dataDir string, sessionSecret string) *DeviceStore {
 	ds := &DeviceStore{
@@ -91,7 +101,97 @@ func NewDeviceStore(dataDir string, sessionSecret string) *DeviceStore {
 		secret:   sessionSecret,
 	}
 	ds.load()
+	ds.normalizeLoadedDeviceNames()
 	return ds
+}
+
+func normalizeDeviceName(name string) string {
+	return norm.NFC.String(strings.TrimSpace(name))
+}
+
+func validDeviceName(name string) bool {
+	length := len([]rune(name))
+	return length > 0 && length <= MaxDeviceNameRunes
+}
+
+func truncateDeviceName(name string, maximum int) string {
+	characters := []rune(name)
+	if len(characters) <= maximum {
+		return name
+	}
+	if maximum <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(characters[:maximum]))
+}
+
+func nextUniqueDeviceName(name string, used func(string) bool) string {
+	base := normalizeDeviceName(name)
+	if base == "" {
+		base = "未命名设备"
+	}
+	base = truncateDeviceName(base, MaxDeviceNameRunes)
+	if !used(base) {
+		return base
+	}
+	for index := 2; ; index++ {
+		suffix := fmt.Sprintf(" (%d)", index)
+		prefix := truncateDeviceName(base, MaxDeviceNameRunes-len([]rune(suffix)))
+		candidate := prefix + suffix
+		if !used(candidate) {
+			return candidate
+		}
+	}
+}
+
+func (ds *DeviceStore) normalizeLoadedDeviceNames() {
+	devices := make([]*ApprovedDevice, 0, len(ds.approved))
+	for _, device := range ds.approved {
+		if device != nil {
+			devices = append(devices, device)
+		}
+	}
+	sort.Slice(devices, func(i, j int) bool {
+		if devices[i].ApprovedAt.Equal(devices[j].ApprovedAt) {
+			return devices[i].ID < devices[j].ID
+		}
+		return devices[i].ApprovedAt.Before(devices[j].ApprovedAt)
+	})
+
+	claimed := make([]string, 0, len(devices))
+	changed := false
+	for _, device := range devices {
+		name := nextUniqueDeviceName(device.DeviceName, func(candidate string) bool {
+			for _, existing := range claimed {
+				if strings.EqualFold(existing, candidate) {
+					return true
+				}
+			}
+			return false
+		})
+		claimed = append(claimed, name)
+		if device.DeviceName != name {
+			device.DeviceName = name
+			changed = true
+		}
+	}
+	if changed {
+		if err := ds.saveLocked(); err != nil {
+			slog.Warn("failed to persist normalized device names", "error", err)
+		}
+	}
+}
+
+func (ds *DeviceStore) deviceNameUsedLocked(name string, exceptLocalDeviceID string) bool {
+	for localDeviceID, device := range ds.approved {
+		if localDeviceID == exceptLocalDeviceID || device == nil {
+			continue
+		}
+		if strings.EqualFold(normalizeDeviceName(device.DeviceName), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ds *DeviceStore) load() {
@@ -160,6 +260,11 @@ func (ds *DeviceStore) devicesFile() string {
 }
 
 func (ds *DeviceStore) CreateRequest(localDeviceID string, deviceName string, info DeviceInfo) (*PendingRequest, error) {
+	deviceName = normalizeDeviceName(deviceName)
+	if !validDeviceName(deviceName) {
+		return nil, ErrInvalidDeviceName
+	}
+
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
@@ -238,10 +343,12 @@ func (ds *DeviceStore) ApproveRequest(id string) (*ApprovedDevice, error) {
 	dev := &ApprovedDevice{
 		ID:            req.ID,
 		LocalDeviceID: req.LocalDeviceID,
-		DeviceName:    req.DeviceName,
-		DeviceInfo:    req.DeviceInfo,
-		Token:         token,
-		ApprovedAt:    time.Now(),
+		DeviceName: nextUniqueDeviceName(req.DeviceName, func(candidate string) bool {
+			return ds.deviceNameUsedLocked(candidate, "")
+		}),
+		DeviceInfo: req.DeviceInfo,
+		Token:      token,
+		ApprovedAt: time.Now(),
 	}
 	delete(ds.pending, id)
 	ds.approved[req.LocalDeviceID] = dev
@@ -286,6 +393,39 @@ func (ds *DeviceStore) ListDevices() []*ApprovedDevice {
 		return result[i].ApprovedAt.After(result[j].ApprovedAt)
 	})
 	return result
+}
+
+func (ds *DeviceStore) RenameDevice(localDeviceID string, deviceName string) (*ApprovedDevice, error) {
+	deviceName = normalizeDeviceName(deviceName)
+	if !validDeviceName(deviceName) {
+		return nil, ErrInvalidDeviceName
+	}
+
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	device, ok := ds.approved[localDeviceID]
+	if !ok || device == nil {
+		return nil, nil
+	}
+	if device.DeviceName == deviceName {
+		result := *device
+		result.Token = ""
+		return &result, nil
+	}
+	if ds.deviceNameUsedLocked(deviceName, localDeviceID) {
+		return nil, ErrDeviceNameConflict
+	}
+
+	previousName := device.DeviceName
+	device.DeviceName = deviceName
+	if err := ds.saveLocked(); err != nil {
+		device.DeviceName = previousName
+		return nil, err
+	}
+	result := *device
+	result.Token = ""
+	return &result, nil
 }
 
 func (ds *DeviceStore) RevokeDevice(localDeviceID string) (bool, error) {

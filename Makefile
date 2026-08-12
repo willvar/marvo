@@ -1,4 +1,4 @@
-.PHONY: build build-frontend build-agent build-runtime start-runtime stop-runtime wait-runtime dev preview test test-runtime test-webkit lint lint-go lint-frontend deadcode audit clean
+.PHONY: build build-frontend build-agent build-runtime rebuild-images start-runtime stop-runtime wait-runtime dev preview test test-runtime test-webkit lint lint-go lint-frontend deadcode audit clean
 
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.1.0")
 
@@ -9,10 +9,13 @@ build-frontend:
 	npm --prefix frontend run build
 
 build-agent:
-	DOCKER_BUILDKIT=1 docker build -t marvo-opencode:local docker/opencode
+	MARVO_FORCE_REBUILD=1 bash docker/runtime/images.sh agent
 
 build-runtime:
-	DOCKER_BUILDKIT=1 docker build -f docker/runtime/Dockerfile -t marvo-runtime:local .
+	MARVO_FORCE_REBUILD=1 bash docker/runtime/images.sh runtime
+
+rebuild-images:
+	MARVO_FORCE_REBUILD=1 bash docker/runtime/images.sh all
 
 start-runtime:
 	./docker/runtime/start.sh

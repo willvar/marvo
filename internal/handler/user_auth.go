@@ -47,6 +47,20 @@ func (d *Dependencies) VerifyUser(w http.ResponseWriter, r *http.Request) {
 	}
 	d.resetAttempts(rateKind, r)
 
+	if !login.User.TOTPConfigured {
+		nonce, err := generateChallenge()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to create session"})
+			return
+		}
+		setUserAdminCookie(w, r, &login.User, nonce, d.Config.Server.SessionSecret)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"authenticated": true,
+			"user":          login.User,
+		})
+		return
+	}
+
 	challenge, err := generateChallenge()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to create challenge"})
@@ -56,14 +70,9 @@ func (d *Dependencies) VerifyUser(w http.ResponseWriter, r *http.Request) {
 	d.rememberChallenge(challenge, expiry)
 	token := signUserChallenge(userID, login.User.AuthVersion, challenge, expiry, d.Config.Server.SessionSecret)
 	response := map[string]any{
+		"authenticated":   false,
 		"challenge_token": token,
 		"user":            login.User,
-	}
-	if login.TOTPSecret != "" {
-		response["totp_setup"] = map[string]string{
-			"secret": login.TOTPSecret,
-			"uri":    login.TOTPURI,
-		}
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -105,6 +114,10 @@ func (d *Dependencies) LoginUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if current.Status == control.UserStatusDisabled {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "user disabled"})
+		return
+	}
+	if !current.TOTPConfigured {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "TOTP is not configured"})
 		return
 	}
 	if current.AuthVersion != authVersion {
@@ -251,5 +264,5 @@ func setUserAdminCookie(w http.ResponseWriter, r *http.Request, user *control.Us
 }
 
 func userAdminCookieName(userID string) string {
-	return "marvo_user_session_" + strings.ReplaceAll(userID, "-", "")
+	return "marvo_user_session_" + userID
 }

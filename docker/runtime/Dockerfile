@@ -1,11 +1,11 @@
 FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
+COPY docker/runtime/go.mod ./go.mod
 COPY cmd/marvo-runtime ./cmd/marvo-runtime
 COPY internal/runtimeauth ./internal/runtimeauth
 COPY internal/runtimegateway ./internal/runtimegateway
+COPY internal/userid ./internal/userid
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/marvo-runtime ./cmd/marvo-runtime
 
 FROM debian:bookworm-slim

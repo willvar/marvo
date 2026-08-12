@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // DB owns the small control-plane database. User content and Agent state never
 // live here; the database only stores identities and authentication metadata.
@@ -84,13 +84,13 @@ func (d *DB) initialize(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 	var metaExists int
+	var existingVersion int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'control_meta'
 	`).Scan(&metaExists); err != nil {
 		return fmt.Errorf("inspect control schema: %w", err)
 	}
 	if metaExists == 1 {
-		var existingVersion int
 		err = tx.QueryRowContext(ctx, "SELECT CAST(value AS INTEGER) FROM control_meta WHERE key = 'schema_version'").Scan(&existingVersion)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("read control schema version: %w", err)
@@ -111,7 +111,7 @@ func (d *DB) initialize(ctx context.Context) error {
 			totp_secret TEXT NOT NULL,
 			totp_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (totp_confirmed IN (0, 1)),
 			last_totp_step INTEGER NOT NULL DEFAULT -1,
-			status TEXT NOT NULL DEFAULT 'setup' CHECK (status IN ('setup', 'active', 'disabled')),
+			status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('setup', 'active', 'disabled')),
 			auth_version INTEGER NOT NULL DEFAULT 1,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
@@ -120,9 +120,22 @@ func (d *DB) initialize(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("create control schema: %w", err)
 	}
+	// Before schema 2, an unconfigured authenticator left the user in a setup
+	// state and blocked password-only access. OTP enrollment is now optional and
+	// managed from the user's security page, so legacy setup users become active
+	// and any unconfirmed enrollment secret is discarded.
+	if existingVersion < 2 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE users
+			SET status = 'active', totp_secret = '', last_totp_step = -1
+			WHERE status = 'setup' AND totp_confirmed = 0
+		`); err != nil {
+			return fmt.Errorf("migrate optional TOTP enrollment: %w", err)
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO control_meta(key, value) VALUES('schema_version', ?)
-		ON CONFLICT(key) DO NOTHING
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
 	`, schemaVersion); err != nil {
 		return fmt.Errorf("record control schema version: %w", err)
 	}

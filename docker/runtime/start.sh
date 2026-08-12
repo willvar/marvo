@@ -23,55 +23,65 @@ fi
 case "$PORT" in ''|*[!0-9]*) echo "MARVO_RUNTIME_PORT must be a port number" >&2; exit 1 ;; esac
 case "$RUNTIME_UID:$RUNTIME_GID" in *[!0-9:]*) echo "Runtime UID and GID must be numeric" >&2; exit 1 ;; esac
 
-if [ "$AGENT_IMAGE" = "marvo-opencode:local" ]; then
-  DOCKER_BUILDKIT=1 docker build -t "$AGENT_IMAGE" "$BASE_DIR/docker/opencode"
-elif ! docker image inspect "$AGENT_IMAGE" >/dev/null 2>&1; then
-    echo "Agent image not found: $AGENT_IMAGE" >&2
-    exit 1
-fi
-if [ "$GATEWAY_IMAGE" = "marvo-runtime:local" ]; then
-  DOCKER_BUILDKIT=1 docker build -f "$BASE_DIR/docker/runtime/Dockerfile" -t "$GATEWAY_IMAGE" "$BASE_DIR"
-elif ! docker image inspect "$GATEWAY_IMAGE" >/dev/null 2>&1; then
-    echo "Runtime gateway image not found: $GATEWAY_IMAGE" >&2
-    exit 1
-fi
+bash "$BASE_DIR/docker/runtime/images.sh" all
 AGENT_GENERATION="$(docker image inspect --format '{{.Id}}' "$AGENT_IMAGE")"
+GATEWAY_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$GATEWAY_IMAGE")"
 
 if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
   docker network create --driver bridge --label com.marvo.role=runtime-network "$NETWORK" >/dev/null
 fi
 
+SOCKET_GID="$(stat -c '%g' "$DOCKER_SOCKET")"
+START_SCRIPT_DIGEST="$(sha256sum "$BASE_DIR/docker/runtime/start.sh" | cut -d ' ' -f 1)"
+RUNTIME_CONFIG_DIGEST="$(printf '%s\0' \
+  'marvo-runtime-container-v1' "$GATEWAY_IMAGE_ID" "$AGENT_IMAGE" "$AGENT_GENERATION" \
+  "$STATE_DIR" "$DOCKER_SOCKET" "$SOCKET_GID" "$NETWORK" "$PORT" "$RUNTIME_UID" "$RUNTIME_GID" \
+  "$START_SCRIPT_DIGEST" | sha256sum | cut -d ' ' -f 1)"
+
+REUSE_RUNTIME=0
 if docker container inspect "$NAME" >/dev/null 2>&1; then
   role="$(docker container inspect --format '{{ index .Config.Labels "com.marvo.role" }}' "$NAME")"
   if [ "$role" != "runtime-gateway" ]; then
     echo "Container name $NAME is occupied by an unmanaged container" >&2
     exit 1
   fi
-  docker rm -f "$NAME" >/dev/null
+  existing_config="$(docker container inspect --format '{{ index .Config.Labels "com.marvo.runtime-config" }}' "$NAME")"
+  existing_image="$(docker container inspect --format '{{.Image}}' "$NAME")"
+  if [ "$existing_config" = "$RUNTIME_CONFIG_DIGEST" ] && [ "$existing_image" = "$GATEWAY_IMAGE_ID" ]; then
+    if [ "$(docker container inspect --format '{{.State.Running}}' "$NAME")" != true ]; then
+      docker start "$NAME" >/dev/null
+    fi
+    REUSE_RUNTIME=1
+    echo "Runtime gateway unchanged: reusing $NAME"
+  else
+    docker rm -f "$NAME" >/dev/null
+  fi
 fi
 
-SOCKET_GID="$(stat -c '%g' "$DOCKER_SOCKET")"
-docker run -d \
-  --name "$NAME" \
-  --label com.marvo.role=runtime-gateway \
-  --label "com.marvo.runtime-network=$NETWORK" \
-  --restart=unless-stopped \
-  --network "$NETWORK" \
-  -p "127.0.0.1:$PORT:4097" \
-  --user "$RUNTIME_UID:$RUNTIME_GID" \
-  --group-add "$SOCKET_GID" \
-  --mount "type=bind,src=$DOCKER_SOCKET,dst=/var/run/docker.sock" \
-  --mount "type=bind,src=$STATE_DIR,dst=/state" \
-  -e MARVO_RUNTIME_LISTEN=0.0.0.0:4097 \
-  -e MARVO_RUNTIME_TOKEN_FILE=/state/control/.runtime-token \
-  -e MARVO_RUNTIME_STATE_DIR=/state \
-  -e "MARVO_RUNTIME_HOST_STATE_DIR=$STATE_DIR" \
-  -e "MARVO_RUNTIME_UID=$RUNTIME_UID" \
-  -e "MARVO_RUNTIME_GID=$RUNTIME_GID" \
-  -e "MARVO_RUNTIME_NETWORK=$NETWORK" \
-  -e "MARVO_AGENT_IMAGE=$AGENT_IMAGE" \
-  -e "MARVO_AGENT_GENERATION=$AGENT_GENERATION" \
-  "$GATEWAY_IMAGE" >/dev/null
+if [ "$REUSE_RUNTIME" = 0 ]; then
+  docker run -d \
+    --name "$NAME" \
+    --label com.marvo.role=runtime-gateway \
+    --label "com.marvo.runtime-network=$NETWORK" \
+    --label "com.marvo.runtime-config=$RUNTIME_CONFIG_DIGEST" \
+    --restart=unless-stopped \
+    --network "$NETWORK" \
+    -p "127.0.0.1:$PORT:4097" \
+    --user "$RUNTIME_UID:$RUNTIME_GID" \
+    --group-add "$SOCKET_GID" \
+    --mount "type=bind,src=$DOCKER_SOCKET,dst=/var/run/docker.sock" \
+    --mount "type=bind,src=$STATE_DIR,dst=/state" \
+    -e MARVO_RUNTIME_LISTEN=0.0.0.0:4097 \
+    -e MARVO_RUNTIME_TOKEN_FILE=/state/control/.runtime-token \
+    -e MARVO_RUNTIME_STATE_DIR=/state \
+    -e "MARVO_RUNTIME_HOST_STATE_DIR=$STATE_DIR" \
+    -e "MARVO_RUNTIME_UID=$RUNTIME_UID" \
+    -e "MARVO_RUNTIME_GID=$RUNTIME_GID" \
+    -e "MARVO_RUNTIME_NETWORK=$NETWORK" \
+    -e "MARVO_AGENT_IMAGE=$AGENT_IMAGE" \
+    -e "MARVO_AGENT_GENERATION=$AGENT_GENERATION" \
+    "$GATEWAY_IMAGE" >/dev/null
+fi
 
 echo "Runtime gateway: http://127.0.0.1:$PORT"
 echo "State root: $STATE_DIR"

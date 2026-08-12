@@ -3,6 +3,7 @@ package userspace
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -68,6 +69,43 @@ func (l *Layout) EnsureUser(userID string) (Paths, error) {
 		}
 	}
 	return paths, nil
+}
+
+// UserUsage returns the bytes occupied by regular files inside one complete
+// user boundary. WalkDir does not follow symbolic links, so a link cannot make
+// another user's or a host directory's contents count toward this space.
+func (l *Layout) UserUsage(userID string) (int64, error) {
+	paths, err := l.UserPaths(userID)
+	if err != nil {
+		return 0, err
+	}
+	var used int64
+	err = filepath.WalkDir(paths.Root, func(_ string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode().IsRegular() {
+			used += info.Size()
+		}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	return used, err
 }
 
 func ensurePrivateDirectory(path string) error {

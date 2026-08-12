@@ -2,9 +2,7 @@ package control
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -12,11 +10,16 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"marvo/internal/userid"
 )
 
 type UserStatus string
 
 const (
+	UserIDLength      = userid.Length
+	maxUserIDAttempts = 8
+
 	UserStatusSetup    UserStatus = "setup"
 	UserStatusActive   UserStatus = "active"
 	UserStatusDisabled UserStatus = "disabled"
@@ -28,6 +31,8 @@ var (
 	ErrUserDisabled           = errors.New("user disabled")
 	ErrTOTPInvalid            = errors.New("invalid TOTP code")
 	ErrTOTPReplay             = errors.New("TOTP code already used")
+	ErrTOTPAlreadyConfigured  = errors.New("TOTP is already configured")
+	ErrTOTPNotConfigured      = errors.New("TOTP is not configured")
 )
 
 type User struct {
@@ -47,35 +52,15 @@ type Enrollment struct {
 }
 
 type LoginChallenge struct {
-	User       User   `json:"user"`
-	TOTPSecret string `json:"totp_secret,omitempty"`
-	TOTPURI    string `json:"totp_uri,omitempty"`
+	User User `json:"user"`
 }
 
 func ValidateUserID(id string) bool {
-	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
-		return false
-	}
-	for index, char := range id {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			continue
-		}
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
-			return false
-		}
-	}
-	return id[14] == '4' && (id[19] == '8' || id[19] == '9' || id[19] == 'a' || id[19] == 'b')
+	return userid.Valid(id)
 }
 
 func newUserID() (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	raw[6] = (raw[6] & 0x0f) | 0x40
-	raw[8] = (raw[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(raw[:])
-	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:], nil
+	return userid.New()
 }
 
 func ValidateUserName(name string) error {
@@ -105,32 +90,36 @@ func (d *DB) CreateUser(ctx context.Context, name, password string) (*Enrollment
 	if err != nil {
 		return nil, err
 	}
-	secret, err := generateTOTPSecret()
-	if err != nil {
-		return nil, fmt.Errorf("generate TOTP secret: %w", err)
-	}
-	encryptedSecret, err := d.encryptTOTPSecret(secret)
-	if err != nil {
-		return nil, fmt.Errorf("encrypt TOTP secret: %w", err)
-	}
-	id, err := newUserID()
-	if err != nil {
-		return nil, fmt.Errorf("generate user id: %w", err)
-	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	if _, err := d.sql.ExecContext(ctx, `
-		INSERT INTO users(
-			id, name, password_hash, totp_secret, totp_confirmed,
-			last_totp_step, status, auth_version, created_at, updated_at
-		) VALUES(?, ?, ?, ?, 0, -1, 'setup', 1, ?, ?)
-	`, id, name, passwordHash, encryptedSecret, now.UnixMilli(), now.UnixMilli()); err != nil {
-		return nil, fmt.Errorf("create user: %w", err)
+	for attempt := 0; attempt < maxUserIDAttempts; attempt++ {
+		id, err := newUserID()
+		if err != nil {
+			return nil, fmt.Errorf("generate user id: %w", err)
+		}
+		result, err := d.sql.ExecContext(ctx, `
+			INSERT INTO users(
+				id, name, password_hash, totp_secret, totp_confirmed,
+				last_totp_step, status, auth_version, created_at, updated_at
+			) VALUES(?, ?, ?, '', 0, -1, 'active', 1, ?, ?)
+			ON CONFLICT(id) DO NOTHING
+		`, id, name, passwordHash, now.UnixMilli(), now.UnixMilli())
+		if err != nil {
+			return nil, fmt.Errorf("create user: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("check user creation: %w", err)
+		}
+		if affected == 0 {
+			continue
+		}
+		user := User{
+			ID: id, Name: name, Status: UserStatusActive, TOTPConfigured: false,
+			CreatedAt: now, UpdatedAt: now, AuthVersion: 1,
+		}
+		return &Enrollment{User: user}, nil
 	}
-	user := User{
-		ID: id, Name: name, Status: UserStatusSetup, TOTPConfigured: false,
-		CreatedAt: now, UpdatedAt: now, AuthVersion: 1,
-	}
-	return &Enrollment{User: user, TOTPSecret: secret, TOTPURI: d.totpURI(name, secret)}, nil
+	return nil, errors.New("failed to allocate a unique user id")
 }
 
 func (d *DB) ListUsers(ctx context.Context) ([]User, error) {
@@ -185,7 +174,8 @@ func (d *DB) DeleteSetupUser(ctx context.Context, id string) error {
 		return ErrUserNotFound
 	}
 	result, err := d.sql.ExecContext(ctx, `
-		DELETE FROM users WHERE id = ? AND status = 'setup' AND totp_confirmed = 0
+		DELETE FROM users
+		WHERE id = ? AND auth_version = 1 AND totp_confirmed = 0 AND created_at = updated_at
 	`, id)
 	if err != nil {
 		return fmt.Errorf("delete setup user: %w", err)
@@ -206,17 +196,16 @@ func (d *DB) BeginUserLogin(ctx context.Context, id, password string) (*LoginCha
 	}
 	var user User
 	var passwordHash string
-	var encryptedSecret string
 	var confirmed int
 	var createdAt int64
 	var updatedAt int64
 	err := d.sql.QueryRowContext(ctx, `
 		SELECT id, name, status, totp_confirmed, auth_version, created_at, updated_at,
-		       password_hash, totp_secret
+		       password_hash
 		FROM users WHERE id = ?
 	`, id).Scan(
 		&user.ID, &user.Name, &user.Status, &confirmed, &user.AuthVersion, &createdAt, &updatedAt,
-		&passwordHash, &encryptedSecret,
+		&passwordHash,
 	)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !verifyPassword(passwordHash, password) {
 		return nil, ErrInvalidUserCredentials
@@ -230,16 +219,7 @@ func (d *DB) BeginUserLogin(ctx context.Context, id, password string) (*LoginCha
 	user.TOTPConfigured = confirmed == 1
 	user.CreatedAt = time.UnixMilli(createdAt).UTC()
 	user.UpdatedAt = time.UnixMilli(updatedAt).UTC()
-	challenge := &LoginChallenge{User: user}
-	if !user.TOTPConfigured {
-		secret, err := d.decryptTOTPSecret(encryptedSecret)
-		if err != nil {
-			return nil, fmt.Errorf("load TOTP enrollment: %w", err)
-		}
-		challenge.TOTPSecret = secret
-		challenge.TOTPURI = d.totpURI(user.Name, secret)
-	}
-	return challenge, nil
+	return &LoginChallenge{User: user}, nil
 }
 
 func (d *DB) VerifyUserTOTP(ctx context.Context, id, code string, now time.Time) (*User, error) {
@@ -255,15 +235,19 @@ func (d *DB) VerifyUserTOTP(ctx context.Context, id, code string, now time.Time)
 	var encryptedSecret string
 	var lastStep int64
 	var status UserStatus
+	var confirmed int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT totp_secret, last_totp_step, status FROM users WHERE id = ?
-	`, id).Scan(&encryptedSecret, &lastStep, &status); errors.Is(err, sql.ErrNoRows) {
+		SELECT totp_secret, last_totp_step, status, totp_confirmed FROM users WHERE id = ?
+	`, id).Scan(&encryptedSecret, &lastStep, &status, &confirmed); errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrTOTPInvalid
 	} else if err != nil {
 		return nil, fmt.Errorf("load TOTP state: %w", err)
 	}
 	if status == UserStatusDisabled {
 		return nil, ErrUserDisabled
+	}
+	if confirmed != 1 {
+		return nil, ErrTOTPNotConfigured
 	}
 	secret, err := d.decryptTOTPSecret(encryptedSecret)
 	if err != nil {
@@ -279,10 +263,8 @@ func (d *DB) VerifyUserTOTP(ctx context.Context, id, code string, now time.Time)
 	updatedAt := time.Now().UTC().Truncate(time.Millisecond)
 	result, err := tx.ExecContext(ctx, `
 		UPDATE users
-		SET last_totp_step = ?, totp_confirmed = 1,
-		    status = CASE WHEN status = 'setup' THEN 'active' ELSE status END,
-		    updated_at = ?
-		WHERE id = ? AND last_totp_step < ? AND status != 'disabled'
+		SET last_totp_step = ?, updated_at = ?
+		WHERE id = ? AND last_totp_step < ? AND totp_confirmed = 1 AND status != 'disabled'
 	`, counter, updatedAt.UnixMilli(), id, counter)
 	if err != nil {
 		return nil, fmt.Errorf("record TOTP verification: %w", err)
@@ -308,6 +290,78 @@ func (d *DB) VerifyUserTOTP(ctx context.Context, id, code string, now time.Time)
 	return &user, nil
 }
 
+func (d *DB) ConfirmUserTOTPEnrollment(ctx context.Context, id, code string, now time.Time) (*User, error) {
+	if !ValidateUserID(id) {
+		return nil, ErrTOTPInvalid
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin TOTP confirmation: %w", err)
+	}
+	defer tx.Rollback()
+
+	var encryptedSecret string
+	var lastStep int64
+	var status UserStatus
+	var confirmed int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT totp_secret, last_totp_step, status, totp_confirmed FROM users WHERE id = ?
+	`, id).Scan(&encryptedSecret, &lastStep, &status, &confirmed); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrTOTPInvalid
+	} else if err != nil {
+		return nil, fmt.Errorf("load TOTP confirmation state: %w", err)
+	}
+	if status == UserStatusDisabled {
+		return nil, ErrUserDisabled
+	}
+	if confirmed == 1 {
+		return nil, ErrTOTPAlreadyConfigured
+	}
+	if encryptedSecret == "" {
+		return nil, ErrTOTPNotConfigured
+	}
+	secret, err := d.decryptTOTPSecret(encryptedSecret)
+	if err != nil {
+		return nil, fmt.Errorf("load TOTP enrollment secret: %w", err)
+	}
+	counter, ok := matchingTOTPCounter(secret, code, now)
+	if !ok {
+		return nil, ErrTOTPInvalid
+	}
+	if counter <= lastStep {
+		return nil, ErrTOTPReplay
+	}
+	updatedAt := time.Now().UTC().Truncate(time.Millisecond)
+	result, err := tx.ExecContext(ctx, `
+		UPDATE users
+		SET last_totp_step = ?, totp_confirmed = 1, status = 'active',
+		    auth_version = auth_version + 1, updated_at = ?
+		WHERE id = ? AND last_totp_step < ? AND totp_confirmed = 0 AND status != 'disabled'
+	`, counter, updatedAt.UnixMilli(), id, counter)
+	if err != nil {
+		return nil, fmt.Errorf("confirm TOTP enrollment: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("confirm TOTP enrollment: %w", err)
+	}
+	if affected != 1 {
+		return nil, ErrTOTPReplay
+	}
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, name, status, totp_confirmed, auth_version, created_at, updated_at
+		FROM users WHERE id = ?
+	`, id)
+	user, err := scanUser(row)
+	if err != nil {
+		return nil, fmt.Errorf("load confirmed TOTP user: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit TOTP confirmation: %w", err)
+	}
+	return &user, nil
+}
+
 func (d *DB) SetUserDisabled(ctx context.Context, id string, disabled bool) (*User, error) {
 	if !ValidateUserID(id) {
 		return nil, ErrUserNotFound
@@ -315,16 +369,6 @@ func (d *DB) SetUserDisabled(ctx context.Context, id string, disabled bool) (*Us
 	status := UserStatusActive
 	if disabled {
 		status = UserStatusDisabled
-	} else {
-		var confirmed int
-		if err := d.sql.QueryRowContext(ctx, "SELECT totp_confirmed FROM users WHERE id = ?", id).Scan(&confirmed); errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrUserNotFound
-		} else if err != nil {
-			return nil, fmt.Errorf("load user state: %w", err)
-		}
-		if confirmed == 0 {
-			status = UserStatusSetup
-		}
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	result, err := d.sql.ExecContext(ctx, `
@@ -348,22 +392,14 @@ func (d *DB) ResetUserCredentials(ctx context.Context, id, password string) (*En
 	if err != nil {
 		return nil, err
 	}
-	secret, err := generateTOTPSecret()
-	if err != nil {
-		return nil, fmt.Errorf("generate TOTP secret: %w", err)
-	}
-	encryptedSecret, err := d.encryptTOTPSecret(secret)
-	if err != nil {
-		return nil, fmt.Errorf("encrypt TOTP secret: %w", err)
-	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	result, err := d.sql.ExecContext(ctx, `
 		UPDATE users
-		SET password_hash = ?, totp_secret = ?, totp_confirmed = 0,
-		    last_totp_step = -1, status = 'setup', auth_version = auth_version + 1,
+		SET password_hash = ?, totp_secret = '', totp_confirmed = 0,
+		    last_totp_step = -1, status = 'active', auth_version = auth_version + 1,
 		    updated_at = ?
 		WHERE id = ?
-	`, passwordHash, encryptedSecret, now.UnixMilli(), id)
+	`, passwordHash, now.UnixMilli(), id)
 	if err != nil {
 		return nil, fmt.Errorf("reset user credentials: %w", err)
 	}
@@ -375,7 +411,178 @@ func (d *DB) ResetUserCredentials(ctx context.Context, id, password string) (*En
 	if err != nil {
 		return nil, err
 	}
-	return &Enrollment{User: *user, TOTPSecret: secret, TOTPURI: d.totpURI(user.Name, secret)}, nil
+	return &Enrollment{User: *user}, nil
+}
+
+func (d *DB) ChangeUserPassword(ctx context.Context, id, currentPassword, newPassword string) (*User, error) {
+	if !ValidateUserID(id) {
+		return nil, ErrInvalidUserCredentials
+	}
+	newHash, err := hashPassword(newPassword)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin password change: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentHash string
+	var status UserStatus
+	if err := tx.QueryRowContext(ctx, `
+		SELECT password_hash, status FROM users WHERE id = ?
+	`, id).Scan(&currentHash, &status); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrInvalidUserCredentials
+	} else if err != nil {
+		return nil, fmt.Errorf("load password state: %w", err)
+	}
+	if !verifyPassword(currentHash, currentPassword) {
+		return nil, ErrInvalidUserCredentials
+	}
+	if status == UserStatusDisabled {
+		return nil, ErrUserDisabled
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE users
+		SET password_hash = ?, auth_version = auth_version + 1, updated_at = ?
+		WHERE id = ?
+	`, newHash, now.UnixMilli(), id); err != nil {
+		return nil, fmt.Errorf("change password: %w", err)
+	}
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, name, status, totp_confirmed, auth_version, created_at, updated_at
+		FROM users WHERE id = ?
+	`, id)
+	user, err := scanUser(row)
+	if err != nil {
+		return nil, fmt.Errorf("load changed user: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit password change: %w", err)
+	}
+	return &user, nil
+}
+
+func (d *DB) BeginUserTOTPEnrollment(ctx context.Context, id, password string) (*Enrollment, error) {
+	if !ValidateUserID(id) {
+		return nil, ErrInvalidUserCredentials
+	}
+	secret, err := generateTOTPSecret()
+	if err != nil {
+		return nil, fmt.Errorf("generate TOTP secret: %w", err)
+	}
+	encryptedSecret, err := d.encryptTOTPSecret(secret)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt TOTP secret: %w", err)
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin TOTP enrollment: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentHash string
+	var status UserStatus
+	var confirmed int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT password_hash, status, totp_confirmed FROM users WHERE id = ?
+	`, id).Scan(&currentHash, &status, &confirmed); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrInvalidUserCredentials
+	} else if err != nil {
+		return nil, fmt.Errorf("load TOTP enrollment state: %w", err)
+	}
+	if !verifyPassword(currentHash, password) {
+		return nil, ErrInvalidUserCredentials
+	}
+	if status == UserStatusDisabled {
+		return nil, ErrUserDisabled
+	}
+	if confirmed == 1 {
+		return nil, ErrTOTPAlreadyConfigured
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE users
+		SET totp_secret = ?, last_totp_step = -1, updated_at = ?
+		WHERE id = ? AND totp_confirmed = 0
+	`, encryptedSecret, now.UnixMilli(), id); err != nil {
+		return nil, fmt.Errorf("store TOTP enrollment: %w", err)
+	}
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, name, status, totp_confirmed, auth_version, created_at, updated_at
+		FROM users WHERE id = ?
+	`, id)
+	user, err := scanUser(row)
+	if err != nil {
+		return nil, fmt.Errorf("load TOTP enrollment user: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit TOTP enrollment: %w", err)
+	}
+	return &Enrollment{User: user, TOTPSecret: secret, TOTPURI: d.totpURI(user.Name, secret)}, nil
+}
+
+func (d *DB) DisableUserTOTP(ctx context.Context, id, password, code string, now time.Time) (*User, error) {
+	if !ValidateUserID(id) {
+		return nil, ErrInvalidUserCredentials
+	}
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin TOTP removal: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentHash string
+	var encryptedSecret string
+	var status UserStatus
+	var confirmed int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT password_hash, totp_secret, status, totp_confirmed
+		FROM users WHERE id = ?
+	`, id).Scan(&currentHash, &encryptedSecret, &status, &confirmed); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrInvalidUserCredentials
+	} else if err != nil {
+		return nil, fmt.Errorf("load TOTP removal state: %w", err)
+	}
+	if !verifyPassword(currentHash, password) {
+		return nil, ErrInvalidUserCredentials
+	}
+	if status == UserStatusDisabled {
+		return nil, ErrUserDisabled
+	}
+	if confirmed != 1 {
+		return nil, ErrTOTPNotConfigured
+	}
+	secret, err := d.decryptTOTPSecret(encryptedSecret)
+	if err != nil {
+		return nil, fmt.Errorf("load TOTP secret: %w", err)
+	}
+	if _, ok := matchingTOTPCounter(secret, code, now); !ok {
+		return nil, ErrTOTPInvalid
+	}
+	updatedAt := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE users
+		SET totp_secret = '', totp_confirmed = 0, last_totp_step = -1,
+		    auth_version = auth_version + 1, updated_at = ?
+		WHERE id = ? AND totp_confirmed = 1
+	`, updatedAt.UnixMilli(), id); err != nil {
+		return nil, fmt.Errorf("remove TOTP: %w", err)
+	}
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, name, status, totp_confirmed, auth_version, created_at, updated_at
+		FROM users WHERE id = ?
+	`, id)
+	user, err := scanUser(row)
+	if err != nil {
+		return nil, fmt.Errorf("load TOTP removal user: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit TOTP removal: %w", err)
+	}
+	return &user, nil
 }
 
 type rowScanner interface {

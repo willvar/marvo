@@ -27,7 +27,7 @@ func (d *Dependencies) Apply(w http.ResponseWriter, r *http.Request) {
 	}
 	body.LocalDeviceID = strings.TrimSpace(body.LocalDeviceID)
 	body.DeviceName = strings.TrimSpace(body.DeviceName)
-	if body.LocalDeviceID == "" || len(body.LocalDeviceID) > 128 || len([]rune(body.DeviceName)) > 200 {
+	if body.LocalDeviceID == "" || len(body.LocalDeviceID) > 128 {
 		writeJSON(w, 400, map[string]any{"error": "invalid request"})
 		return
 	}
@@ -36,6 +36,10 @@ func (d *Dependencies) Apply(w http.ResponseWriter, r *http.Request) {
 
 	req, createErr := d.DeviceStore.CreateRequest(body.LocalDeviceID, body.DeviceName, body.DeviceInfo)
 	if createErr != nil {
+		if errors.Is(createErr, store.ErrInvalidDeviceName) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "device name must contain 1 to 50 characters"})
+			return
+		}
 		if errors.Is(createErr, store.ErrTooManyPendingDevices) {
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many pending device applications"})
 			return
