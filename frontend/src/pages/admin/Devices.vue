@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onBeforeUnmount, onMounted } from 'vue'
-import { api, ApiError } from '../../sdk'
+import { api, ApiError, userLoginRoute } from '../../sdk'
 import { useRouter } from 'vue-router'
 import { Dialog } from '@ark-ui/vue/dialog'
 import {
@@ -73,7 +73,7 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 function handleLoadError(e: unknown, target: typeof requestsError) {
   if (e instanceof ApiError && e.status === 401) {
-    void router.replace('/admin/login')
+    void router.replace(userLoginRoute({ admin: true, next: router.currentRoute.value.fullPath }))
     return
   }
   target.value = '加载失败，请稍后重试'
@@ -159,7 +159,7 @@ async function confirmRevoke() {
     void loadDevices()
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      void router.replace('/admin/login')
+      void router.replace(userLoginRoute({ admin: true, next: router.currentRoute.value.fullPath }))
       return
     }
     revokeError.value = '撤回失败，请稍后重试'

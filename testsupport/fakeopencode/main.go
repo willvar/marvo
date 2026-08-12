@@ -182,11 +182,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func main() {
-	addr := os.Getenv("MARVO_FAKE_OPENCODE_ADDR")
-	if addr == "" {
-		addr = "127.0.0.1:15096"
-	}
+func newFakeHandler() http.Handler {
 	state := newFakeState()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /provider", func(w http.ResponseWriter, _ *http.Request) {
@@ -484,7 +480,39 @@ func main() {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unhandled fake OpenCode route: "+r.Method+" "+strings.TrimSpace(r.URL.Path), http.StatusNotFound)
 	})
-	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	return mux
+}
+
+func main() {
+	addr := os.Getenv("MARVO_FAKE_OPENCODE_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:15096"
+	}
+	defaultHandler := newFakeHandler()
+	var handlersMu sync.Mutex
+	userHandlers := make(map[string]http.Handler)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		trimmed := strings.TrimPrefix(r.URL.Path, "/user/")
+		userID, runtimePath, scoped := strings.Cut(trimmed, "/")
+		if !strings.HasPrefix(r.URL.Path, "/user/") || !scoped || len(userID) != 36 {
+			defaultHandler.ServeHTTP(w, r)
+			return
+		}
+		handlersMu.Lock()
+		userHandler := userHandlers[userID]
+		if userHandler == nil {
+			userHandler = newFakeHandler()
+			userHandlers[userID] = userHandler
+		}
+		handlersMu.Unlock()
+		copy := r.Clone(r.Context())
+		urlCopy := *r.URL
+		urlCopy.Path = "/" + runtimePath
+		urlCopy.RawPath = ""
+		copy.URL = &urlCopy
+		userHandler.ServeHTTP(w, copy)
+	})
+	server := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		panic(err)
 	}

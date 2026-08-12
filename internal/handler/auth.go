@@ -126,18 +126,6 @@ func (d *Dependencies) Logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
-func (d *Dependencies) AuthMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if d.validateDeviceCookie(r) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			writeJSON(w, 401, map[string]any{"error": "unauthorized"})
-		})
-	}
-}
-
 func (d *Dependencies) AdminMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -174,18 +162,6 @@ func (d *Dependencies) validateSessionCookie(r *http.Request) bool {
 	now := time.Now()
 	issued := time.Unix(issuedAt, 0)
 	return !issued.After(now.Add(time.Minute)) && now.Sub(issued) <= adminSessionAge
-}
-
-func (d *Dependencies) validateDeviceCookie(r *http.Request) bool {
-	cookie, err := r.Cookie("marvo_device")
-	if err != nil || cookie.Value == "" {
-		return false
-	}
-	token, sig, found := cutLast(cookie.Value, ":")
-	if !found {
-		return false
-	}
-	return d.DeviceStore.VerifyToken(token, sig)
 }
 
 func generateChallenge() (string, error) {

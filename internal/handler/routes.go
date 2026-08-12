@@ -2,8 +2,10 @@ package handler
 
 import (
 	"marvo/internal/collab"
+	"marvo/internal/control"
 	"marvo/internal/media"
 	"marvo/internal/store"
+	"marvo/internal/userspace"
 	"net/http"
 	"sync"
 	"time"
@@ -12,15 +14,22 @@ import (
 )
 
 type Dependencies struct {
-	Config      *config.Config
-	NoteStore   *store.NoteStore
-	Hub         *collab.Hub
-	Media       *media.Manager
-	AgentDeps   *AgentDeps
-	DeviceStore *store.DeviceStore
-	securityMu  sync.Mutex
-	rateLimits  map[string]rateWindow
-	challenges  map[string]int64
+	Config       *config.Config
+	Control      *control.DB
+	Layout       *userspace.Layout
+	Spaces       *SpaceRegistry
+	UserID       string
+	NoteStore    *store.NoteStore
+	Hub          *collab.Hub
+	Media        *media.Manager
+	AgentDeps    *AgentDeps
+	DeviceStore  *store.DeviceStore
+	Legacy       userspace.LegacySources
+	migrationMu  sync.Mutex
+	securityMu   sync.Mutex
+	rateLimits   map[string]rateWindow
+	challenges   map[string]int64
+	securityRoot *Dependencies
 }
 
 type rateWindow struct {
@@ -29,64 +38,98 @@ type rateWindow struct {
 }
 
 func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
-	mux.HandleFunc("POST /api/auth/verify", deps.Verify)
-	mux.HandleFunc("POST /api/auth", deps.Login)
-	mux.HandleFunc("POST /api/auth/logout", deps.Logout)
-	mux.HandleFunc("POST /api/auth/apply", deps.Apply)
-	mux.HandleFunc("GET /api/auth/token", deps.Token)
+	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
 
-	auth := deps.AuthMiddleware()
-	admin := deps.AdminMiddleware()
-
-	// Content access is deliberately device-only. An administrator session can
-	// approve or revoke devices, but cannot read notes unless this browser is an
-	// independently approved device too.
-	mux.Handle("GET /api/notes", auth(http.HandlerFunc(deps.ListNotes)))
-	mux.Handle("GET /api/notes/{title}", auth(http.HandlerFunc(deps.GetNote)))
-	mux.Handle("GET /api/notes/{title}/assets/{filename}", auth(http.HandlerFunc(deps.GetAttachment)))
-	mux.Handle("GET /api/theme", auth(http.HandlerFunc(deps.GetTheme)))
-	mux.Handle("GET /api/search", auth(http.HandlerFunc(deps.SearchNotes)))
-
-	mux.Handle("POST /api/notes", auth(http.HandlerFunc(deps.CreateNote)))
-	mux.Handle("PUT /api/notes/{title}/content", auth(http.HandlerFunc(deps.UpdateNoteContent)))
-	mux.Handle("PUT /api/notes/{title}/meta", auth(http.HandlerFunc(deps.UpdateNoteMeta)))
-	mux.Handle("PUT /api/notes/{title}/rename", auth(http.HandlerFunc(deps.RenameNote)))
-	mux.Handle("DELETE /api/notes/{title}", auth(http.HandlerFunc(deps.DeleteNote)))
-	mux.Handle("GET /api/notes/{title}/assets", auth(http.HandlerFunc(deps.ListMediaAssets)))
-	mux.Handle("POST /api/notes/{title}/assets/reserve", auth(http.HandlerFunc(deps.ReserveMediaAsset)))
-	mux.Handle("GET /api/notes/{title}/assets/{assetID}/status", auth(http.HandlerFunc(deps.GetMediaAsset)))
-	mux.Handle("PUT /api/notes/{title}/assets/{assetID}/content", auth(http.HandlerFunc(deps.UploadMediaAsset)))
-	mux.Handle("DELETE /api/notes/{title}/assets/{assetID}", auth(http.HandlerFunc(deps.AbandonMediaAsset)))
-	mux.Handle("GET /api/trash", auth(http.HandlerFunc(deps.ListTrash)))
-	mux.Handle("POST /api/trash/{id}/restore", auth(http.HandlerFunc(deps.RestoreTrash)))
-	mux.Handle("DELETE /api/trash/{id}", auth(http.HandlerFunc(deps.PermanentlyDeleteTrash)))
-	mux.Handle("DELETE /api/trash", auth(http.HandlerFunc(deps.EmptyTrash)))
-	mux.Handle("GET /api/events", auth(http.HandlerFunc(deps.HandleSSE)))
-	mux.Handle("POST /api/send", auth(http.HandlerFunc(deps.HandleSend)))
-
-	if deps.AgentDeps != nil {
-		mux.Handle("GET /api/agent/settings", auth(http.HandlerFunc(deps.AgentDeps.GetSettings)))
-		mux.Handle("PUT /api/agent/settings", auth(http.HandlerFunc(deps.AgentDeps.UpdateSettings)))
-		mux.Handle("GET /api/agent/personalization", auth(http.HandlerFunc(deps.AgentDeps.GetPersonalization)))
-		mux.Handle("PUT /api/agent/personalization", auth(http.HandlerFunc(deps.AgentDeps.UpdatePersonalization)))
-		mux.Handle("GET /api/agent/providers", auth(http.HandlerFunc(deps.AgentDeps.ListProviders)))
-		mux.Handle("POST /api/agent/providers/{providerID}/connect/key", auth(http.HandlerFunc(deps.AgentDeps.ConnectProviderKey)))
-		mux.Handle("POST /api/agent/providers/{providerID}/connect/oauth", auth(http.HandlerFunc(deps.AgentDeps.StartProviderOAuth)))
-		mux.Handle("DELETE /api/agent/providers/{providerID}", auth(http.HandlerFunc(deps.AgentDeps.DisconnectProvider)))
-		mux.Handle("GET /api/agent/provider-attempts/{attemptID}", auth(http.HandlerFunc(deps.AgentDeps.GetProviderOAuthAttempt)))
-		mux.Handle("POST /api/agent/provider-attempts/{attemptID}/complete", auth(http.HandlerFunc(deps.AgentDeps.CompleteProviderOAuth)))
-		mux.Handle("DELETE /api/agent/provider-attempts/{attemptID}", auth(http.HandlerFunc(deps.AgentDeps.CancelProviderOAuth)))
-		mux.Handle("GET /api/agent/global/event", auth(http.HandlerFunc(deps.AgentDeps.ProxyGlobalSSE)))
-		mux.Handle("GET /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
-		mux.Handle("POST /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
-		mux.Handle("PATCH /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
-		mux.Handle("PUT /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
-		mux.Handle("DELETE /api/agent/{path...}", auth(http.HandlerFunc(deps.AgentDeps.ProxyJSON)))
+	// Platform administrator authentication remains separate from every user's
+	// own management session and never grants access to user content.
+	mux.HandleFunc("POST /api/platform/auth/verify", deps.Verify)
+	mux.HandleFunc("POST /api/platform/auth", deps.Login)
+	mux.HandleFunc("POST /api/platform/auth/logout", deps.Logout)
+	if deps.Control != nil {
+		mux.HandleFunc("POST /api/user/{userID}/auth/verify", deps.VerifyUser)
+		mux.HandleFunc("POST /api/user/{userID}/auth", deps.LoginUser)
+		mux.HandleFunc("POST /api/user/{userID}/auth/logout", deps.LogoutUser)
+	}
+	if deps.Spaces != nil {
+		registerUserRoutes(mux, deps)
 	}
 
-	mux.Handle("GET /api/admin/requests", admin(http.HandlerFunc(deps.ListRequests)))
-	mux.Handle("POST /api/admin/requests/{id}/approve", admin(http.HandlerFunc(deps.ApproveRequest)))
-	mux.Handle("POST /api/admin/requests/{id}/reject", admin(http.HandlerFunc(deps.RejectRequest)))
-	mux.Handle("GET /api/admin/devices", admin(http.HandlerFunc(deps.ListDevices)))
-	mux.Handle("DELETE /api/admin/devices/{id}", admin(http.HandlerFunc(deps.RevokeDevice)))
+	admin := deps.AdminMiddleware()
+	if deps.Control != nil && deps.Layout != nil {
+		mux.Handle("GET /api/admin/users", admin(http.HandlerFunc(deps.ListUsers)))
+		mux.Handle("POST /api/admin/users", admin(http.HandlerFunc(deps.CreateUser)))
+		mux.Handle("PUT /api/admin/users/{userID}/status", admin(http.HandlerFunc(deps.UpdateUserStatus)))
+		mux.Handle("POST /api/admin/users/{userID}/credentials", admin(http.HandlerFunc(deps.ResetUserCredentials)))
+		mux.Handle("GET /api/admin/legacy-migration", admin(http.HandlerFunc(deps.LegacyMigrationStatus)))
+		mux.Handle("POST /api/admin/users/{userID}/migrate-legacy", admin(http.HandlerFunc(deps.MigrateLegacyUser)))
+	}
+}
+
+type scopedHandler func(*Dependencies, http.ResponseWriter, *http.Request)
+
+func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
+	space := deps.UserSpaceMiddleware()
+	device := deps.UserDeviceMiddleware()
+	userAdmin := deps.UserAdminMiddleware()
+	scoped := deps.Scoped
+	content := func(handler scopedHandler) http.Handler {
+		return space(device(scoped(handler)))
+	}
+	management := func(handler scopedHandler) http.Handler {
+		return space(userAdmin(scoped(handler)))
+	}
+	userPublic := func(handler scopedHandler) http.Handler {
+		return space(scoped(handler))
+	}
+
+	mux.Handle("POST /api/user/{userID}/auth/apply", userPublic((*Dependencies).Apply))
+	mux.Handle("GET /api/user/{userID}/auth/token", userPublic((*Dependencies).Token))
+
+	mux.Handle("GET /api/user/{userID}/notes", content((*Dependencies).ListNotes))
+	mux.Handle("GET /api/user/{userID}/notes/{title}", content((*Dependencies).GetNote))
+	mux.Handle("GET /api/user/{userID}/notes/{title}/assets/{filename}", content((*Dependencies).GetAttachment))
+	mux.Handle("GET /api/user/{userID}/theme", content((*Dependencies).GetTheme))
+	mux.Handle("GET /api/user/{userID}/search", content((*Dependencies).SearchNotes))
+	mux.Handle("POST /api/user/{userID}/notes", content((*Dependencies).CreateNote))
+	mux.Handle("PUT /api/user/{userID}/notes/{title}/content", content((*Dependencies).UpdateNoteContent))
+	mux.Handle("PUT /api/user/{userID}/notes/{title}/meta", content((*Dependencies).UpdateNoteMeta))
+	mux.Handle("PUT /api/user/{userID}/notes/{title}/rename", content((*Dependencies).RenameNote))
+	mux.Handle("DELETE /api/user/{userID}/notes/{title}", content((*Dependencies).DeleteNote))
+	mux.Handle("GET /api/user/{userID}/notes/{title}/assets", content((*Dependencies).ListMediaAssets))
+	mux.Handle("POST /api/user/{userID}/notes/{title}/assets/reserve", content((*Dependencies).ReserveMediaAsset))
+	mux.Handle("GET /api/user/{userID}/notes/{title}/assets/{assetID}/status", content((*Dependencies).GetMediaAsset))
+	mux.Handle("PUT /api/user/{userID}/notes/{title}/assets/{assetID}/content", content((*Dependencies).UploadMediaAsset))
+	mux.Handle("DELETE /api/user/{userID}/notes/{title}/assets/{assetID}", content((*Dependencies).AbandonMediaAsset))
+	mux.Handle("GET /api/user/{userID}/trash", content((*Dependencies).ListTrash))
+	mux.Handle("POST /api/user/{userID}/trash/{id}/restore", content((*Dependencies).RestoreTrash))
+	mux.Handle("DELETE /api/user/{userID}/trash/{id}", content((*Dependencies).PermanentlyDeleteTrash))
+	mux.Handle("DELETE /api/user/{userID}/trash", content((*Dependencies).EmptyTrash))
+	mux.Handle("GET /api/user/{userID}/events", content((*Dependencies).HandleSSE))
+	mux.Handle("POST /api/user/{userID}/send", content((*Dependencies).HandleSend))
+
+	mux.Handle("GET /api/user/{userID}/agent/settings", content((*Dependencies).AgentGetSettings))
+	mux.Handle("PUT /api/user/{userID}/agent/settings", content((*Dependencies).AgentUpdateSettings))
+	mux.Handle("GET /api/user/{userID}/agent/personalization", content((*Dependencies).AgentGetPersonalization))
+	mux.Handle("PUT /api/user/{userID}/agent/personalization", content((*Dependencies).AgentUpdatePersonalization))
+	mux.Handle("GET /api/user/{userID}/agent/providers", content((*Dependencies).AgentListProviders))
+	mux.Handle("POST /api/user/{userID}/agent/providers/{providerID}/connect/key", content((*Dependencies).AgentConnectProviderKey))
+	mux.Handle("POST /api/user/{userID}/agent/providers/{providerID}/connect/oauth", content((*Dependencies).AgentStartProviderOAuth))
+	mux.Handle("DELETE /api/user/{userID}/agent/providers/{providerID}", content((*Dependencies).AgentDisconnectProvider))
+	mux.Handle("GET /api/user/{userID}/agent/provider-attempts/{attemptID}", content((*Dependencies).AgentGetProviderOAuthAttempt))
+	mux.Handle("POST /api/user/{userID}/agent/provider-attempts/{attemptID}/complete", content((*Dependencies).AgentCompleteProviderOAuth))
+	mux.Handle("DELETE /api/user/{userID}/agent/provider-attempts/{attemptID}", content((*Dependencies).AgentCancelProviderOAuth))
+	mux.Handle("GET /api/user/{userID}/agent/global/event", content((*Dependencies).AgentProxyGlobalSSE))
+	mux.Handle("GET /api/user/{userID}/agent/{path...}", content((*Dependencies).AgentProxyJSON))
+	mux.Handle("POST /api/user/{userID}/agent/{path...}", content((*Dependencies).AgentProxyJSON))
+	mux.Handle("PATCH /api/user/{userID}/agent/{path...}", content((*Dependencies).AgentProxyJSON))
+	mux.Handle("PUT /api/user/{userID}/agent/{path...}", content((*Dependencies).AgentProxyJSON))
+	mux.Handle("DELETE /api/user/{userID}/agent/{path...}", content((*Dependencies).AgentProxyJSON))
+
+	mux.Handle("GET /api/user/{userID}/admin/requests", management((*Dependencies).ListRequests))
+	mux.Handle("POST /api/user/{userID}/admin/requests/{id}/approve", management((*Dependencies).ApproveRequest))
+	mux.Handle("POST /api/user/{userID}/admin/requests/{id}/reject", management((*Dependencies).RejectRequest))
+	mux.Handle("GET /api/user/{userID}/admin/devices", management((*Dependencies).ListDevices))
+	mux.Handle("DELETE /api/user/{userID}/admin/devices/{id}", management((*Dependencies).RevokeDevice))
 }

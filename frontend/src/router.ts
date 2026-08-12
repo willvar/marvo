@@ -29,23 +29,30 @@ export const router = createRouter({
     {
       path: '/admin',
       component: () => import('./layouts/AdminLayout.vue'),
-      children: [{ path: '', component: () => import('./pages/admin/Devices.vue') }],
+      children: [{ path: '', name: 'platform-users', component: () => import('./pages/admin/Users.vue') }],
     },
     {
-      path: '/login',
+      path: '/user/:userId/login',
+      name: 'user-login',
       component: () => import('./pages/desktop/Login.vue'),
     },
     {
-      path: '/',
+      path: '/user/:userId/admin',
+      component: () => import('./layouts/AdminLayout.vue'),
+      children: [{ path: '', name: 'user-devices', component: () => import('./pages/admin/Devices.vue') }],
+    },
+    {
+      path: '/user/:userId',
       component: () => import('./layouts/DesktopShell.vue'),
       children: [
-        { path: '', component: () => import('./pages/desktop/Home.vue') },
-        { path: 'note/:title', component: () => import('./pages/desktop/NoteEditor.vue') },
-        { path: 'agent', component: () => import('./pages/desktop/AgentChat.vue') },
-        { path: 'trash', component: () => import('./pages/desktop/Trash.vue') },
+        { path: '', name: 'user-home', component: () => import('./pages/desktop/Home.vue') },
+        { path: 'note/:title', name: 'user-note', component: () => import('./pages/desktop/NoteEditor.vue') },
+        { path: 'agent', name: 'user-agent', component: () => import('./pages/desktop/AgentChat.vue') },
+        { path: 'trash', name: 'user-trash', component: () => import('./pages/desktop/Trash.vue') },
       ],
     },
-    { path: '/:pathMatch(.*)*', redirect: '/' },
+    { path: '/', redirect: '/admin' },
+    { path: '/:pathMatch(.*)*', redirect: '/admin' },
   ],
 })
 

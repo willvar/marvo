@@ -4,7 +4,7 @@ import { FileTextOutlined } from '@ant-design/icons-vue'
 import { useRouter } from 'vue-router'
 import AgentComposer from '../../components/AgentComposer.vue'
 import { XWelcome } from '../../components/x'
-import type { AgentFilePartInput } from '../../sdk'
+import { workspaceRoute, type AgentFilePartInput } from '../../sdk'
 import { useAgentStore } from '../../stores/agent'
 
 const router = useRouter()
@@ -17,7 +17,7 @@ async function startAgentConversation(text: string, files: AgentFilePartInput[])
     agent.connect()
     await agent.createSession()
     await agent.sendMessage(text, files)
-    await router.push('/agent')
+    await router.push(workspaceRoute('/agent'))
   } catch {
     throw new Error('发送失败，智能体服务可能不可用')
   }

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { v4 as uuidv4 } from 'uuid'
-import { api, setUnauthorizedHandler } from '../sdk'
+import { api, currentUserID, setUnauthorizedHandler, userLoginRoute } from '../sdk'
 
 const LOCAL_DEVICE_KEY = 'marvo_local_device_id'
 
@@ -70,6 +70,7 @@ function stripControlCharacters(value: string) {
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
+    userID: '',
     isAuthenticated: false,
     applyStatus: 'idle' as 'idle' | 'pending' | 'approved' | 'rejected',
     requestId: '',
@@ -77,6 +78,20 @@ export const useAuthStore = defineStore('auth', {
 
   actions: {
     async check() {
+      const activeUserID = currentUserID()
+      if (!activeUserID) {
+        this.userID = ''
+        this.isAuthenticated = false
+        this.applyStatus = 'idle'
+        this.requestId = ''
+        return
+      }
+      if (this.userID !== activeUserID) {
+        this.userID = activeUserID
+        this.isAuthenticated = false
+        this.applyStatus = 'idle'
+        this.requestId = ''
+      }
       const localDeviceID = getLocalDeviceID()
       try {
         const { data } = await api.get('/api/auth/token', {
@@ -139,7 +154,11 @@ setUnauthorizedHandler(() => {
   const store = useAuthStore()
   store.isAuthenticated = false
   if (typeof window !== 'undefined') {
-    const target = window.location.pathname.startsWith('/admin') ? '/admin/login' : '/login'
+    const userID = currentUserID()
+    const userAdmin = !!userID && window.location.pathname === `/user/${userID}/admin`
+    const target = userID
+      ? userLoginRoute({ admin: userAdmin, next: userAdmin ? window.location.pathname : undefined }, userID)
+      : '/admin/login'
     if (window.location.pathname !== target) window.location.replace(target)
   }
 })

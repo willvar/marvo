@@ -14,8 +14,8 @@ async function handleLogin() {
   error.value = ''
   loading.value = true
   try {
-    const { data } = await api.post('/api/auth/verify', { password: password.value })
-    await api.post('/api/auth', { challenge_token: data.challenge_token })
+    const { data } = await api.post('/api/platform/auth/verify', { password: password.value })
+    await api.post('/api/platform/auth', { challenge_token: data.challenge_token })
     router.push('/admin')
   } catch {
     error.value = '密码错误'

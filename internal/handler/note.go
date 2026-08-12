@@ -312,7 +312,7 @@ func (d *Dependencies) ReserveMediaAsset(w http.ResponseWriter, r *http.Request)
 		d.writeMediaError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, mediaAssetPayload(title, *asset))
+	writeJSON(w, http.StatusCreated, mediaAssetPayload(d.UserID, title, *asset))
 }
 
 func (d *Dependencies) ListMediaAssets(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +327,7 @@ func (d *Dependencies) ListMediaAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	payload := make([]map[string]any, 0, len(assets))
 	for _, asset := range assets {
-		payload = append(payload, mediaAssetPayload(title, asset))
+		payload = append(payload, mediaAssetPayload(d.UserID, title, asset))
 	}
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -342,7 +342,7 @@ func (d *Dependencies) GetMediaAsset(w http.ResponseWriter, r *http.Request) {
 		d.writeMediaError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mediaAssetPayload(title, *asset))
+	writeJSON(w, http.StatusOK, mediaAssetPayload(d.UserID, title, *asset))
 }
 
 func (d *Dependencies) UploadMediaAsset(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +360,7 @@ func (d *Dependencies) UploadMediaAsset(w http.ResponseWriter, r *http.Request) 
 		d.writeMediaError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, mediaAssetPayload(title, *asset))
+	writeJSON(w, http.StatusAccepted, mediaAssetPayload(d.UserID, title, *asset))
 }
 
 func (d *Dependencies) AbandonMediaAsset(w http.ResponseWriter, r *http.Request) {
@@ -373,7 +373,7 @@ func (d *Dependencies) AbandonMediaAsset(w http.ResponseWriter, r *http.Request)
 		d.writeMediaError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mediaAssetPayload(title, *asset))
+	writeJSON(w, http.StatusOK, mediaAssetPayload(d.UserID, title, *asset))
 }
 
 func mediaRequestIdentity(w http.ResponseWriter, r *http.Request) (string, string, bool) {
@@ -393,7 +393,7 @@ func mediaRequestIdentity(w http.ResponseWriter, r *http.Request) (string, strin
 	return title, token, true
 }
 
-func mediaAssetPayload(title string, asset media.Asset) map[string]any {
+func mediaAssetPayload(userID, title string, asset media.Asset) map[string]any {
 	payload := map[string]any{
 		"id":            asset.ID,
 		"kind":          asset.Kind,
@@ -406,7 +406,7 @@ func mediaAssetPayload(title string, asset media.Asset) map[string]any {
 		"updated_at":    asset.UpdatedAt,
 	}
 	if asset.State == media.StateReady && asset.Filename != "" {
-		payload["url"] = attachmentURL(title, asset.Filename)
+		payload["url"] = attachmentURL(userID, title, asset.Filename)
 	}
 	return payload
 }
@@ -439,8 +439,8 @@ func (r *uploadDeadlineReader) Read(p []byte) (int, error) {
 	return r.source.Read(p)
 }
 
-func attachmentURL(title, filename string) string {
-	return "/api/notes/" + url.PathEscape(title) + "/assets/" + url.PathEscape(filename)
+func attachmentURL(userID, title, filename string) string {
+	return "/api/user/" + url.PathEscape(userID) + "/notes/" + url.PathEscape(title) + "/assets/" + url.PathEscape(filename)
 }
 
 func validAttachmentFilename(filename string) bool { return store.ValidAssetFilename(filename) }

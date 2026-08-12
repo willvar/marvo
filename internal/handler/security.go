@@ -8,6 +8,7 @@ import (
 )
 
 func (d *Dependencies) allowAttempt(kind string, r *http.Request, limit int, window time.Duration) bool {
+	d = d.sharedSecurityRoot()
 	key := kind + ":" + directRemoteIP(r)
 	now := time.Now()
 	d.securityMu.Lock()
@@ -36,12 +37,14 @@ func (d *Dependencies) allowAttempt(kind string, r *http.Request, limit int, win
 }
 
 func (d *Dependencies) resetAttempts(kind string, r *http.Request) {
+	d = d.sharedSecurityRoot()
 	d.securityMu.Lock()
 	delete(d.rateLimits, kind+":"+directRemoteIP(r))
 	d.securityMu.Unlock()
 }
 
 func (d *Dependencies) rememberChallenge(challenge string, expiry int64) {
+	d = d.sharedSecurityRoot()
 	d.securityMu.Lock()
 	if d.challenges == nil {
 		d.challenges = make(map[string]int64)
@@ -57,6 +60,7 @@ func (d *Dependencies) rememberChallenge(challenge string, expiry int64) {
 }
 
 func (d *Dependencies) consumeChallenge(challenge string, expiry int64) bool {
+	d = d.sharedSecurityRoot()
 	d.securityMu.Lock()
 	defer d.securityMu.Unlock()
 	stored, ok := d.challenges[challenge]
@@ -65,6 +69,21 @@ func (d *Dependencies) consumeChallenge(challenge string, expiry int64) bool {
 	}
 	delete(d.challenges, challenge)
 	return true
+}
+
+func (d *Dependencies) hasChallenge(challenge string, expiry int64) bool {
+	d = d.sharedSecurityRoot()
+	d.securityMu.Lock()
+	defer d.securityMu.Unlock()
+	stored, ok := d.challenges[challenge]
+	return ok && stored == expiry && time.Now().Unix() <= stored
+}
+
+func (d *Dependencies) sharedSecurityRoot() *Dependencies {
+	if d.securityRoot != nil {
+		return d.securityRoot
+	}
+	return d
 }
 
 func directRemoteIP(r *http.Request) string {

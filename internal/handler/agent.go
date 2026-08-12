@@ -26,6 +26,7 @@ var errAgentModelUnavailable = errors.New("agent model is unavailable")
 
 type AgentDeps struct {
 	openCodeURL      string
+	upstreamBearer   string
 	ShuttingDown     <-chan struct{}
 	settingsStore    *store.AgentSettingsStore
 	personalization  *store.AgentPersonalizationStore
@@ -76,11 +77,29 @@ func NewAgentDeps(
 }
 
 func (d *AgentDeps) httpClient() *http.Client {
-	return &http.Client{Timeout: 0}
+	return &http.Client{Timeout: 0, Transport: agentUpstreamTransport{bearer: d.upstreamBearer}}
 }
 
 func (d *AgentDeps) jsonClient() *http.Client {
-	return &http.Client{Timeout: 5 * time.Minute}
+	return &http.Client{Timeout: 5 * time.Minute, Transport: agentUpstreamTransport{bearer: d.upstreamBearer}}
+}
+
+func (d *AgentDeps) SetUpstreamBearer(token string) {
+	d.upstreamBearer = strings.TrimSpace(token)
+}
+
+type agentUpstreamTransport struct {
+	bearer string
+}
+
+func (t agentUpstreamTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if t.bearer == "" {
+		return http.DefaultTransport.RoundTrip(request)
+	}
+	copy := request.Clone(request.Context())
+	copy.Header = request.Header.Clone()
+	copy.Header.Set("Authorization", "Bearer "+t.bearer)
+	return http.DefaultTransport.RoundTrip(copy)
 }
 
 func (d *AgentDeps) ProxyJSON(w http.ResponseWriter, r *http.Request) {

@@ -45,7 +45,7 @@ func (d *Dependencies) Apply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dev, _ := d.DeviceStore.FindByLocalDeviceID(body.LocalDeviceID); dev != nil && req == nil {
-		setDeviceCookie(w, r, dev.Token, d.DeviceStore.SignToken(dev.Token))
+		d.setDeviceCookie(w, r, dev.Token, d.DeviceStore.SignToken(dev.Token))
 		writeJSON(w, 200, map[string]any{"status": "approved", "device_id": dev.ID})
 		return
 	}
@@ -69,7 +69,7 @@ func (d *Dependencies) Token(w http.ResponseWriter, r *http.Request) {
 
 	dev, pending := d.DeviceStore.FindByLocalDeviceID(localDeviceID)
 	if dev != nil {
-		setDeviceCookie(w, r, dev.Token, d.DeviceStore.SignToken(dev.Token))
+		d.setDeviceCookie(w, r, dev.Token, d.DeviceStore.SignToken(dev.Token))
 		writeJSON(w, 200, map[string]any{"status": "approved", "device_id": dev.ID})
 		return
 	}
@@ -81,9 +81,9 @@ func (d *Dependencies) Token(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"status": "not_found"})
 }
 
-func setDeviceCookie(w http.ResponseWriter, r *http.Request, token string, sig string) {
+func (d *Dependencies) setDeviceCookie(w http.ResponseWriter, r *http.Request, token string, sig string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     "marvo_device",
+		Name:     userDeviceCookieName(d.UserID),
 		Value:    token + ":" + sig,
 		Path:     "/",
 		MaxAge:   86400 * 365,

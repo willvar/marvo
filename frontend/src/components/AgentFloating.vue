@@ -40,7 +40,7 @@ const pinned = ref(localStorage.getItem(PINNED_STORAGE_KEY) === 'true')
 const subtaskStack = ref<Array<{ id: string; title: string }>>([])
 const fabRef = ref<HTMLElement>()
 const persistentElements = computed(() => [() => fabRef.value || null])
-const hidden = computed(() => route.path === '/agent')
+const hidden = computed(() => route.name === 'user-agent')
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 0)
 const renderSidebar = computed(
   () =>

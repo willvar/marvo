@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { api } from '../sdk'
+import { api, userLoginRoute, workspaceRoute } from '../sdk'
 import { useRouter, useRoute } from 'vue-router'
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import {
   FileTextOutlined,
   SafetyCertificateOutlined,
@@ -15,10 +15,14 @@ const route = useRoute()
 const collapsed = ref(false)
 const menuOpen = ref(false)
 const dropdownRef = ref<HTMLElement>()
+const userID = computed(() => (typeof route.params.userId === 'string' ? route.params.userId : ''))
+const isUserAdmin = computed(() => !!userID.value)
+const adminTitle = computed(() => (isUserAdmin.value ? '设备审批' : '用户管理'))
+const adminHome = computed(() => (isUserAdmin.value ? workspaceRoute('/admin', userID.value) : '/admin'))
 
 function handleLogout() {
-  api.post('/api/auth/logout').catch(() => {})
-  router.push('/admin/login')
+  api.post(isUserAdmin.value ? '/api/auth/logout' : '/api/platform/auth/logout').catch(() => {})
+  router.push(isUserAdmin.value ? userLoginRoute({ admin: true }, userID.value) : '/admin/login')
 }
 
 function onDocClick(e: MouseEvent) {
@@ -36,13 +40,13 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
     <aside :class="['admin-sidebar', { collapsed }]">
       <div class="admin-sidebar-brand">
         <FileTextOutlined />
-        <span v-if="!collapsed">Marvo Admin</span>
+        <span v-if="!collapsed">{{ isUserAdmin ? '用户空间管理' : 'Marvo Admin' }}</span>
       </div>
 
       <nav class="admin-sidebar-nav">
-        <router-link to="/admin" :class="{ active: route.path.startsWith('/admin') }">
+        <router-link :to="adminHome" class="active">
           <SafetyCertificateOutlined />
-          <span v-if="!collapsed">设备审批</span>
+          <span v-if="!collapsed">{{ adminTitle }}</span>
         </router-link>
       </nav>
 
@@ -53,12 +57,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
 
     <div class="admin-main">
       <header class="admin-header">
-        <span class="admin-header-title">设备审批</span>
+        <span class="admin-header-title">{{ adminTitle }}</span>
         <div class="admin-header-user" ref="dropdownRef" @click="menuOpen = !menuOpen">
           <div class="admin-header-avatar">
             <UserOutlined />
           </div>
-          <span>管理员</span>
+          <span>{{ isUserAdmin ? '用户管理员' : '平台管理员' }}</span>
           <div v-if="menuOpen" class="admin-header-dropdown" @click.stop>
             <button @click="handleLogout">
               <LogoutOutlined />

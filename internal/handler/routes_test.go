@@ -1,58 +1,62 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
-	"marvo/internal/store"
+	"marvo/config"
+	"marvo/internal/control"
+	"marvo/internal/userspace"
 )
 
-func TestRoutesRegistered(t *testing.T) {
+func TestRoutesExposeOnlyPlatformControlAndUserScopedContent(t *testing.T) {
+	stateRoot := t.TempDir()
+	layout, err := userspace.OpenLayout(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlDB, err := control.Open(layout.ControlDatabase(), multiuserTestSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlDB.Close()
+	user, err := controlDB.CreateUser(context.Background(), "Routes", "routes-test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Server:  config.ServerConfig{StateDir: stateRoot, DataDir: t.TempDir(), SessionSecret: multiuserTestSecret},
+		Runtime: config.RuntimeConfig{URL: "http://runtime.invalid", Token: "runtime-token"},
+	}
+	spaces := NewSpaceRegistry(cfg, controlDB, layout, make(chan struct{}))
+	defer spaces.Close()
 	mux := http.NewServeMux()
+	RegisterRoutes(mux, &Dependencies{Config: cfg, Control: controlDB, Layout: layout, Spaces: spaces})
 
-	deps := &Dependencies{
-		AgentDeps:   NewAgentDeps("http://127.0.0.1:4096", make(chan struct{}), nil, nil, nil),
-		DeviceStore: store.NewDeviceStore(t.TempDir(), "test-secret"),
-	}
-	RegisterRoutes(mux, deps)
-
-	hasAuth := false
-	hasSSE := false
-	hasSend := false
-
-	for _, r := range []struct{ method, path string }{
-		{"POST", "/api/auth"},
-		{"GET", "/api/events"},
-		{"POST", "/api/send"},
-		{"GET", "/api/agent/settings"},
-		{"PUT", "/api/agent/settings"},
-		{"GET", "/api/agent/personalization"},
-		{"PUT", "/api/agent/personalization"},
+	for _, route := range []struct{ method, path string }{
+		{http.MethodGet, "/api/health"},
+		{http.MethodPost, "/api/platform/auth"},
+		{http.MethodGet, "/api/admin/users"},
+		{http.MethodGet, "/api/user/" + user.User.ID + "/events"},
+		{http.MethodPost, "/api/user/" + user.User.ID + "/send"},
+		{http.MethodGet, "/api/user/" + user.User.ID + "/agent/settings"},
 	} {
-		req, _ := http.NewRequest(r.method, r.path, nil)
-		_, pattern := mux.Handler(req)
-		if pattern != r.path && pattern == "" {
-			t.Errorf("no handler for %s %s", r.method, r.path)
-			continue
-		}
-		if r.path == "/api/auth" {
-			hasAuth = true
-		}
-		if r.path == "/api/events" {
-			hasSSE = true
-		}
-		if r.path == "/api/send" {
-			hasSend = true
+		request, _ := http.NewRequest(route.method, route.path, nil)
+		if _, pattern := mux.Handler(request); pattern == "" {
+			t.Errorf("no handler for %s %s", route.method, route.path)
 		}
 	}
-
-	if !hasAuth {
-		t.Error("missing POST /api/auth")
-	}
-	if !hasSSE {
-		t.Error("missing GET /api/events")
-	}
-	if !hasSend {
-		t.Error("missing POST /api/send")
+	for _, legacy := range []struct{ method, path string }{
+		{http.MethodPost, "/api/auth"},
+		{http.MethodGet, "/api/notes"},
+		{http.MethodGet, "/api/events"},
+		{http.MethodGet, "/api/agent/settings"},
+		{http.MethodGet, "/api/admin/devices"},
+	} {
+		request, _ := http.NewRequest(legacy.method, legacy.path, nil)
+		if _, pattern := mux.Handler(request); pattern != "" {
+			t.Errorf("legacy route still registered for %s %s as %q", legacy.method, legacy.path, pattern)
+		}
 	}
 }

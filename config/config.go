@@ -11,6 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
+
+	"marvo/internal/runtimeauth"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,11 +23,19 @@ type Config struct {
 	Auth     AuthConfig     `yaml:"auth"`
 	Log      LogConfig      `yaml:"log"`
 	OpenCode OpenCodeConfig `yaml:"opencode"`
+	Runtime  RuntimeConfig  `yaml:"runtime"`
+}
+
+type RuntimeConfig struct {
+	URL       string `yaml:"url"`
+	TokenFile string `yaml:"token_file"`
+	Token     string `yaml:"-"`
 }
 
 type OpenCodeConfig struct {
 	URL                    string `yaml:"url"`
 	GlobalInstructionsFile string `yaml:"global_instructions_file"`
+	LegacyHomeDir          string `yaml:"legacy_home_dir"`
 }
 
 func (c *Config) resolve() error {
@@ -38,36 +49,88 @@ func (c *Config) resolve() error {
 		c.Server.DataDir = "~/.marvo/data"
 	}
 	home, homeErr := os.UserHomeDir()
-	if strings.HasPrefix(c.Server.DataDir, "~/") {
-		if homeErr != nil || home == "" {
-			return errors.New("cannot expand server.data_dir because the user home directory is unavailable")
-		}
-		c.Server.DataDir = filepath.Join(home, c.Server.DataDir[2:])
+	var err error
+	c.Server.DataDir, err = expandHomePath(c.Server.DataDir, home, homeErr, "server.data_dir")
+	if err != nil {
+		return err
 	}
-	c.Server.DataDir = filepath.Clean(c.Server.DataDir)
-	if c.OpenCode.GlobalInstructionsFile == "" {
+	c.Server.DataDir, err = filepath.Abs(filepath.Clean(c.Server.DataDir))
+	if err != nil {
+		return fmt.Errorf("resolve server.data_dir: %w", err)
+	}
+	if c.Server.StateDir == "" {
+		if filepath.Base(c.Server.DataDir) == "data" {
+			c.Server.StateDir = filepath.Dir(c.Server.DataDir)
+		} else {
+			c.Server.StateDir = c.Server.DataDir + "-state"
+		}
+	}
+	c.Server.StateDir, err = expandHomePath(c.Server.StateDir, home, homeErr, "server.state_dir")
+	if err != nil {
+		return err
+	}
+	c.Server.StateDir, err = filepath.Abs(filepath.Clean(c.Server.StateDir))
+	if err != nil {
+		return fmt.Errorf("resolve server.state_dir: %w", err)
+	}
+	if samePath(c.Server.StateDir, c.Server.DataDir) {
+		return errors.New("server.state_dir must not be the legacy server.data_dir")
+	}
+	if c.Runtime.URL == "" {
+		c.Runtime.URL = "http://127.0.0.1:4097"
+	}
+	if err := validateHTTPURL(c.Runtime.URL); err != nil {
+		return fmt.Errorf("runtime.url: %w", err)
+	}
+	c.Runtime.URL = strings.TrimRight(c.Runtime.URL, "/")
+	if c.Runtime.TokenFile == "" {
+		c.Runtime.TokenFile = filepath.Join(c.Server.StateDir, "control", ".runtime-token")
+	}
+	c.Runtime.TokenFile, err = expandHomePath(c.Runtime.TokenFile, home, homeErr, "runtime.token_file")
+	if err != nil {
+		return err
+	}
+	c.Runtime.TokenFile, err = filepath.Abs(filepath.Clean(c.Runtime.TokenFile))
+	if err != nil {
+		return fmt.Errorf("resolve runtime.token_file: %w", err)
+	}
+	runtimeToken, err := runtimeauth.LoadOrCreateToken(c.Runtime.TokenFile)
+	if err != nil {
+		return fmt.Errorf("initialize runtime token: %w", err)
+	}
+	c.Runtime.Token = runtimeToken
+	if c.OpenCode.LegacyHomeDir == "" {
 		stateDir := strings.TrimSpace(os.Getenv("MARVO_OPENCODE_STATE_DIR"))
 		if stateDir == "" {
 			stateDir = "~/.marvo/opencode-state"
 		}
-		c.OpenCode.GlobalInstructionsFile = filepath.Join(stateDir, "home", ".config", "opencode", "AGENTS.md")
+		c.OpenCode.LegacyHomeDir = filepath.Join(stateDir, "home")
 	}
-	if strings.HasPrefix(c.OpenCode.GlobalInstructionsFile, "~/") {
-		if homeErr != nil || home == "" {
-			return errors.New("cannot expand opencode.global_instructions_file because the user home directory is unavailable")
-		}
-		c.OpenCode.GlobalInstructionsFile = filepath.Join(home, c.OpenCode.GlobalInstructionsFile[2:])
+	c.OpenCode.LegacyHomeDir, err = expandHomePath(c.OpenCode.LegacyHomeDir, home, homeErr, "opencode.legacy_home_dir")
+	if err != nil {
+		return err
 	}
-	c.OpenCode.GlobalInstructionsFile = filepath.Clean(c.OpenCode.GlobalInstructionsFile)
+	c.OpenCode.LegacyHomeDir, err = filepath.Abs(filepath.Clean(c.OpenCode.LegacyHomeDir))
+	if err != nil {
+		return fmt.Errorf("resolve opencode.legacy_home_dir: %w", err)
+	}
+	if c.OpenCode.GlobalInstructionsFile == "" {
+		c.OpenCode.GlobalInstructionsFile = filepath.Join(c.OpenCode.LegacyHomeDir, ".config", "opencode", "AGENTS.md")
+	}
+	c.OpenCode.GlobalInstructionsFile, err = expandHomePath(c.OpenCode.GlobalInstructionsFile, home, homeErr, "opencode.global_instructions_file")
+	if err != nil {
+		return err
+	}
+	c.OpenCode.GlobalInstructionsFile, err = filepath.Abs(filepath.Clean(c.OpenCode.GlobalInstructionsFile))
+	if err != nil {
+		return fmt.Errorf("resolve opencode.global_instructions_file: %w", err)
+	}
 	projectInstructions := filepath.Join(c.Server.DataDir, "AGENTS.md")
 	if samePath(c.OpenCode.GlobalInstructionsFile, projectInstructions) {
 		return errors.New("opencode.global_instructions_file must not overwrite the project AGENTS.md")
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
-	}
-	if err := validateOpenCodeURL(c.OpenCode.URL); err != nil {
-		return err
 	}
 	for _, origin := range c.Server.CORSOrigins {
 		parsed, err := url.Parse(origin)
@@ -85,7 +148,7 @@ func (c *Config) resolve() error {
 	}
 	if !requiresStrongCredentials {
 		if c.Server.SessionSecret == "" {
-			secret, err := loadOrCreateLocalSecret(c.Server.DataDir)
+			secret, err := loadOrCreateLocalSecret(c.Server.StateDir, c.Server.DataDir)
 			if err != nil {
 				return fmt.Errorf("initialize local session secret: %w", err)
 			}
@@ -97,10 +160,20 @@ func (c *Config) resolve() error {
 		return errors.New("server.session_secret must be an explicit random value of at least 32 characters for non-local access")
 	}
 	password := strings.TrimSpace(c.Auth.Password)
-	if len(password) < 12 || strings.EqualFold(password, "marvo") || strings.HasPrefix(password, "CHANGE_ME") {
+	if utf8.RuneCountInString(password) < 12 || strings.EqualFold(password, "marvo") || strings.HasPrefix(password, "CHANGE_ME") {
 		return errors.New("auth.password must be changed to a value of at least 12 characters for non-local access")
 	}
 	return nil
+}
+
+func expandHomePath(path, home string, homeErr error, field string) (string, error) {
+	if !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+	if homeErr != nil || home == "" {
+		return "", fmt.Errorf("cannot expand %s because the user home directory is unavailable", field)
+	}
+	return filepath.Join(home, path[2:]), nil
 }
 
 func samePath(left, right string) bool {
@@ -109,13 +182,13 @@ func samePath(left, right string) bool {
 	return leftErr == nil && rightErr == nil && leftAbs == rightAbs
 }
 
-func validateOpenCodeURL(raw string) error {
+func validateHTTPURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return errors.New("opencode.url must be an absolute http or https URL")
+		return errors.New("must be an absolute http or https URL")
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("opencode.url cannot contain a query or fragment")
+		return errors.New("cannot contain a query or fragment")
 	}
 	return nil
 }
@@ -129,11 +202,12 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func loadOrCreateLocalSecret(dataDir string) (string, error) {
-	if err := os.MkdirAll(dataDir, 0700); err != nil {
+func loadOrCreateLocalSecret(stateDir, legacyDataDir string) (string, error) {
+	controlDir := filepath.Join(stateDir, "control")
+	if err := os.MkdirAll(controlDir, 0700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dataDir, ".session-secret")
+	path := filepath.Join(controlDir, ".session-secret")
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return "", errors.New(".session-secret is not a regular file")
@@ -147,15 +221,40 @@ func loadOrCreateLocalSecret(dataDir string) (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
+	legacyPath := filepath.Join(legacyDataDir, ".session-secret")
+	if legacySecret, ok := readExistingSecret(legacyPath); ok {
+		if err := writeNewPrivateFile(path, []byte(legacySecret+"\n")); err != nil {
+			return "", err
+		}
+		return legacySecret, nil
+	}
 
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	secret := hex.EncodeToString(raw)
-	tmp, err := os.CreateTemp(dataDir, ".session-secret-*")
-	if err != nil {
+	if err := writeNewPrivateFile(path, []byte(secret+"\n")); err != nil {
 		return "", err
+	}
+	return secret, nil
+}
+
+func readExistingSecret(path string) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", false
+	}
+	raw, err := os.ReadFile(path)
+	secret := strings.TrimSpace(string(raw))
+	return secret, err == nil && len(secret) >= 32
+}
+
+func writeNewPrivateFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".session-secret-*")
+	if err != nil {
+		return err
 	}
 	tmpPath := tmp.Name()
 	cleanup := func() {
@@ -164,30 +263,31 @@ func loadOrCreateLocalSecret(dataDir string) (string, error) {
 	}
 	if err := tmp.Chmod(0600); err != nil {
 		cleanup()
-		return "", err
+		return err
 	}
-	if _, err := tmp.WriteString(secret + "\n"); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		cleanup()
-		return "", err
+		return err
 	}
 	if err := tmp.Sync(); err != nil {
 		cleanup()
-		return "", err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return err
 	}
-	return secret, nil
+	return nil
 }
 
 type ServerConfig struct {
 	Host          string   `yaml:"host"`
 	Port          int      `yaml:"port"`
+	StateDir      string   `yaml:"state_dir"`
 	DataDir       string   `yaml:"data_dir"`
 	SessionSecret string   `yaml:"session_secret"`
 	CORSOrigins   []string `yaml:"cors_origins"`

@@ -1,3 +1,5 @@
+import { scopedAPIPath } from './workspace'
+
 type Callback = (data: any) => void
 
 let es: EventSource | null = null
@@ -11,12 +13,12 @@ const subscribedNotes = new Set<string>()
 
 function eventsUrl(): string {
   const baseUrl = import.meta.env.VITE_API_BASE || ''
-  return `${baseUrl}/api/events?client_id=${encodeURIComponent(clientId)}`
+  return `${baseUrl}${scopedAPIPath('/api/events')}?client_id=${encodeURIComponent(clientId)}`
 }
 
 function sendUrl(): string {
   const baseUrl = import.meta.env.VITE_API_BASE || ''
-  return `${baseUrl}/api/send`
+  return `${baseUrl}${scopedAPIPath('/api/send')}`
 }
 
 function generateId(): string {

@@ -21,6 +21,7 @@ import {
   registerEditorPreparation,
   removeDraft,
   saveDraft,
+  workspaceRoute,
   type NoteDetail,
   type NoteDraft,
 } from '../../sdk'
@@ -334,7 +335,7 @@ async function persistContent(): Promise<boolean> {
         const conflict = error.data || {}
         if (conflict.code === 'note_instance_changed') {
           if (conflict.moved_to) {
-            await router.replace(`/note/${encodeURIComponent(conflict.moved_to)}`)
+            await router.replace(workspaceRoute(`/note/${encodeURIComponent(conflict.moved_to)}`))
           } else {
             orphanDraft.value = await saveCurrentAsOrphan(base, sentContent)
             orphanRemote.value = conflict.current || null
@@ -527,7 +528,7 @@ async function deleteNote() {
     await noteStore.deleteNote(serverBase.value.note.title, serverBase.value.instance_token)
     await removeDraft(serverBase.value.instance_token, branchId).catch(() => {})
     showDeleteConfirm.value = false
-    await router.push('/')
+    await router.push(workspaceRoute())
   } catch (error) {
     saveError.value = error instanceof Error ? error.message : '移到回收站失败'
     showDeleteConfirm.value = false
@@ -580,7 +581,9 @@ onBeforeUnmount(() => {
     <button v-if="missingDraft" class="admin-btn admin-btn-primary" @click="createMissingFromDraft">
       <FileAddOutlined aria-hidden="true" />用草稿创建「{{ title }}」
     </button>
-    <button class="admin-btn" @click="router.push('/')"><ArrowLeftOutlined aria-hidden="true" />返回笔记列表</button>
+    <button class="admin-btn" @click="router.push(workspaceRoute())">
+      <ArrowLeftOutlined aria-hidden="true" />返回笔记列表
+    </button>
   </div>
 
   <div v-else-if="loadError" class="editor-empty-state">

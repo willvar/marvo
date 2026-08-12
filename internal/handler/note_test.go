@@ -37,8 +37,8 @@ func TestValidAttachmentFilename(t *testing.T) {
 }
 
 func TestAttachmentURLEscapesPathSegments(t *testing.T) {
-	got := attachmentURL("中文 note", "my image #1.png")
-	want := "/api/notes/%E4%B8%AD%E6%96%87%20note/assets/my%20image%20%231.png"
+	got := attachmentURL("b8c42977-bc4e-4977-9e04-ef3926b53c6c", "中文 note", "my image #1.png")
+	want := "/api/user/b8c42977-bc4e-4977-9e04-ef3926b53c6c/notes/%E4%B8%AD%E6%96%87%20note/assets/my%20image%20%231.png"
 	if got != want {
 		t.Fatalf("attachmentURL() = %q, want %q", got, want)
 	}

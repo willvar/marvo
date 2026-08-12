@@ -1,4 +1,5 @@
 import { notifyUnauthorized } from './unauthorized'
+import { scopedAPIPath } from '../workspace'
 
 const BASE = (() => {
   try {
@@ -26,7 +27,7 @@ interface RequestOptions {
 }
 
 async function request(method: string, url: string, body?: unknown, opts?: RequestOptions) {
-  const fullUrl = `${BASE}${url}${queryString(opts?.params)}`
+  const fullUrl = `${BASE}${scopedAPIPath(url)}${queryString(opts?.params)}`
 
   const init: RequestInit = {
     method,

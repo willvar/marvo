@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"marvo/config"
-	"marvo/internal/collab"
+	webapp "marvo/frontend"
+	"marvo/internal/control"
 	"marvo/internal/handler"
-	"marvo/internal/media"
-	"marvo/internal/store"
+	"marvo/internal/userspace"
 	"marvo/shared/logger"
 )
 
@@ -30,91 +30,40 @@ func Execute() {
 	cfg := config.Load(*configPath)
 	logger.Init(cfg.Log.Level, cfg.Log.FilePath)
 
-	if err := os.MkdirAll(cfg.Server.DataDir, 0700); err != nil {
-		slog.Error("failed to create data directory", "error", err, "path", cfg.Server.DataDir)
-		os.Exit(1)
-	}
-	if err := handler.EnsureThemeFile(cfg.Server.DataDir); err != nil {
-		slog.Error("failed to initialize theme file", "error", err)
-		os.Exit(1)
-	}
-
-	noteStore := store.NewNoteStore(cfg.Server.DataDir)
-	mediaManager := media.NewManager(noteStore)
-	agentSettingsStore, err := store.NewAgentSettingsStore(cfg.Server.DataDir)
+	layout, err := userspace.OpenLayout(cfg.Server.StateDir)
 	if err != nil {
-		slog.Error("failed to load Agent settings", "error", err)
+		slog.Error("failed to initialize multi-user state layout", "error", err, "path", cfg.Server.StateDir)
 		os.Exit(1)
 	}
-	agentPersonalizationStore, err := store.NewAgentPersonalizationStore(cfg.Server.DataDir)
+	controlDB, err := control.Open(layout.ControlDatabase(), cfg.Server.SessionSecret)
 	if err != nil {
-		slog.Error("failed to load Agent personalization", "error", err)
+		slog.Error("failed to open platform control database", "error", err)
 		os.Exit(1)
 	}
-	agentGlobalPromptFile, err := store.NewAgentGlobalPromptFile(cfg.OpenCode.GlobalInstructionsFile)
-	if err != nil {
-		slog.Error("failed to initialize Agent global prompt file", "error", err, "path", cfg.OpenCode.GlobalInstructionsFile)
-		os.Exit(1)
-	}
-
-	hub := collab.NewHub()
-	mediaManager.SetChangeHandler(func(title string, asset media.Asset) {
-		hub.BroadcastToNote(title, "", store.MustJSON(map[string]any{
-			"action": "asset_changed",
-			"title":  title,
-			"asset":  asset,
-		}))
-	})
-
-	w, err := store.WatchNotes(cfg.Server.DataDir, func(title string) {
-		snapshot, snapshotErr := noteStore.Snapshot(title)
-		if snapshotErr != nil {
-			return
-		}
-		mediaManager.ReconcileNote(title, snapshot.InstanceToken)
-		hub.BroadcastToNote(title, "", store.MustJSON(map[string]any{
-			"action":           "note_changed",
-			"title":            title,
-			"note":             snapshot.Note,
-			"content":          snapshot.Content,
-			"content_revision": snapshot.ContentRevision,
-			"meta_revision":    snapshot.MetaRevision,
-			"instance_token":   snapshot.InstanceToken,
-		}))
-	}, func() {
-		hub.BroadcastAll(store.MustJSON(map[string]any{
-			"action": "note_list_changed",
-		}))
-	}, func() {
-		hub.BroadcastAll(store.MustJSON(map[string]any{
-			"action": "theme_changed",
-		}))
-	})
-	if err != nil {
-		slog.Error("failed to start file watcher", "error", err)
-		os.Exit(1)
-	}
-	defer w.Close()
-
+	defer controlDB.Close()
 	mux := http.NewServeMux()
 
 	shuttingDown := make(chan struct{})
+	spaces := handler.NewSpaceRegistry(cfg, controlDB, layout, shuttingDown)
+	defer spaces.Close()
 
 	deps := &handler.Dependencies{
-		Config:    cfg,
-		NoteStore: noteStore,
-		Hub:       hub,
-		Media:     mediaManager,
-		AgentDeps: handler.NewAgentDeps(
-			cfg.OpenCode.URL,
-			shuttingDown,
-			agentSettingsStore,
-			agentPersonalizationStore,
-			agentGlobalPromptFile,
-		),
-		DeviceStore: store.NewDeviceStore(cfg.Server.DataDir, cfg.Server.SessionSecret),
+		Config:  cfg,
+		Control: controlDB,
+		Layout:  layout,
+		Spaces:  spaces,
+		Legacy: userspace.LegacySources{
+			Workspace: cfg.Server.DataDir,
+			AgentHome: cfg.OpenCode.LegacyHomeDir,
+		},
 	}
 	handler.RegisterRoutes(mux, deps)
+	if frontend := webapp.Handler(); frontend != nil {
+		mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		})
+		mux.Handle("/", frontend)
+	}
 
 	var app http.Handler = mux
 	app = corsMiddleware(cfg.Server.CORSOrigins)(app)
@@ -146,16 +95,11 @@ func Execute() {
 
 	slog.Info("shutting down...")
 	close(shuttingDown)
-	mediaManager.Close()
-	hub.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("server shutdown error", "error", err)
-	}
-	if err := w.Close(); err != nil {
-		slog.Error("failed to close file watcher", "error", err)
 	}
 }
 

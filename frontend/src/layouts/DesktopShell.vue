@@ -14,6 +14,8 @@ import {
   DEFAULT_FONT_SIZE,
   DEFAULT_ACCENT_COLOR,
   type ThemeFile,
+  userLoginRoute,
+  workspaceRoute,
 } from '../sdk'
 import { useRoute, useRouter } from 'vue-router'
 import { ref, onMounted, onBeforeUnmount, computed, defineAsyncComponent, nextTick, watch } from 'vue'
@@ -138,21 +140,21 @@ const currentNoteInfo = computed(() => {
 
 const headerTitle = computed(() => {
   if (currentNoteInfo.value) return currentNoteInfo.value.title
-  if (route.path === '/agent') return '智能体对话'
-  if (route.path === '/trash') return '回收站'
+  if (route.name === 'user-agent') return '智能体对话'
+  if (route.name === 'user-trash') return '回收站'
   return ''
 })
-const isAgentPage = computed(() => route.path === '/agent')
+const isAgentPage = computed(() => route.name === 'user-agent')
 
 function handleHeaderAgentAction() {
   if (isAgentPage.value) openAgentSettings()
-  else void router.push('/agent')
+  else void router.push(workspaceRoute('/agent'))
 }
 
 onMounted(async () => {
   await auth.check()
   if (!auth.isAuthenticated) {
-    router.replace('/login')
+    router.replace(userLoginRoute())
     return
   }
   loadTheme()
@@ -173,7 +175,7 @@ on('theme_changed', () => loadTheme())
 async function openNote(title: string) {
   if (isCompact.value) siderCollapsed.value = true
   if (currentNoteTitle.value === title) return
-  await router.push(`/note/${encodeURIComponent(title)}`)
+  await router.push(workspaceRoute(`/note/${encodeURIComponent(title)}`))
   searchQuery.value = ''
 }
 
@@ -229,7 +231,7 @@ async function createSearchedNote(name: string) {
   searchError.value = ''
   try {
     const note = await noteStore.createNote(title)
-    await router.push(`/note/${encodeURIComponent(note.note.title)}`)
+    await router.push(workspaceRoute(`/note/${encodeURIComponent(note.note.title)}`))
     searchQuery.value = ''
     searchResults.value = []
   } catch (error) {
@@ -296,7 +298,7 @@ async function confirmTitle() {
   try {
     await prepareNoteForAgent(oldTitle)
     const moved = await noteStore.renameNote(oldTitle, newTitle, noteStore.currentNote.instance_token)
-    await router.replace(`/note/${encodeURIComponent(moved.note.title)}`)
+    await router.replace(workspaceRoute(`/note/${encodeURIComponent(moved.note.title)}`))
   } catch (error) {
     headerError.value = error instanceof Error ? error.message : '标题修改失败'
   }
@@ -310,7 +312,7 @@ async function confirmTitle() {
       <div class="dsh-brand">
         <RouterLink
           class="dsh-logo"
-          to="/"
+          :to="workspaceRoute()"
           title="返回首页"
           aria-label="返回首页"
           @click="isCompact && setSiderCollapsed(true)"
@@ -369,7 +371,7 @@ async function confirmTitle() {
       </nav>
 
       <div class="dsh-footer">
-        <button class="dsh-footer-button" @click="router.push('/trash')">
+        <button class="dsh-footer-button" @click="router.push(workspaceRoute('/trash'))">
           <DeleteOutlined aria-hidden="true" />
           回收站
         </button>

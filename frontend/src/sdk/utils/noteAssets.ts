@@ -1,3 +1,5 @@
+import { scopedAPIPath } from '../workspace'
+
 function noteAssetFilename(src: string) {
   if (!src || /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(src)) return null
 
@@ -27,7 +29,7 @@ export function toNoteAssetUrl(src: string, title: string) {
   const filename = noteAssetFilename(src)
   if (!filename) return src
 
-  return `/api/notes/${encodeURIComponent(title)}/assets/${encodeURIComponent(filename)}`
+  return scopedAPIPath(`/api/notes/${encodeURIComponent(title)}/assets/${encodeURIComponent(filename)}`)
 }
 
 export function toRelativeAssetPath(filename: string) {

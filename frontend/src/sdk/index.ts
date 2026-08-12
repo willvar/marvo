@@ -7,6 +7,7 @@ export {
   type SSEEvent,
 } from './api/agentApi'
 export { setUnauthorizedHandler } from './api/unauthorized'
+export { currentUserID, workspaceRoute, userLoginRoute } from './workspace'
 export { connect, disconnect, on, subscribe, unsubscribe } from './collab'
 export { type NoteInfo, type NoteDetail, type SearchResult, type MediaAsset, type TrashEntry } from './types'
 export {

@@ -3,7 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { Field } from '@ark-ui/vue/field'
-import { ApiError, type TrashEntry } from '../../sdk'
+import { ApiError, workspaceRoute, type TrashEntry } from '../../sdk'
 import { useNoteStore } from '../../stores/note'
 import { CheckOutlined, CloseOutlined, DeleteOutlined, RollbackOutlined } from '@ant-design/icons-vue'
 
@@ -43,7 +43,7 @@ async function restore(entry: TrashEntry) {
   try {
     const note = await noteStore.restoreTrash(entry.id, title)
     restoringID.value = ''
-    await router.push(`/note/${encodeURIComponent(note.note.title)}`)
+    await router.push(workspaceRoute(`/note/${encodeURIComponent(note.note.title)}`))
   } catch (cause) {
     if (cause instanceof ApiError && cause.status === 409) {
       error.value = '该标题已存在。请填写一个新标题；恢复不会覆盖现有笔记。'

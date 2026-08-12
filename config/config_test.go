@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,6 +11,7 @@ func TestPublicCORSOriginRequiresStrongCredentialsBehindLoopbackProxy(t *testing
 	cfg := Config{
 		Server: ServerConfig{
 			Host:          "127.0.0.1",
+			StateDir:      filepath.Join(t.TempDir(), "state"),
 			DataDir:       t.TempDir(),
 			SessionSecret: "",
 			CORSOrigins:   []string{"https://marvo.example.com"},
@@ -30,9 +32,10 @@ func TestPublicCORSOriginRequiresStrongCredentialsBehindLoopbackProxy(t *testing
 
 func TestLocalDevelopmentSecretIsCreatedPrivatelyAndReused(t *testing.T) {
 	dataDir := t.TempDir()
+	stateDir := filepath.Join(t.TempDir(), "state")
 	newConfig := func() Config {
 		return Config{
-			Server: ServerConfig{Host: "127.0.0.1", DataDir: dataDir, CORSOrigins: []string{"http://localhost:5080"}},
+			Server: ServerConfig{Host: "127.0.0.1", StateDir: stateDir, DataDir: dataDir, CORSOrigins: []string{"http://localhost:5080"}},
 			Auth:   AuthConfig{Password: "marvo"}, OpenCode: OpenCodeConfig{URL: "http://127.0.0.1:4096"},
 		}
 	}
@@ -43,7 +46,7 @@ func TestLocalDevelopmentSecretIsCreatedPrivatelyAndReused(t *testing.T) {
 	if len(first.Server.SessionSecret) < 32 {
 		t.Fatalf("generated secret is too short: %q", first.Server.SessionSecret)
 	}
-	path := filepath.Join(dataDir, ".session-secret")
+	path := filepath.Join(stateDir, "control", ".session-secret")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat(.session-secret) error = %v", err)
@@ -60,11 +63,34 @@ func TestLocalDevelopmentSecretIsCreatedPrivatelyAndReused(t *testing.T) {
 	}
 }
 
+func TestLegacyLocalSecretIsCopiedWithoutChangingIt(t *testing.T) {
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(t.TempDir(), "state")
+	legacySecret := "legacy-session-secret-that-is-long-enough"
+	if err := os.WriteFile(filepath.Join(dataDir, ".session-secret"), []byte(legacySecret+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		Server:   ServerConfig{Host: "127.0.0.1", StateDir: stateDir, DataDir: dataDir},
+		Auth:     AuthConfig{Password: "marvo"},
+		OpenCode: OpenCodeConfig{URL: "http://127.0.0.1:4096"},
+	}
+	if err := cfg.resolve(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.SessionSecret != legacySecret {
+		t.Fatalf("session secret = %q", cfg.Server.SessionSecret)
+	}
+	if raw, err := os.ReadFile(filepath.Join(stateDir, "control", ".session-secret")); err != nil || strings.TrimSpace(string(raw)) != legacySecret {
+		t.Fatalf("copied secret = %q, error = %v", raw, err)
+	}
+}
+
 func TestOpenCodeGlobalInstructionsPathUsesStateDirectory(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	t.Setenv("MARVO_OPENCODE_STATE_DIR", stateDir)
 	cfg := Config{
-		Server:   ServerConfig{Host: "127.0.0.1", DataDir: t.TempDir()},
+		Server:   ServerConfig{Host: "127.0.0.1", StateDir: filepath.Join(t.TempDir(), "marvo"), DataDir: t.TempDir()},
 		Auth:     AuthConfig{Password: "marvo"},
 		OpenCode: OpenCodeConfig{URL: "http://127.0.0.1:4096"},
 	}
@@ -80,7 +106,7 @@ func TestOpenCodeGlobalInstructionsPathUsesStateDirectory(t *testing.T) {
 func TestOpenCodeGlobalInstructionsCannotReplaceProjectRules(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := Config{
-		Server: ServerConfig{Host: "127.0.0.1", DataDir: dataDir},
+		Server: ServerConfig{Host: "127.0.0.1", StateDir: filepath.Join(t.TempDir(), "state"), DataDir: dataDir},
 		Auth:   AuthConfig{Password: "marvo"},
 		OpenCode: OpenCodeConfig{
 			URL:                    "http://127.0.0.1:4096",
