@@ -10,6 +10,7 @@ import {
   SafetyCertificateOutlined,
   SendOutlined,
 } from '@ant-design/icons-vue'
+import { QrcodeSvg } from 'qrcode.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -161,7 +162,18 @@ async function copyTOTPSecret() {
         </form>
         <form v-else class="login-form" @submit.prevent="verifyTOTP">
           <div v-if="totpSetup" class="login-totp-setup">
-            <p>首次登录，请先把以下密钥添加到身份验证器。</p>
+            <p>首次登录，请使用身份验证器扫描二维码。</p>
+            <div class="login-totp-qr" role="img" aria-label="身份验证器设置二维码">
+              <QrcodeSvg
+                :value="totpSetup.uri"
+                :size="192"
+                :margin="2"
+                level="M"
+                background="#ffffff"
+                foreground="#111111"
+              />
+            </div>
+            <p class="login-totp-fallback">无法扫码时，可手动复制设置密钥。</p>
             <div class="login-totp-secret">
               <code>{{ totpSetup.secret }}</code>
               <button type="button" class="admin-btn" @click="copyTOTPSecret">
@@ -220,6 +232,26 @@ async function copyTOTPSecret() {
 }
 .login-totp-setup p {
   margin: 0 0 8px;
+}
+.login-totp-qr {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  margin: 12px auto;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--marvo-radius);
+  background: #fff;
+}
+.login-totp-qr :deep(svg) {
+  display: block;
+  width: min(192px, 100%);
+  height: auto;
+}
+.login-totp-fallback {
+  color: var(--text-tertiary);
+  text-align: center;
 }
 .login-totp-secret {
   display: flex;

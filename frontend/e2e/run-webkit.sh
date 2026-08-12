@@ -89,7 +89,7 @@ fi
 
 cd /work/frontend
 if [[ $# -eq 0 ]]; then
-  set -- e2e/core-flow.spec.ts --grep '核心笔记流程在响应式布局中安全工作'
+  set -- e2e/core-flow.spec.ts e2e/auth.spec.ts
 fi
 E2E_REUSE_SERVERS=1 npx playwright test "$@" --project=webkit-portrait
 CONTAINER_SCRIPT

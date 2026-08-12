@@ -42,6 +42,7 @@
     "markdown-it": "^14.1.1",
     "node-diff3": "^3.2.1",
     "pinia": "^2.3.0",
+    "qrcode.vue": "^3.10.0",
     "sass": "^1.100.0",
     "tiptap-markdown": "^0.9.0",
     "uuid": "^14.0.0",
