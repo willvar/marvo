@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { useAgentStore } from '../stores/agent'
-import { useUIPreferencesStore } from '../stores/uiPreferences'
+import { AGENT_DISPLAY_MODE_STORAGE_KEY, useUIPreferencesStore } from '../stores/uiPreferences'
 import { formatAgentError, isAbortedAgentError, prepareNoteForAgent, type AgentFilePartInput } from '../sdk'
 import AgentAssistantSurface from './AgentAssistantSurface.vue'
 import type { XPromptItem } from './x'
@@ -39,6 +39,7 @@ const assistantSurface = ref<{ clear: () => void } | null>(null)
 const pinned = ref(localStorage.getItem(PINNED_STORAGE_KEY) === 'true')
 const subtaskStack = ref<Array<{ id: string; title: string }>>([])
 const fabRef = ref<HTMLElement>()
+const floatingDialogIDs = { content: 'agent-floating-panel' }
 const persistentElements = computed(() => [() => fabRef.value || null])
 const hidden = computed(() => route.name === 'user-agent')
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 0)
@@ -193,6 +194,10 @@ function onResizeWin() {
   isMobile.value = window.innerWidth <= 768
 }
 
+function onStorage(event: StorageEvent) {
+  if (event.key === AGENT_DISPLAY_MODE_STORAGE_KEY) uiPreferences.syncAgentAssistantDisplayMode()
+}
+
 onMounted(() => {
   onResizeWin()
   agent.connect()
@@ -203,11 +208,13 @@ onMounted(() => {
       if (!hidden.value) error.value = formatAgentError(cause)
     })
   window.addEventListener('resize', onResizeWin)
+  window.addEventListener('storage', onStorage)
 })
 
 onBeforeUnmount(() => {
   stopResize?.()
   window.removeEventListener('resize', onResizeWin)
+  window.removeEventListener('storage', onStorage)
   agent.disconnect()
 })
 
@@ -406,6 +413,7 @@ const panelStyle = computed(() => ({
   <template v-if="renderFloating">
     <Dialog.Root
       :open="open"
+      :ids="floatingDialogIDs"
       lazy-mount
       unmount-on-exit
       :modal="isMobile"

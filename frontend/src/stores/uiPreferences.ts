@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 
 export type AgentAssistantDisplayMode = 'floating' | 'sidebar'
 
-const AGENT_DISPLAY_MODE_STORAGE_KEY = 'marvo.ui.agentAssistantDisplayMode'
+export const AGENT_DISPLAY_MODE_STORAGE_KEY = 'marvo.ui.agentAssistantDisplayMode'
 
 function storedAgentDisplayMode(): AgentAssistantDisplayMode {
   if (typeof window === 'undefined') return 'floating'
@@ -19,6 +19,10 @@ export const useUIPreferencesStore = defineStore('ui-preferences', {
   }),
 
   actions: {
+    syncAgentAssistantDisplayMode() {
+      this.agentAssistantDisplayMode = storedAgentDisplayMode()
+    },
+
     setAgentAssistantDisplayMode(mode: AgentAssistantDisplayMode) {
       this.agentAssistantDisplayMode = mode
       try {

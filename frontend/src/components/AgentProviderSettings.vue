@@ -23,6 +23,7 @@ import {
   type AgentProviderPromptOption,
 } from '../sdk'
 import XActionsCopy from './x/XActionsCopy.vue'
+import { useRetainedDialog } from '../composables/useRetainedDialog'
 
 const props = defineProps<{ active: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -36,12 +37,14 @@ const error = ref('')
 const notice = ref('')
 const selectedProviderID = ref('')
 const providerValues = ref<string[]>([])
+const providerInputValue = ref('')
 const selectedMethodIndex = ref('')
 const methodInputs = ref<Record<string, string>>({})
 const apiKey = ref('')
 const attempt = ref<AgentProviderOAuthAttempt | null>(null)
 const authorizationCode = ref('')
-const disconnectTarget = ref<AgentProvider | null>(null)
+const disconnectDialog = useRetainedDialog<AgentProvider>()
+const { open: disconnectOpen, payload: disconnectTarget } = disconnectDialog
 let pollingTimer: ReturnType<typeof setTimeout> | undefined
 let loadSequence = 0
 
@@ -173,7 +176,12 @@ function selectProvider(provider: AgentProvider) {
 }
 
 function handleProviderComboboxOpen(details: { open: boolean }) {
-  if (details.open) setProviderItems(providerOptions.value)
+  if (details.open) {
+    setProviderItems(providerOptions.value)
+    return
+  }
+  providerInputValue.value = ''
+  filterProviders('')
 }
 
 function resetMethodFields() {
@@ -347,6 +355,18 @@ function dismissAttempt() {
   clearAttempt()
 }
 
+function requestDisconnect(provider: AgentProvider) {
+  disconnectDialog.show(provider)
+}
+
+function updateDisconnectOpen(open: boolean) {
+  disconnectDialog.updateOpen(open, !operating.value)
+}
+
+function completeDisconnectClose() {
+  disconnectDialog.clearAfterExit()
+}
+
 async function confirmDisconnect() {
   const provider = disconnectTarget.value
   if (!provider || operating.value) return
@@ -354,13 +374,13 @@ async function confirmDisconnect() {
   error.value = ''
   try {
     await api.delete(`/api/agent/providers/${encodeURIComponent(provider.id)}`)
-    disconnectTarget.value = null
+    disconnectDialog.close()
     notice.value = `${provider.name} 已断开。`
     await loadProviders()
     emit('changed')
   } catch (cause) {
     error.value = errorMessage(cause, '断开提供商失败')
-    disconnectTarget.value = null
+    disconnectDialog.close()
   } finally {
     operating.value = false
   }
@@ -388,7 +408,7 @@ onBeforeUnmount(stopPolling)
       <section class="provider-list-section">
         <div class="provider-list-heading">
           <div>
-            <h4>提供商</h4>
+            <h2>提供商</h2>
             <p>连接和断开操作立即生效，模型列表会自动刷新，无需另行保存。</p>
           </div>
           <button type="button" class="provider-refresh" :disabled="loading" @click="loadProviders">
@@ -403,7 +423,7 @@ onBeforeUnmount(stopPolling)
         <section class="provider-connected-section">
           <div class="provider-subsection-heading">
             <div>
-              <h5>已连接提供商</h5>
+              <h3>已连接提供商</h3>
               <p>选择一个提供商可查看连接状态或断开凭据。</p>
             </div>
             <span>{{ connectedProviders.length }} 个</span>
@@ -423,7 +443,7 @@ onBeforeUnmount(stopPolling)
                 class="admin-btn provider-connected-disconnect"
                 :disabled="operating || attemptPending"
                 :aria-label="`断开 ${provider.name}`"
-                @click="disconnectTarget = provider"
+                @click="requestDisconnect(provider)"
               >
                 <DeleteOutlined aria-hidden="true" />
                 <span>断开</span>
@@ -439,11 +459,13 @@ onBeforeUnmount(stopPolling)
         </div>
         <Combobox.Root
           v-model="providerValues"
+          v-model:input-value="providerInputValue"
           :collection="providerCollection"
           :disabled="providerOptions.length === 0 || operating || attemptPending"
           :positioning="{ placement: 'bottom-start', sameWidth: true }"
           input-behavior="autohighlight"
           open-on-click
+          selection-behavior="clear"
           @input-value-change="filterProviders($event.inputValue)"
           @open-change="handleProviderComboboxOpen"
         >
@@ -664,10 +686,11 @@ onBeforeUnmount(stopPolling)
     </template>
 
     <Dialog.Root
-      :open="!!disconnectTarget"
+      :open="disconnectOpen"
       lazy-mount
       unmount-on-exit
-      @update:open="!$event && !operating && (disconnectTarget = null)"
+      @exit-complete="completeDisconnectClose"
+      @update:open="updateDisconnectOpen"
     >
       <Teleport to="body">
         <Dialog.Backdrop class="dialog-backdrop provider-confirm-backdrop" />
@@ -703,7 +726,7 @@ onBeforeUnmount(stopPolling)
 
 <style lang="scss" scoped>
 .provider-settings {
-  min-height: 100%;
+  min-height: 0;
   color: var(--text-primary);
 }
 .provider-loading {
@@ -713,6 +736,9 @@ onBeforeUnmount(stopPolling)
   align-items: center;
   justify-content: center;
   gap: 14px;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  background: var(--bg-primary);
   color: var(--text-muted);
   font-size: var(--marvo-type-13);
 }
@@ -722,6 +748,9 @@ onBeforeUnmount(stopPolling)
 }
 .provider-list-section {
   padding: 22px 24px;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  background: var(--bg-primary);
 }
 .provider-list-heading,
 .provider-detail-title,
@@ -749,10 +778,10 @@ onBeforeUnmount(stopPolling)
   justify-content: space-between;
   gap: 12px;
 }
-.provider-subsection-heading h5 {
+.provider-subsection-heading h3 {
   margin: 0 0 4px;
   color: var(--text-primary);
-  font-size: var(--marvo-type-13);
+  font-size: var(--marvo-type-14);
 }
 .provider-subsection-heading p {
   margin: 0;
@@ -764,7 +793,10 @@ onBeforeUnmount(stopPolling)
   color: var(--text-muted);
   font-size: var(--marvo-type-11);
 }
-.provider-list-heading h4,
+.provider-list-heading h2 {
+  margin: 0 0 4px;
+  font-size: var(--marvo-type-16);
+}
 .provider-detail-title h4,
 .provider-oauth-card h4 {
   margin: 0 0 4px;

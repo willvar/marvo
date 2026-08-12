@@ -6,6 +6,7 @@ import { Field } from '@ark-ui/vue/field'
 import { ApiError, workspaceRoute, type TrashEntry } from '../../sdk'
 import { useNoteStore } from '../../stores/note'
 import { CheckOutlined, CloseOutlined, DeleteOutlined, RollbackOutlined } from '@ant-design/icons-vue'
+import { useRetainedDialog } from '../../composables/useRetainedDialog'
 
 const noteStore = useNoteStore()
 const router = useRouter()
@@ -14,7 +15,8 @@ const error = ref('')
 const restoringID = ref('')
 const deletingID = ref('')
 const emptying = ref(false)
-const confirmation = ref<{ kind: 'delete'; entry: TrashEntry } | { kind: 'empty' } | null>(null)
+const confirmationDialog = useRetainedDialog<{ kind: 'delete'; entry: TrashEntry } | { kind: 'empty'; count: number }>()
+const { open: confirmationOpen, payload: confirmation } = confirmationDialog
 const form = reactive({ title: '' })
 
 onMounted(async () => {
@@ -54,18 +56,22 @@ async function restore(entry: TrashEntry) {
 }
 
 function requestPermanentDelete(entry: TrashEntry) {
-  confirmation.value = { kind: 'delete', entry }
+  confirmationDialog.show({ kind: 'delete', entry })
   error.value = ''
 }
 
 function requestEmptyTrash() {
   if (!noteStore.trash.length) return
-  confirmation.value = { kind: 'empty' }
+  confirmationDialog.show({ kind: 'empty', count: noteStore.trash.length })
   error.value = ''
 }
 
 function updateConfirmationOpen(open: boolean) {
-  if (!open && !deletingID.value && !emptying.value) confirmation.value = null
+  confirmationDialog.updateOpen(open, !deletingID.value && !emptying.value)
+}
+
+function completeConfirmationClose() {
+  confirmationDialog.clearAfterExit()
 }
 
 async function confirmPermanentAction() {
@@ -77,7 +83,7 @@ async function confirmPermanentAction() {
   try {
     if (target.kind === 'delete') await noteStore.permanentlyDeleteTrash(target.entry.id)
     else await noteStore.emptyTrash()
-    confirmation.value = null
+    confirmationDialog.close()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : target.kind === 'delete' ? '永久删除失败' : '清空失败'
   } finally {
@@ -154,10 +160,11 @@ function formatTime(value: string) {
     </div>
 
     <Dialog.Root
-      :open="!!confirmation"
+      :open="confirmationOpen"
       lazy-mount
       unmount-on-exit
       :close-on-interact-outside="!deletingID && !emptying"
+      @exit-complete="completeConfirmationClose"
       @update:open="updateConfirmationOpen"
     >
       <Teleport to="body">
@@ -175,7 +182,7 @@ function formatTime(value: string) {
                 {{
                   confirmation?.kind === 'delete'
                     ? `「${confirmation.entry.title}」及其媒体将被永久删除，此操作无法恢复。`
-                    : `回收站中的 ${noteStore.trash.length} 篇笔记及其媒体将被永久删除，此操作无法恢复。`
+                    : `回收站中的 ${confirmation?.count ?? 0} 篇笔记及其媒体将被永久删除，此操作无法恢复。`
                 }}
               </p>
               <p v-if="error" class="trash-error trash-confirm-error" role="alert">{{ error }}</p>
@@ -184,7 +191,7 @@ function formatTime(value: string) {
                   type="button"
                   class="admin-btn"
                   :disabled="!!deletingID || emptying"
-                  @click="confirmation = null"
+                  @click="confirmationDialog.close"
                 >
                   <CloseOutlined aria-hidden="true" />取消
                 </button>

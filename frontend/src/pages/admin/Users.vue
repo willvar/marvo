@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons-vue'
 import { api, ApiError } from '../../sdk'
 import { useRouter } from 'vue-router'
+import { useRetainedDialog } from '../../composables/useRetainedDialog'
 
 interface PlatformUser {
   id: string
@@ -44,7 +45,8 @@ const createName = ref('')
 const createPassword = ref('')
 const creating = ref(false)
 const createError = ref('')
-const action = ref<{ kind: 'status' | 'credentials' | 'migration'; user: PlatformUser } | null>(null)
+const actionDialog = useRetainedDialog<{ kind: 'status' | 'credentials' | 'migration'; user: PlatformUser }>()
+const { open: actionOpen, payload: action } = actionDialog
 const actionPassword = ref('')
 const actionBusy = ref(false)
 const actionError = ref('')
@@ -88,6 +90,13 @@ function updateCreateOpen(open: boolean) {
   if (!open && !creating.value) createOpen.value = false
 }
 
+function completeCreateClose() {
+  if (createOpen.value) return
+  createName.value = ''
+  createPassword.value = ''
+  createError.value = ''
+}
+
 async function createUser() {
   if (!createValid.value || creating.value) return
   creating.value = true
@@ -109,23 +118,29 @@ async function createUser() {
 function beginStatus(user: PlatformUser) {
   actionPassword.value = ''
   actionError.value = ''
-  action.value = { kind: 'status', user }
+  actionDialog.show({ kind: 'status', user })
 }
 
 function beginCredentials(user: PlatformUser) {
   actionPassword.value = ''
   actionError.value = ''
-  action.value = { kind: 'credentials', user }
+  actionDialog.show({ kind: 'credentials', user })
 }
 
 function beginMigration(user: PlatformUser) {
   actionPassword.value = ''
   actionError.value = ''
-  action.value = { kind: 'migration', user }
+  actionDialog.show({ kind: 'migration', user })
 }
 
 function updateActionOpen(open: boolean) {
-  if (!open && !actionBusy.value) action.value = null
+  actionDialog.updateOpen(open, !actionBusy.value)
+}
+
+function completeActionClose() {
+  if (!actionDialog.clearAfterExit()) return
+  actionPassword.value = ''
+  actionError.value = ''
 }
 
 async function confirmAction() {
@@ -152,7 +167,7 @@ async function confirmAction() {
             })
       users.value = users.value.map((user) => (user.id === data.user.id ? data.user : user))
     }
-    action.value = null
+    actionDialog.close()
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : '操作失败'
   } finally {
@@ -175,7 +190,7 @@ async function copyWorkspaceURL(user: PlatformUser) {
 function statusLabel(status: PlatformUser['status']) {
   if (status === 'active') return '可用'
   if (status === 'disabled') return '已停用'
-  return '待设置验证器'
+  return '可用'
 }
 
 function fmt(value: string) {
@@ -269,7 +284,13 @@ function fmt(value: string) {
       </tbody>
     </table>
 
-    <Dialog.Root :open="createOpen" lazy-mount unmount-on-exit @update:open="updateCreateOpen">
+    <Dialog.Root
+      :open="createOpen"
+      lazy-mount
+      unmount-on-exit
+      @exit-complete="completeCreateClose"
+      @update:open="updateCreateOpen"
+    >
       <Teleport to="body">
         <Dialog.Backdrop class="dialog-backdrop" />
         <Dialog.Positioner class="dialog-positioner">
@@ -291,7 +312,7 @@ function fmt(value: string) {
                   type="password"
                   autocomplete="new-password"
                 />
-                <Field.HelperText>至少 12 个字符。用户首次进入管理页时会绑定身份验证器。</Field.HelperText>
+                <Field.HelperText>至少 12 个字符。用户可直接登录，之后自行选择是否绑定身份验证器。</Field.HelperText>
               </Field.Root>
               <p v-if="createError" class="login-error" role="alert">{{ createError }}</p>
               <div class="dialog-footer">
@@ -306,7 +327,13 @@ function fmt(value: string) {
       </Teleport>
     </Dialog.Root>
 
-    <Dialog.Root :open="!!action" lazy-mount unmount-on-exit @update:open="updateActionOpen">
+    <Dialog.Root
+      :open="actionOpen"
+      lazy-mount
+      unmount-on-exit
+      @exit-complete="completeActionClose"
+      @update:open="updateActionOpen"
+    >
       <Teleport to="body">
         <Dialog.Backdrop class="dialog-backdrop" />
         <Dialog.Positioner class="dialog-positioner">
@@ -326,7 +353,7 @@ function fmt(value: string) {
             <form class="dialog-body platform-user-form" @submit.prevent="confirmAction">
               <p class="admin-confirm-copy">
                 <template v-if="action.kind === 'credentials'">
-                  为「{{ action.user.name }}」设置新密码并重新绑定身份验证器。所有现有管理会话将立即失效。
+                  为「{{ action.user.name }}」设置新密码并解绑其身份验证器。所有现有管理会话将立即失效。
                 </template>
                 <template v-else-if="action.kind === 'migration'">
                   把旧版单用户笔记、回收站、设置、已批准设备以及智能体会话和凭据迁移到「{{

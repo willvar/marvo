@@ -4,13 +4,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { api, currentUserID, userLoginRoute, workspaceRoute } from '../../sdk'
 import {
-  CopyOutlined,
   FileTextOutlined,
+  LeftOutlined,
   LoginOutlined,
   SafetyCertificateOutlined,
   SendOutlined,
 } from '@ant-design/icons-vue'
-import { QrcodeSvg } from 'qrcode.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -23,8 +22,6 @@ const error = ref('')
 const password = ref('')
 const challengeToken = ref('')
 const verificationCode = ref('')
-const totpSetup = ref<{ secret: string; uri: string } | null>(null)
-const copied = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let polling = false
 
@@ -80,14 +77,23 @@ async function verifyPassword() {
   error.value = ''
   try {
     const { data } = await api.post('/api/auth/verify', { password: password.value })
+    if (data.authenticated) {
+      await enterUserAdmin()
+      return
+    }
     challengeToken.value = data.challenge_token
-    totpSetup.value = data.totp_setup ?? null
     verificationCode.value = ''
   } catch {
     error.value = '密码错误或用户不可用'
   } finally {
     loading.value = false
   }
+}
+
+async function enterUserAdmin() {
+  const requested = typeof route.query.next === 'string' ? route.query.next : ''
+  const adminRoot = workspaceRoute('/admin')
+  await router.replace(requested === adminRoot || requested.startsWith(`${adminRoot}/`) ? requested : adminRoot)
 }
 
 async function verifyTOTP() {
@@ -99,9 +105,7 @@ async function verifyTOTP() {
       challenge_token: challengeToken.value,
       code: verificationCode.value,
     })
-    const requested = typeof route.query.next === 'string' ? route.query.next : ''
-    const adminRoot = workspaceRoute('/admin')
-    await router.replace(requested === adminRoot || requested.startsWith(`${adminRoot}/`) ? requested : adminRoot)
+    await enterUserAdmin()
   } catch {
     error.value = '验证码无效或已使用，请输入新的验证码'
   } finally {
@@ -112,15 +116,7 @@ async function verifyTOTP() {
 function resetAdminLogin() {
   challengeToken.value = ''
   verificationCode.value = ''
-  totpSetup.value = null
   error.value = ''
-}
-
-async function copyTOTPSecret() {
-  if (!totpSetup.value) return
-  await navigator.clipboard.writeText(totpSetup.value.secret)
-  copied.value = true
-  setTimeout(() => (copied.value = false), 1500)
 }
 </script>
 
@@ -138,7 +134,7 @@ async function copyTOTPSecret() {
         {{ adminMode ? '用户空间管理' : auth.applyStatus === 'pending' ? '等待审批' : 'Marvo' }}
       </h1>
       <p v-if="adminMode" class="login-subtitle">
-        {{ challengeToken ? '输入身份验证器生成的 6 位验证码' : '验证密码后管理本用户的设备' }}
+        {{ challengeToken ? '输入身份验证器生成的 6 位验证码' : '输入密码进入用户后台' }}
       </p>
       <p v-else class="login-subtitle">
         {{ auth.applyStatus === 'pending' ? '用户管理员正在审核您的设备' : '输入设备名称以申请访问' }}
@@ -157,30 +153,10 @@ async function copyTOTPSecret() {
           />
           <button class="login-submit" type="submit" :disabled="loading || !password">
             <LoginOutlined aria-hidden="true" />
-            <span>{{ loading ? '验证中...' : '下一步' }}</span>
+            <span>{{ loading ? '登录中...' : '登录' }}</span>
           </button>
         </form>
         <form v-else class="login-form" @submit.prevent="verifyTOTP">
-          <div v-if="totpSetup" class="login-totp-setup">
-            <p>首次登录，请使用身份验证器扫描二维码。</p>
-            <div class="login-totp-qr" role="img" aria-label="身份验证器设置二维码">
-              <QrcodeSvg
-                :value="totpSetup.uri"
-                :size="192"
-                :margin="2"
-                level="M"
-                background="#ffffff"
-                foreground="#111111"
-              />
-            </div>
-            <p class="login-totp-fallback">无法扫码时，可手动复制设置密钥。</p>
-            <div class="login-totp-secret">
-              <code>{{ totpSetup.secret }}</code>
-              <button type="button" class="admin-btn" @click="copyTOTPSecret">
-                <CopyOutlined aria-hidden="true" />{{ copied ? '已复制' : '复制' }}
-              </button>
-            </div>
-          </div>
           <input
             v-model="verificationCode"
             class="login-password"
@@ -193,15 +169,17 @@ async function copyTOTPSecret() {
           />
           <button class="login-submit" type="submit" :disabled="loading || verificationCode.length !== 6">
             <SafetyCertificateOutlined aria-hidden="true" />
-            <span>{{ loading ? '验证中...' : '进入设备管理' }}</span>
+            <span>{{ loading ? '验证中...' : '进入用户后台' }}</span>
           </button>
-          <button type="button" class="admin-btn" :disabled="loading" @click="resetAdminLogin">返回修改密码</button>
+          <button type="button" class="admin-btn" :disabled="loading" @click="resetAdminLogin">
+            <LeftOutlined aria-hidden="true" />返回输入密码
+          </button>
         </form>
       </template>
 
       <template v-else-if="auth.applyStatus !== 'pending'">
         <form class="login-form" @submit.prevent="apply">
-          <input class="login-password" v-model="deviceName" placeholder="设备名称" autofocus />
+          <input class="login-password" v-model="deviceName" placeholder="设备名称" maxlength="50" autofocus />
           <button class="login-submit" type="submit" :disabled="loading || !deviceName">
             <SendOutlined aria-hidden="true" />
             <span>{{ loading ? '申请中...' : '申请访问' }}</span>
@@ -225,48 +203,6 @@ async function copyTOTPSecret() {
 </template>
 
 <style scoped>
-.login-totp-setup {
-  color: var(--text-secondary);
-  font-size: var(--marvo-type-13);
-  line-height: 1.6;
-}
-.login-totp-setup p {
-  margin: 0 0 8px;
-}
-.login-totp-qr {
-  display: flex;
-  width: fit-content;
-  max-width: 100%;
-  margin: 12px auto;
-  padding: 8px;
-  overflow: hidden;
-  border: 1px solid var(--border-color);
-  border-radius: var(--marvo-radius);
-  background: #fff;
-}
-.login-totp-qr :deep(svg) {
-  display: block;
-  width: min(192px, 100%);
-  height: auto;
-}
-.login-totp-fallback {
-  color: var(--text-tertiary);
-  text-align: center;
-}
-.login-totp-secret {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--marvo-radius);
-}
-.login-totp-secret code {
-  min-width: 0;
-  flex: 1;
-  overflow-wrap: anywhere;
-  color: var(--text-primary);
-}
 .login-admin-entry {
   width: 100%;
   margin-top: 12px;

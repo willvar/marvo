@@ -77,7 +77,7 @@ export const useAuthStore = defineStore('auth', {
   }),
 
   actions: {
-    async check() {
+    async check(options?: { throwOnError?: boolean }) {
       const activeUserID = currentUserID()
       if (!activeUserID) {
         this.userID = ''
@@ -108,8 +108,12 @@ export const useAuthStore = defineStore('auth', {
           this.requestId = data.request_id
           return
         }
-      } catch {
-        /* silently ignore */
+      } catch (cause) {
+        this.isAuthenticated = false
+        this.applyStatus = 'idle'
+        this.requestId = ''
+        if (options?.throwOnError) throw cause
+        return
       }
       this.isAuthenticated = false
       this.applyStatus = 'idle'
@@ -155,7 +159,10 @@ setUnauthorizedHandler(() => {
   store.isAuthenticated = false
   if (typeof window !== 'undefined') {
     const userID = currentUserID()
-    const userAdmin = !!userID && window.location.pathname === `/user/${userID}/admin`
+    const userAdminRoot = userID ? `/user/${userID}/admin` : ''
+    const userAdmin =
+      !!userAdminRoot &&
+      (window.location.pathname === userAdminRoot || window.location.pathname.startsWith(`${userAdminRoot}/`))
     const target = userID
       ? userLoginRoute({ admin: userAdmin, next: userAdmin ? window.location.pathname : undefined }, userID)
       : '/admin/login'

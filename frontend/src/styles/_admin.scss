@@ -182,6 +182,12 @@
       color: var(--text-primary);
       margin: 0;
     }
+    [data-scope='dialog'][data-part='description'] {
+      margin-top: 4px;
+      color: var(--text-tertiary);
+      font-size: var(--marvo-type-13);
+      line-height: 1.45;
+    }
   }
 
   .dialog-close {
@@ -208,6 +214,15 @@
   .dialog-body {
     padding: 20px 24px 24px;
     overflow-y: auto;
+  }
+
+  .dialog-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
   }
 
   @media (prefers-reduced-motion: reduce) {

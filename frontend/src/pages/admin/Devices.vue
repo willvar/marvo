@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { ref, onBeforeUnmount, onMounted } from 'vue'
+import { ref, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { api, ApiError, userLoginRoute } from '../../sdk'
 import { useRouter } from 'vue-router'
 import { Dialog } from '@ark-ui/vue/dialog'
+import { useRetainedDialog } from '../../composables/useRetainedDialog'
 import {
   CheckOutlined,
   ClockCircleOutlined,
   CloseOutlined,
+  EditOutlined,
+  LockOutlined,
   SafetyCertificateOutlined,
   StopOutlined,
 } from '@ant-design/icons-vue'
@@ -61,11 +64,16 @@ const requestsError = ref('')
 const devices = ref<ApprovedDevice[]>([])
 const devicesLoading = ref(true)
 const devicesError = ref('')
-const detail = ref<DeviceInfo | null>(null)
-const revokeTarget = ref<ApprovedDevice | null>(null)
-const revokeTargetName = ref('')
+const detailDialog = useRetainedDialog<DeviceInfo>()
+const { open: detailOpen, payload: detail } = detailDialog
+const revokeDialog = useRetainedDialog<{ device: ApprovedDevice; name: string }>()
+const { open: revokeOpen, payload: revokeTarget } = revokeDialog
 const revoking = ref(false)
 const revokeError = ref('')
+const editingDeviceID = ref('')
+const editingDeviceName = ref('')
+const renamingDevice = ref(false)
+const renameError = ref('')
 const router = useRouter()
 let requestsInFlight = false
 let devicesInFlight = false
@@ -136,14 +144,94 @@ async function reject(id: string) {
   loadRequests()
 }
 
+function normalizedDeviceName(name: string) {
+  return name.trim().normalize('NFC')
+}
+
+function comparableDeviceName(name: string) {
+  return normalizedDeviceName(name).toLowerCase()
+}
+
+function beginRename(device: ApprovedDevice) {
+  if (renamingDevice.value) return
+  editingDeviceID.value = device.local_device_id
+  editingDeviceName.value = device.device_name
+  renameError.value = ''
+  void nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>('.device-name-editor .device-name-input')
+    input?.focus()
+    input?.select()
+  })
+}
+
+function cancelRename() {
+  if (renamingDevice.value) return
+  editingDeviceID.value = ''
+  editingDeviceName.value = ''
+  renameError.value = ''
+}
+
+async function saveDeviceName(device: ApprovedDevice) {
+  if (renamingDevice.value || editingDeviceID.value !== device.local_device_id) return
+  const name = normalizedDeviceName(editingDeviceName.value)
+  if (!name || Array.from(name).length > 50) {
+    renameError.value = '设备名称需要包含 1–50 个字符'
+    return
+  }
+  if (
+    devices.value.some(
+      (candidate) =>
+        candidate.local_device_id !== device.local_device_id &&
+        comparableDeviceName(candidate.device_name) === comparableDeviceName(name),
+    )
+  ) {
+    renameError.value = '设备名称不能与其他已批准设备重复'
+    return
+  }
+  if (name === device.device_name) {
+    cancelRename()
+    return
+  }
+
+  renamingDevice.value = true
+  renameError.value = ''
+  try {
+    const { data } = await api.patch(`/api/admin/devices/${encodeURIComponent(device.local_device_id)}`, {
+      device_name: name,
+    })
+    const updated = data.device as ApprovedDevice
+    devices.value = devices.value.map((candidate) =>
+      candidate.local_device_id === updated.local_device_id ? updated : candidate,
+    )
+    editingDeviceID.value = ''
+    editingDeviceName.value = ''
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      void router.replace(userLoginRoute({ admin: true, next: router.currentRoute.value.fullPath }))
+      return
+    }
+    renameError.value =
+      e instanceof ApiError && e.status === 409
+        ? '设备名称不能与其他已批准设备重复'
+        : e instanceof ApiError && e.status === 400
+          ? '设备名称需要包含 1–50 个字符'
+          : '设备名称保存失败，请稍后重试'
+  } finally {
+    renamingDevice.value = false
+  }
+}
+
 function requestRevoke(device: ApprovedDevice) {
   revokeError.value = ''
-  revokeTargetName.value = device.device_name || '未命名设备'
-  revokeTarget.value = device
+  revokeDialog.show({ device, name: device.device_name || '未命名设备' })
 }
 
 function updateRevokeOpen(open: boolean) {
-  if (!open && !revoking.value) revokeTarget.value = null
+  revokeDialog.updateOpen(open, !revoking.value)
+}
+
+function completeRevokeClose() {
+  if (revokeDialog.clearAfterExit()) revokeError.value = ''
 }
 
 async function confirmRevoke() {
@@ -153,9 +241,9 @@ async function confirmRevoke() {
   revoking.value = true
   revokeError.value = ''
   try {
-    await api.delete(`/api/admin/devices/${target.local_device_id}`)
-    devices.value = devices.value.filter((device) => device.local_device_id !== target.local_device_id)
-    revokeTarget.value = null
+    await api.delete(`/api/admin/devices/${target.device.local_device_id}`)
+    devices.value = devices.value.filter((device) => device.local_device_id !== target.device.local_device_id)
+    revokeDialog.close()
     void loadDevices()
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
@@ -169,11 +257,15 @@ async function confirmRevoke() {
 }
 
 function showInfo(info: DeviceInfo) {
-  detail.value = info
+  detailDialog.show(info)
 }
 
 function updateDetailOpen(open: boolean) {
-  if (!open) detail.value = null
+  detailDialog.updateOpen(open)
+}
+
+function completeDetailClose() {
+  detailDialog.clearAfterExit()
 }
 
 function fmt(t: string) {
@@ -189,6 +281,33 @@ function fmt(t: string) {
 
 <template>
   <div>
+    <section class="device-auth-explainer" aria-labelledby="device-auth-explainer-title">
+      <div class="device-auth-explainer-heading">
+        <SafetyCertificateOutlined aria-hidden="true" />
+        <div>
+          <h2 id="device-auth-explainer-title">访问机制</h2>
+          <p>后台身份与工作区设备凭据相互独立，各自保护不同入口。</p>
+        </div>
+      </div>
+      <div class="device-auth-explainer-grid">
+        <div>
+          <LockOutlined aria-hidden="true" />
+          <strong>后台登录</strong>
+          <p>密码及可选的 OTP 只用于进入当前用户后台，不会自动授予工作区访问权。</p>
+        </div>
+        <div>
+          <CheckOutlined aria-hidden="true" />
+          <strong>设备批准</strong>
+          <p>每个浏览器分别申请凭据；批准后仅能访问当前用户空间，不会继承到其他用户。</p>
+        </div>
+        <div>
+          <StopOutlined aria-hidden="true" />
+          <strong>撤回访问</strong>
+          <p>撤回会使该设备凭据失效，下次进入工作区时必须重新申请和批准。</p>
+        </div>
+      </div>
+    </section>
+
     <div class="admin-tabs">
       <button :class="['admin-tab', { active: tab === 'pending' }]" @click="tab = 'pending'">
         <ClockCircleOutlined aria-hidden="true" />
@@ -246,26 +365,59 @@ function fmt(t: string) {
           <tr>
             <th>设备名称</th>
             <th>批准时间</th>
-            <th style="width: 100px">操作</th>
+            <th style="width: 184px">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="d in devices" :key="d.id">
+          <tr v-for="d in devices" :key="d.id" :data-device-id="d.local_device_id">
             <td>
-              <a @click="showInfo(d.device_info)">{{ d.device_name || '未命名设备' }}</a>
+              <div v-if="editingDeviceID === d.local_device_id" class="device-name-editor">
+                <input
+                  v-model="editingDeviceName"
+                  class="device-name-input"
+                  aria-label="设备名称"
+                  maxlength="50"
+                  :disabled="renamingDevice"
+                  @keydown.enter="saveDeviceName(d)"
+                  @keydown.escape="cancelRename"
+                />
+                <span v-if="renameError" class="device-name-error" role="alert">{{ renameError }}</span>
+              </div>
+              <a v-else @click="showInfo(d.device_info)">{{ d.device_name || '未命名设备' }}</a>
             </td>
             <td>{{ fmt(d.approved_at) }}</td>
             <td>
-              <button class="admin-btn admin-btn-danger" @click="requestRevoke(d)">
-                <StopOutlined aria-hidden="true" />撤回
-              </button>
+              <div class="btn-group">
+                <template v-if="editingDeviceID === d.local_device_id">
+                  <button class="admin-btn admin-btn-primary" :disabled="renamingDevice" @click="saveDeviceName(d)">
+                    <CheckOutlined aria-hidden="true" />{{ renamingDevice ? '保存中...' : '保存' }}
+                  </button>
+                  <button class="admin-btn" :disabled="renamingDevice" @click="cancelRename">
+                    <CloseOutlined aria-hidden="true" />取消
+                  </button>
+                </template>
+                <template v-else>
+                  <button class="admin-btn" :disabled="renamingDevice" @click="beginRename(d)">
+                    <EditOutlined aria-hidden="true" />编辑
+                  </button>
+                  <button class="admin-btn admin-btn-danger" :disabled="renamingDevice" @click="requestRevoke(d)">
+                    <StopOutlined aria-hidden="true" />撤回
+                  </button>
+                </template>
+              </div>
             </td>
           </tr>
         </tbody>
       </table>
     </template>
 
-    <Dialog.Root :open="!!detail" lazy-mount unmount-on-exit @update:open="updateDetailOpen">
+    <Dialog.Root
+      :open="detailOpen"
+      lazy-mount
+      unmount-on-exit
+      @exit-complete="completeDetailClose"
+      @update:open="updateDetailOpen"
+    >
       <Teleport to="body">
         <Dialog.Backdrop class="dialog-backdrop" />
         <Dialog.Positioner class="dialog-positioner">
@@ -340,10 +492,11 @@ function fmt(t: string) {
     </Dialog.Root>
 
     <Dialog.Root
-      :open="!!revokeTarget"
+      :open="revokeOpen"
       lazy-mount
       unmount-on-exit
       :close-on-interact-outside="!revoking"
+      @exit-complete="completeRevokeClose"
       @update:open="updateRevokeOpen"
     >
       <Teleport to="body">
@@ -356,11 +509,11 @@ function fmt(t: string) {
             </div>
             <div class="dialog-body">
               <p class="admin-confirm-copy">
-                确定撤回「{{ revokeTargetName }}」的访问权限吗？该设备需要重新申请并批准后才能访问。
+                确定撤回「{{ revokeTarget?.name }}」的访问权限吗？该设备需要重新申请并批准后才能访问。
               </p>
               <p v-if="revokeError" class="admin-confirm-error" role="alert">{{ revokeError }}</p>
               <div class="btn-group admin-confirm-actions">
-                <button class="admin-btn" type="button" :disabled="revoking" @click="revokeTarget = null">
+                <button class="admin-btn" type="button" :disabled="revoking" @click="revokeDialog.close">
                   <CloseOutlined aria-hidden="true" />取消
                 </button>
                 <button class="admin-btn admin-btn-danger" type="button" :disabled="revoking" @click="confirmRevoke">
@@ -376,6 +529,104 @@ function fmt(t: string) {
 </template>
 
 <style scoped lang="scss">
+.device-auth-explainer {
+  margin-bottom: 20px;
+  padding: 20px;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  background: var(--bg-primary);
+}
+
+.device-auth-explainer-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  color: var(--text-accent);
+  > svg {
+    flex: 0 0 auto;
+    margin-top: 3px;
+    font-size: var(--marvo-type-18);
+  }
+  h2 {
+    margin: 0 0 4px;
+    color: var(--text-primary);
+    font-size: var(--marvo-type-15);
+  }
+  p {
+    margin: 0;
+    color: var(--text-tertiary);
+    font-size: var(--marvo-type-12);
+  }
+}
+
+.device-auth-explainer-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+  > div {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 7px;
+    padding: 13px;
+    border-radius: 9px;
+    background: var(--bg-secondary);
+  }
+  svg {
+    color: var(--text-accent);
+  }
+  strong {
+    color: var(--text-primary);
+    font-size: var(--marvo-type-13);
+  }
+  p {
+    grid-column: 1 / -1;
+    margin: 2px 0 0;
+    color: var(--text-secondary);
+    font-size: var(--marvo-type-12);
+    line-height: 1.6;
+  }
+}
+
+.device-name-editor {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 180px;
+  max-width: 360px;
+}
+
+.device-name-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  outline: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+  &:focus {
+    border-color: var(--text-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 14%, transparent);
+  }
+  &:disabled {
+    cursor: wait;
+    opacity: 0.7;
+  }
+}
+
+.device-name-error {
+  color: var(--text-danger);
+  font-size: var(--marvo-type-12);
+  line-height: 1.4;
+}
+
 .admin-confirm-copy {
   margin: 0;
   color: var(--text-secondary);
@@ -392,5 +643,11 @@ function fmt(t: string) {
 .admin-confirm-actions {
   justify-content: flex-end;
   margin-top: 24px;
+}
+
+@media (max-width: 900px) {
+  .device-auth-explainer-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -14,14 +14,20 @@ import {
   DEFAULT_FONT_SIZE,
   DEFAULT_ACCENT_COLOR,
   type ThemeFile,
+  currentUserID,
   userLoginRoute,
   workspaceRoute,
 } from '../sdk'
+import { setUserRouteBrand } from '../router'
 import { useRoute, useRouter } from 'vue-router'
-import { ref, onMounted, onBeforeUnmount, computed, defineAsyncComponent, nextTick, watch } from 'vue'
-import { DeleteOutlined, LeftOutlined, MenuOutlined, RobotOutlined, SettingOutlined } from '@ant-design/icons-vue'
-
-const AgentSettingsDialog = defineAsyncComponent(() => import('../components/AgentSettingsDialog.vue'))
+import { ref, onMounted, onBeforeUnmount, computed, nextTick, watch } from 'vue'
+import {
+  DeleteOutlined,
+  LeftOutlined,
+  MenuOutlined,
+  RobotOutlined,
+  SafetyCertificateOutlined,
+} from '@ant-design/icons-vue'
 
 const auth = useAuthStore()
 const noteStore = useNoteStore()
@@ -32,11 +38,10 @@ const creating = ref(false)
 const searchQuery = ref('')
 const searchResults = ref<any[]>([])
 const searchError = ref('')
-const agentSettingsOpen = ref(false)
-const agentSettingsMounted = ref(false)
 const noteMutationBlocked = ref(false)
 type NoteSaveState = 'saved' | 'draft' | 'saving' | 'conflict' | 'error'
 const noteSaveStatus = ref<{ state: NoteSaveState; label: string; error: string } | null>(null)
+const brandName = ref('Marvo')
 
 const SIDER_COLLAPSED_STORAGE_KEY = 'marvo.ui.noteListCollapsed'
 
@@ -77,11 +82,6 @@ function setSiderCollapsed(collapsed: boolean) {
   }
 }
 
-function openAgentSettings() {
-  agentSettingsMounted.value = true
-  agentSettingsOpen.value = true
-}
-
 function loadTheme() {
   api
     .get('/api/theme')
@@ -94,6 +94,19 @@ function loadTheme() {
       themeFile.value = {}
       applyTheme({})
     })
+}
+
+async function loadBrand() {
+  const userID = currentUserID()
+  try {
+    const { data } = await api.get('/api/brand')
+    const name = typeof data.brand?.name === 'string' && data.brand.name.trim() ? data.brand.name.trim() : 'Marvo'
+    brandName.value = name
+    setUserRouteBrand(userID, name)
+  } catch {
+    brandName.value = 'Marvo'
+    setUserRouteBrand(userID, 'Marvo')
+  }
 }
 
 function applyTheme(tf: ThemeFile) {
@@ -144,11 +157,8 @@ const headerTitle = computed(() => {
   if (route.name === 'user-trash') return '回收站'
   return ''
 })
-const isAgentPage = computed(() => route.name === 'user-agent')
-
-function handleHeaderAgentAction() {
-  if (isAgentPage.value) openAgentSettings()
-  else void router.push(workspaceRoute('/agent'))
+function openAgentPage() {
+  void router.push(workspaceRoute('/agent'))
 }
 
 onMounted(async () => {
@@ -159,7 +169,7 @@ onMounted(async () => {
   }
   loadTheme()
   connect()
-  await noteStore.fetchNotes()
+  await Promise.all([loadBrand(), noteStore.fetchNotes()])
   loading.value = false
   onResize()
   window.addEventListener('resize', onResize)
@@ -171,6 +181,7 @@ onBeforeUnmount(() => {
 })
 
 on('theme_changed', () => loadTheme())
+on('brand_changed', () => void loadBrand())
 
 async function openNote(title: string) {
   if (isCompact.value) siderCollapsed.value = true
@@ -313,10 +324,10 @@ async function confirmTitle() {
         <RouterLink
           class="dsh-logo"
           :to="workspaceRoute()"
-          title="返回首页"
-          aria-label="返回首页"
+          :title="`返回 ${brandName} 首页`"
+          :aria-label="`返回 ${brandName} 首页`"
           @click="isCompact && setSiderCollapsed(true)"
-          >MARVO</RouterLink
+          >{{ brandName }}</RouterLink
         >
         <button class="dsh-sider-toggle" title="收起列表" @click="setSiderCollapsed(true)">
           <LeftOutlined />
@@ -375,6 +386,10 @@ async function confirmTitle() {
           <DeleteOutlined aria-hidden="true" />
           回收站
         </button>
+        <a class="dsh-footer-button" :href="workspaceRoute('/admin')" target="_blank" rel="noopener noreferrer">
+          <SafetyCertificateOutlined aria-hidden="true" />
+          管理后台
+        </a>
       </div>
     </aside>
 
@@ -427,14 +442,14 @@ async function confirmTitle() {
           <span v-if="headerError" class="dsh-header-error" :title="headerError">{{ headerError }}</span>
         </div>
         <button
+          v-if="route.name !== 'user-agent'"
           class="dsh-header-agent"
-          :title="isAgentPage ? '智能体设置' : '智能体'"
-          :aria-label="isAgentPage ? '设置' : '智能体'"
-          @click="handleHeaderAgentAction"
+          title="智能体"
+          aria-label="智能体"
+          @click="openAgentPage"
         >
-          <SettingOutlined v-if="isAgentPage" aria-hidden="true" />
-          <RobotOutlined v-else aria-hidden="true" />
-          <span>{{ isAgentPage ? '设置' : '智能体' }}</span>
+          <RobotOutlined aria-hidden="true" />
+          <span>智能体</span>
         </button>
       </header>
       <div class="dsh-content">
@@ -449,11 +464,6 @@ async function confirmTitle() {
     </main>
 
     <AgentFloating />
-    <AgentSettingsDialog
-      v-if="agentSettingsMounted"
-      :open="agentSettingsOpen"
-      @update:open="agentSettingsOpen = $event"
-    />
   </div>
 </template>
 
@@ -510,9 +520,13 @@ async function confirmTitle() {
   display: inline-flex;
   align-items: center;
   min-height: 32px;
+  max-width: calc(100% - 40px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--marvo-type-18);
   font-weight: 800;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.04em;
   color: var(--text-primary);
   text-decoration: none;
   border-radius: 6px;
@@ -686,6 +700,7 @@ async function confirmTitle() {
   border-radius: 8px;
   background: var(--bg-primary);
   color: var(--text-accent);
+  text-decoration: none;
   cursor: pointer;
   font: inherit;
   font-size: var(--marvo-type-13);

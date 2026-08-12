@@ -23,10 +23,12 @@ import {
   type XConversationAction,
   type XConversationItem,
 } from '../../components/x'
+import { useRetainedDialog } from '../../composables/useRetainedDialog'
 
 const agent = useAgentStore()
 const initError = ref('')
-const deleteTargetId = ref('')
+const deleteDialog = useRetainedDialog<{ id: string; title: string }>()
+const { open: deleteDialogOpen, payload: deleteTarget } = deleteDialog
 const deletingSession = ref(false)
 const renameTargetId = ref('')
 const renameTitle = ref('')
@@ -55,7 +57,6 @@ const blocked = computed(() => {
   const id = activeSessionId.value
   return id ? agent.hasPendingRequest(id) : false
 })
-const deleteTarget = computed(() => agent.sessions.find((s) => s.id === deleteTargetId.value))
 const messageScrollKey = computed(() => `${activeSessionId.value || ''}:${visibleLoading.value ? 'loading' : 'ready'}`)
 const conversationItems = computed<XConversationItem[]>(() =>
   agent.sessions.map((session) => ({
@@ -245,16 +246,24 @@ function handleConversationAction(actionKey: string, item: XConversationItem) {
 }
 
 function requestDeleteSession(id: string) {
-  deleteTargetId.value = id
+  deleteDialog.show({ id, title: sessionTitle(agent.sessions.find((session) => session.id === id)) })
+}
+
+function updateDeleteDialogOpen(open: boolean) {
+  deleteDialog.updateOpen(open, !deletingSession.value)
+}
+
+function completeDeleteDialogClose() {
+  deleteDialog.clearAfterExit()
 }
 
 async function confirmDeleteSession() {
-  if (!deleteTargetId.value || deletingSession.value) return
-  const id = deleteTargetId.value
+  if (!deleteTarget.value || deletingSession.value) return
+  const id = deleteTarget.value.id
   deletingSession.value = true
   try {
     await agent.deleteSession(id)
-    deleteTargetId.value = ''
+    deleteDialog.close()
     showToast('已删除', 'success')
   } catch {
     showToast('删除失败', 'error')
@@ -414,10 +423,13 @@ function cancelRenameSession() {
     </Toaster>
 
     <Dialog.Root
-      :open="!!deleteTargetId"
+      :open="deleteDialogOpen"
       lazy-mount
       unmount-on-exit
-      @update:open="deleteTargetId = $event ? deleteTargetId : ''"
+      :close-on-escape="!deletingSession"
+      :close-on-interact-outside="!deletingSession"
+      @exit-complete="completeDeleteDialogClose"
+      @update:open="updateDeleteDialogOpen"
     >
       <Teleport to="body">
         <Dialog.Backdrop class="dialog-backdrop" />
@@ -425,12 +437,14 @@ function cancelRenameSession() {
           <Dialog.Content class="dialog-panel" style="max-width: 360px">
             <div class="dialog-header">
               <Dialog.Title>删除会话</Dialog.Title>
-              <Dialog.CloseTrigger class="dialog-close"><CloseOutlined /></Dialog.CloseTrigger>
+              <Dialog.CloseTrigger class="dialog-close" :disabled="deletingSession"
+                ><CloseOutlined
+              /></Dialog.CloseTrigger>
             </div>
             <div class="dialog-body">
-              <p class="agent-chat-delete-text">确定要删除「{{ sessionTitle(deleteTarget) }}」？此操作不可撤销。</p>
+              <p class="agent-chat-delete-text">确定要删除「{{ deleteTarget?.title }}」？此操作不可撤销。</p>
               <div class="btn-group" style="justify-content: flex-end">
-                <button class="admin-btn" :disabled="deletingSession" @click="deleteTargetId = ''">
+                <button class="admin-btn" :disabled="deletingSession" @click="deleteDialog.close">
                   <CloseOutlined aria-hidden="true" />取消
                 </button>
                 <button class="admin-btn admin-btn-danger" :disabled="deletingSession" @click="confirmDeleteSession">

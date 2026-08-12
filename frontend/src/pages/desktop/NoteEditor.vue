@@ -12,6 +12,7 @@ import {
   FileAddOutlined,
 } from '@ant-design/icons-vue'
 import { useNoteStore } from '../../stores/note'
+import { useRetainedDialog } from '../../composables/useRetainedDialog'
 import {
   ApiError,
   api,
@@ -76,8 +77,10 @@ const saveError = ref('')
 const showDeleteConfirm = ref(false)
 const subscribedTitle = ref('')
 const toolbarTarget = ref<HTMLElement>()
-const orphanDraft = ref<NoteDraft | null>(null)
-const orphanRemote = ref<NoteDetail | null>(null)
+const orphanDialog = useRetainedDialog<{ draft: NoteDraft; remote: NoteDetail | null }>()
+const { open: orphanDraftOpen } = orphanDialog
+const orphanDraft = computed(() => orphanDialog.payload.value?.draft ?? null)
+const orphanRemote = computed(() => orphanDialog.payload.value?.remote ?? null)
 const missingDraft = ref<NoteDraft | null>(null)
 const mergeState = ref<MergeState>({ open: false, base: '', local: '', remote: '', remoteSnapshot: null, reason: '' })
 
@@ -89,7 +92,7 @@ let unregisterPreparation: (() => void) | null = null
 const canceledAssets = new Set<string>()
 
 const dirty = computed(() => !!serverBase.value && localContent.value !== serverBase.value.content)
-const editorLocked = computed(() => mergeState.value.open || !!orphanDraft.value)
+const editorLocked = computed(() => mergeState.value.open || orphanDraftOpen.value)
 const saveLabel = computed(
   () =>
     ({
@@ -133,7 +136,7 @@ watch(
   () => mergeState.value.open,
   () => editor.value?.setEditable(!editorLocked.value),
 )
-watch(orphanDraft, () => editor.value?.setEditable(!editorLocked.value))
+watch(orphanDraftOpen, () => editor.value?.setEditable(!editorLocked.value))
 
 async function loadNote(nextTitle: string, previousTitle?: string) {
   if (!nextTitle) return
@@ -151,8 +154,7 @@ async function loadNote(nextTitle: string, previousTitle?: string) {
   loadError.value = ''
   editor.value = null
   serverBase.value = null
-  orphanDraft.value = null
-  orphanRemote.value = null
+  orphanDialog.reset()
   missingDraft.value = null
   mergeState.value.open = false
   canceledAssets.clear()
@@ -204,8 +206,7 @@ async function restoreDraft(snapshot: NoteDetail) {
       draft.content !== draft.baseContent,
   )
   if (orphan) {
-    orphanDraft.value = orphan
-    orphanRemote.value = snapshot
+    orphanDialog.show({ draft: orphan, remote: snapshot })
   }
 }
 
@@ -337,8 +338,10 @@ async function persistContent(): Promise<boolean> {
           if (conflict.moved_to) {
             await router.replace(workspaceRoute(`/note/${encodeURIComponent(conflict.moved_to)}`))
           } else {
-            orphanDraft.value = await saveCurrentAsOrphan(base, sentContent)
-            orphanRemote.value = conflict.current || null
+            orphanDialog.show({
+              draft: await saveCurrentAsOrphan(base, sentContent),
+              remote: conflict.current || null,
+            })
             saveState.value = 'conflict'
           }
           return false
@@ -388,8 +391,7 @@ function handleRemoteSnapshot(remote: NoteDetail, reason: string) {
     void saveCurrentAsOrphan(base, draftContent).then((draft) => {
       // Navigation may have loaded another instance while IndexedDB settled.
       if (serverBase.value?.instance_token !== base.instance_token) return
-      orphanDraft.value = draft
-      orphanRemote.value = remote
+      orphanDialog.show({ draft, remote })
     })
     return
   }
@@ -458,8 +460,7 @@ async function recoverOrphan() {
   const draft = orphanDraft.value
   const remote = orphanRemote.value
   if (!draft || !remote) return
-  orphanDraft.value = null
-  orphanRemote.value = null
+  orphanDialog.close()
   localContent.value = draft.content
   editor.value?.updateContent(draft.content)
   openMerge(draft.baseContent, draft.content, remote, '这是来自旧笔记实例或服务重启前的草稿，请明确确认恢复结果。')
@@ -468,8 +469,7 @@ async function recoverOrphan() {
 async function discardOrphan() {
   const draft = orphanDraft.value
   const remote = orphanRemote.value
-  orphanDraft.value = null
-  orphanRemote.value = null
+  orphanDialog.close()
   if (draft) await removeDraft(draft.instanceToken, draft.draftId).catch(() => {})
   if (remote && serverBase.value?.instance_token !== remote.instance_token) applyRemoteSnapshot(remote)
 }
@@ -666,7 +666,14 @@ onBeforeUnmount(() => {
       </Teleport>
     </Dialog.Root>
 
-    <Dialog.Root :open="!!orphanDraft" lazy-mount unmount-on-exit :close-on-interact-outside="false">
+    <Dialog.Root
+      :open="orphanDraftOpen"
+      lazy-mount
+      unmount-on-exit
+      :close-on-escape="false"
+      :close-on-interact-outside="false"
+      @exit-complete="orphanDialog.clearAfterExit"
+    >
       <Teleport to="body">
         <Dialog.Backdrop class="dialog-backdrop" />
         <Dialog.Positioner class="dialog-positioner">
