@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"marvo/internal/agentcredentials"
 	"marvo/internal/store"
 	"net/http"
 	"net/http/httptest"
@@ -86,7 +87,11 @@ func TestAgentSettingsListsConnectedModelsAndPersistsSelection(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	settingsStore, err := store.NewAgentSettingsStore(t.TempDir())
+	settingsDirectory := t.TempDir()
+	if err := os.Chmod(settingsDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	settingsStore, err := store.NewAgentSettingsStore(settingsDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +101,15 @@ func TestAgentSettingsListsConnectedModelsAndPersistsSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := NewAgentDeps(upstream.URL, make(chan struct{}), settingsStore, nil, globalPromptFile)
+	credentialStore, err := agentcredentials.NewStore(
+		settingsDirectory,
+		"f20ac70d6a6a4b3c9e1e",
+		"handler-agent-credential-test-secret-with-enough-entropy",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps.SetCredentialStore(credentialStore)
 
 	getRequest := httptest.NewRequest(http.MethodGet, "/api/agent/settings", nil)
 	getResponse := httptest.NewRecorder()
@@ -107,7 +121,7 @@ func TestAgentSettingsListsConnectedModelsAndPersistsSelection(t *testing.T) {
 	if err := json.Unmarshal(getResponse.Body.Bytes(), &initial); err != nil {
 		t.Fatal(err)
 	}
-	if initial.Source != "opencode" || initial.Model == nil || initial.Model.ModelID != "vision" || !initial.ModelAvailable {
+	if initial.Source != "opencode" || initial.Model == nil || initial.Model.ModelID != "vision" || !initial.ModelAvailable || initial.ExaConfigured {
 		t.Fatalf("initial settings = %#v", initial)
 	}
 	if len(initial.Models) != 1 || !initial.Models[0].Capabilities.Input.Image || !initial.Models[0].Capabilities.Input.PDF {
@@ -117,7 +131,7 @@ func TestAgentSettingsListsConnectedModelsAndPersistsSelection(t *testing.T) {
 		t.Fatalf("model variants = %q, want low,high", got)
 	}
 
-	updateBody := `{"model":{"provider_id":"fake","model_id":"vision"},"variant":"high","global_prompt":"始终使用中文"}`
+	updateBody := `{"model":{"provider_id":"fake","model_id":"vision"},"variant":"high","global_prompt":"始终使用中文","exa_api_key":"exa-handler-secret"}`
 	updateRequest := httptest.NewRequest(http.MethodPut, "/api/agent/settings", strings.NewReader(updateBody))
 	updateResponse := httptest.NewRecorder()
 	deps.UpdateSettings(updateResponse, updateRequest)
@@ -131,6 +145,17 @@ func TestAgentSettingsListsConnectedModelsAndPersistsSelection(t *testing.T) {
 	if updated.GlobalPromptPending {
 		t.Fatal("idle global prompt update was left pending")
 	}
+	if !updated.ExaConfigured || strings.Contains(updateResponse.Body.String(), "exa-handler-secret") {
+		t.Fatalf("updated Exa status = %t, response = %s", updated.ExaConfigured, updateResponse.Body.String())
+	}
+	credentials, err := credentialStore.Load()
+	if err != nil || credentials.ExaAPIKey != "exa-handler-secret" {
+		t.Fatalf("stored Agent credentials = %#v, error = %v", credentials, err)
+	}
+	credentialFile, err := os.ReadFile(filepath.Join(settingsDirectory, ".agent-credentials.json"))
+	if err != nil || strings.Contains(string(credentialFile), "exa-handler-secret") {
+		t.Fatalf("encrypted credential file = %q, error = %v", credentialFile, err)
+	}
 	globalInstructions, err := os.ReadFile(globalPromptPath)
 	if err != nil {
 		t.Fatal(err)
@@ -141,6 +166,31 @@ func TestAgentSettingsListsConnectedModelsAndPersistsSelection(t *testing.T) {
 	stored := settingsStore.Get()
 	if stored.Model == nil || stored.Model.ModelID != "vision" || stored.Variant != "high" || stored.GlobalPrompt != "始终使用中文" {
 		t.Fatalf("stored settings = %#v", stored)
+	}
+
+	clearRequest := httptest.NewRequest(http.MethodPut, "/api/agent/settings", strings.NewReader(`{"model":{"provider_id":"fake","model_id":"vision"},"variant":"high","global_prompt":"始终使用中文","clear_exa_api_key":true}`))
+	clearResponse := httptest.NewRecorder()
+	deps.UpdateSettings(clearResponse, clearRequest)
+	if clearResponse.Code != http.StatusOK {
+		t.Fatalf("clear Exa key status = %d, body = %s", clearResponse.Code, clearResponse.Body.String())
+	}
+	var cleared agentSettingsResponse
+	if err := json.Unmarshal(clearResponse.Body.Bytes(), &cleared); err != nil {
+		t.Fatal(err)
+	}
+	if cleared.ExaConfigured {
+		t.Fatal("cleared Exa key is still reported as configured")
+	}
+	credentials, err = credentialStore.Load()
+	if err != nil || credentials.ExaAPIKey != "" {
+		t.Fatalf("cleared Agent credentials = %#v, error = %v", credentials, err)
+	}
+
+	conflictingCredentialRequest := httptest.NewRequest(http.MethodPut, "/api/agent/settings", strings.NewReader(`{"model":{"provider_id":"fake","model_id":"vision"},"variant":"high","global_prompt":"始终使用中文","exa_api_key":"secret","clear_exa_api_key":true}`))
+	conflictingCredentialResponse := httptest.NewRecorder()
+	deps.UpdateSettings(conflictingCredentialResponse, conflictingCredentialRequest)
+	if conflictingCredentialResponse.Code != http.StatusBadRequest {
+		t.Fatalf("conflicting Exa update status = %d, want 400", conflictingCredentialResponse.Code)
 	}
 
 	invalidRequest := httptest.NewRequest(http.MethodPut, "/api/agent/settings", strings.NewReader(`{"model":{"provider_id":"offline","model_id":"hidden"},"global_prompt":""}`))

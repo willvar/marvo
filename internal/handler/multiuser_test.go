@@ -46,6 +46,7 @@ func newMultiuserFixture(t *testing.T) *multiuserFixture {
 	cfg := &config.Config{
 		Server:   config.ServerConfig{StateDir: stateRoot, DataDir: t.TempDir(), SessionSecret: multiuserTestSecret},
 		OpenCode: config.OpenCodeConfig{URL: "http://127.0.0.1:1"},
+		Runtime:  config.RuntimeConfig{URL: "http://runtime.invalid", Token: multiuserTestSecret},
 	}
 	registry := NewSpaceRegistry(cfg, controlDB, layout, shutdown)
 	deps := &Dependencies{Config: cfg, Control: controlDB, Layout: layout, Spaces: registry}

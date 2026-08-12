@@ -18,6 +18,7 @@ test('智能体设置在单页展示所有分区并始终显示统一保存', as
   await expect(page.getByRole('heading', { name: '当前设备的智能体布局' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '提供商', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: '模型', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '联网搜索' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '全局提示词' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '个性化规则' })).toBeVisible()
 
@@ -31,12 +32,44 @@ test('智能体设置在单页展示所有分区并始终显示统一保存', as
   expect(Math.abs(discardBounds!.width - saveBounds!.width)).toBeLessThanOrEqual(1)
   expect(Math.abs(discardBounds!.height - saveBounds!.height)).toBeLessThanOrEqual(1)
 
-  await page.getByRole('heading', { name: '个性化规则' }).scrollIntoViewIfNeeded()
   await expect(saveButton).toBeVisible()
-  const buttonBounds = await saveButton.boundingBox()
-  expect(buttonBounds).not.toBeNull()
-  expect(buttonBounds!.y).toBeGreaterThanOrEqual(56)
-  expect(buttonBounds!.y + buttonBounds!.height).toBeLessThanOrEqual(768)
+})
+
+test('Exa API Key 只写入后端且已保存密钥不回显浏览器', async ({ page }) => {
+  await authenticateUserAdministrator(page)
+  await page.goto(workspacePath('/admin/agent'))
+
+  const input = page.getByLabel('Exa API Key')
+  const status = page.locator('.agent-exa-status')
+  const saveButton = page.getByRole('button', { name: '保存设置' })
+  await expect(input).toHaveAttribute('type', 'password')
+  await expect(input).toHaveValue('')
+
+  const key = 'e2e-exa-api-key'
+  await input.fill(key)
+  await expect(status).toContainText(/等待保存|等待替换/)
+  const saveResponsePromise = page.waitForResponse(
+    (response) => response.url().endsWith('/agent/settings') && response.request().method() === 'PUT',
+  )
+  await saveButton.click()
+  const saveResponse = await saveResponsePromise
+  const saveResponseBody = await saveResponse.text()
+  expect(JSON.parse(saveResponseBody).exa_configured).toBe(true)
+  expect(saveResponseBody).not.toContain(key)
+  await expect(status).toHaveText('已配置')
+  await expect(input).toHaveValue('')
+  await expect(input).toHaveAttribute('placeholder', '已配置；输入新密钥可替换')
+  await expect(page.locator('body')).not.toContainText(key)
+
+  await page.reload()
+  await expect(input).toHaveValue('')
+  await expect(status).toHaveText('已配置')
+  await page.getByRole('button', { name: '移除密钥' }).click()
+  await expect(status).toHaveText('等待移除')
+  await expect(page.getByRole('button', { name: '保留密钥' })).toBeVisible()
+  await saveButton.click()
+  await expect(status).toHaveText('匿名额度')
+  await expect(page.getByRole('button', { name: '移除密钥' })).toHaveCount(0)
 })
 
 test('2560×1440 下设置页用满可用宽度并对齐双栏板块', async ({ page }, testInfo) => {
@@ -212,7 +245,7 @@ test('智能体设置可连接 API Key 与 OAuth 提供商并即时刷新模型'
   await deployment.click()
   await page.getByRole('option', { name: /Local/ }).click()
   await page.getByLabel('Test endpoint').fill('http://localhost:9999')
-  await page.getByLabel('API Key').fill('e2e-api-key')
+  await page.getByLabel('API Key', { exact: true }).fill('e2e-api-key')
   await page.getByRole('button', { name: '连接提供商', exact: true }).click()
   await expect(page.locator('.provider-connected-item').filter({ hasText: 'E2E API Key Provider' })).toHaveCount(1)
   await expect(

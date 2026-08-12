@@ -27,7 +27,7 @@ func TestRoutesExposeOnlyPlatformControlAndUserScopedContent(t *testing.T) {
 	}
 	cfg := &config.Config{
 		Server:  config.ServerConfig{StateDir: stateRoot, DataDir: t.TempDir(), SessionSecret: multiuserTestSecret},
-		Runtime: config.RuntimeConfig{URL: "http://runtime.invalid", Token: "runtime-token"},
+		Runtime: config.RuntimeConfig{URL: "http://runtime.invalid", Token: multiuserTestSecret},
 	}
 	spaces := NewSpaceRegistry(cfg, controlDB, layout, make(chan struct{}))
 	defer spaces.Close()

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"marvo/internal/agentcredentials"
 )
 
 func TestRuntimeManagerCreatesConstrainedPerUserContainer(t *testing.T) {
@@ -72,6 +74,9 @@ func TestRuntimeManagerCreatesConstrainedPerUserContainer(t *testing.T) {
 	if strings.Contains(joinedEnv, config.Token) || !strings.Contains(joinedEnv, "OPENCODE_SERVER_PASSWORD=") {
 		t.Fatal("runtime environment contains the gateway token or lacks an OpenCode password")
 	}
+	if !strings.Contains(joinedEnv, "OPENCODE_ENABLE_EXA=1") || strings.Contains(joinedEnv, "EXA_API_KEY=") {
+		t.Fatalf("unexpected default Exa environment = %q", created.Env)
+	}
 }
 
 func TestRuntimeManagerRefusesUnmanagedNameCollision(t *testing.T) {
@@ -88,6 +93,72 @@ func TestRuntimeManagerRefusesUnmanagedNameCollision(t *testing.T) {
 	manager := NewRuntimeManager(testRuntimeConfig(stateRoot), testDockerClient(dockerAPI))
 	if _, err := manager.Ensure(context.Background(), gatewayTestUserID); err == nil || !strings.Contains(err.Error(), "unmanaged") {
 		t.Fatalf("collision error = %v", err)
+	}
+}
+
+func TestRuntimeManagerReplacesContainerWhenExaCredentialChanges(t *testing.T) {
+	stateRoot := t.TempDir()
+	createRuntimeDirectories(t, stateRoot, gatewayTestUserID)
+	config := testRuntimeConfig(stateRoot)
+	credentialStore, err := agentcredentials.NewStore(
+		filepath.Join(stateRoot, "users", gatewayTestUserID, "app"),
+		gatewayTestUserID,
+		config.Token,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const exaAPIKey = "exa-runtime-secret"
+	if err := credentialStore.Save(agentcredentials.Credentials{ExaAPIKey: exaAPIKey}); err != nil {
+		t.Fatal(err)
+	}
+
+	var manager *RuntimeManager
+	var created ContainerSpec
+	removed := false
+	started := false
+	dockerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/"+runtimeContainerName(gatewayTestUserID)+"/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"old-container","Config":{"Labels":{"com.marvo.role":"agent","com.marvo.user-id":"` + gatewayTestUserID + `","com.marvo.generation":"` + manager.generation + `","com.marvo.runtime-network":"` + config.Network + `","com.marvo.agent-credentials":"old-fingerprint"}},"State":{"Running":true}}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/containers/old-container":
+			removed = true
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+			if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"new-container"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/new-container/start":
+			started = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected Docker API request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer dockerAPI.Close()
+	manager = NewRuntimeManager(config, testDockerClient(dockerAPI))
+	manager.readyCheck = func(context.Context, *RuntimeTarget) error { return nil }
+	if _, err := manager.Ensure(context.Background(), gatewayTestUserID); err != nil {
+		t.Fatal(err)
+	}
+	if !removed || !started {
+		t.Fatalf("removed = %t, started = %t", removed, started)
+	}
+	joinedEnvironment := strings.Join(created.Env, "\n")
+	if !strings.Contains(joinedEnvironment, "EXA_API_KEY="+exaAPIKey) {
+		t.Fatalf("runtime environment does not contain the configured Exa API key: %q", created.Env)
+	}
+	fingerprint := created.Labels[labelCredentialFingerprint]
+	if fingerprint == "" || fingerprint == "old-fingerprint" || strings.Contains(fingerprint, exaAPIKey) {
+		t.Fatalf("credential fingerprint = %q", fingerprint)
+	}
+	for key, value := range created.Labels {
+		if strings.Contains(key, exaAPIKey) || strings.Contains(value, exaAPIKey) {
+			t.Fatalf("container label exposes Exa API key: %s=%s", key, value)
+		}
 	}
 }
 
@@ -179,6 +250,7 @@ func testDockerClient(server *httptest.Server) *DockerClient {
 func createRuntimeDirectories(t *testing.T, stateRoot, userID string) {
 	t.Helper()
 	for _, path := range []string{
+		filepath.Join(stateRoot, "users", userID, "app"),
 		filepath.Join(stateRoot, "users", userID, "workspace"),
 		filepath.Join(stateRoot, "users", userID, "agent", "home"),
 	} {
