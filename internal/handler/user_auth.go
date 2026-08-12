@@ -152,6 +152,19 @@ func (d *Dependencies) LogoutUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (d *Dependencies) GetUserAdminIdentity(w http.ResponseWriter, r *http.Request) {
+	user, err := d.Control.GetUser(r.Context(), d.UserID)
+	if errors.Is(err, control.ErrUserNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to load user"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
 func (d *Dependencies) UserAdminMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

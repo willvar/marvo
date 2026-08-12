@@ -183,6 +183,15 @@ func TestUserAdminSessionIsBoundToUserAndAuthVersion(t *testing.T) {
 		t.Fatal("user admin session cookie was not set")
 	}
 
+	identity := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/me", nil, session)
+	if identity.Code != http.StatusOK || !bytes.Contains(identity.Body.Bytes(), []byte(`"name":"User A"`)) {
+		t.Fatalf("user admin identity status = %d, body = %s", identity.Code, identity.Body.String())
+	}
+	crossedIdentity := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userB.User.ID+"/admin/me", nil, session)
+	if crossedIdentity.Code != http.StatusUnauthorized {
+		t.Fatalf("A admin session read B identity with status %d", crossedIdentity.Code)
+	}
+
 	ownAdmin := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/admin/devices", nil, session)
 	if ownAdmin.Code != http.StatusOK {
 		t.Fatalf("own admin status = %d, body = %s", ownAdmin.Code, ownAdmin.Body.String())

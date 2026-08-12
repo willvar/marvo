@@ -128,6 +128,7 @@ func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.Handle("DELETE /api/user/{userID}/agent/{path...}", content((*Dependencies).AgentProxyJSON))
 
 	mux.Handle("GET /api/user/{userID}/admin/requests", management((*Dependencies).ListRequests))
+	mux.Handle("GET /api/user/{userID}/admin/me", management((*Dependencies).GetUserAdminIdentity))
 	mux.Handle("POST /api/user/{userID}/admin/requests/{id}/approve", management((*Dependencies).ApproveRequest))
 	mux.Handle("POST /api/user/{userID}/admin/requests/{id}/reject", management((*Dependencies).RejectRequest))
 	mux.Handle("GET /api/user/{userID}/admin/devices", management((*Dependencies).ListDevices))

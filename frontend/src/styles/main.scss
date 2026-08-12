@@ -177,6 +177,13 @@
   font-size: var(--marvo-type-14);
 }
 
+.admin-header-user-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .admin-header-dropdown {
   position: absolute;
   top: 100%;
@@ -189,6 +196,14 @@
   box-shadow: var(--shadow-card);
   padding: 4px;
   z-index: 100;
+  .admin-header-dropdown-identity {
+    max-width: 240px;
+    padding: 7px 9px;
+    overflow-wrap: anywhere;
+    border-bottom: 1px solid var(--border-primary);
+    color: var(--text-primary);
+    font-weight: 600;
+  }
   button {
     display: flex;
     align-items: center;

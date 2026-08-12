@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test'
-import { platformContext } from './helpers'
+import { platformContext, totpCode } from './helpers'
 
 test('用户首次绑定身份验证器时显示本地生成的 TOTP 二维码', async ({ page }, testInfo) => {
   const platform = await platformContext()
   const password = 'totp-qrcode-e2e-password'
   try {
+    const userName = `二维码验证 ${testInfo.project.name}`
     const created = await platform.post('/api/admin/users', {
-      data: { name: `二维码验证 ${testInfo.project.name}`, password },
+      data: { name: userName, password },
     })
     expect(created.ok()).toBeTruthy()
     const user = (await created.json()).user as { id: string }
@@ -39,6 +40,19 @@ test('用户首次绑定身份验证器时显示本地生成的 TOTP 二维码',
     expect(bounds).not.toBeNull()
     expect(bounds!.x).toBeGreaterThanOrEqual(0)
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width)
+
+    await page.getByPlaceholder('6 位验证码').fill(totpCode(setup.secret))
+    await page.getByRole('button', { name: '进入设备管理' }).click()
+    await expect(page).toHaveURL(`/user/${user.id}/admin`)
+    const account = page.locator('.admin-header-user')
+    await expect(account).toHaveAttribute('aria-label', userName)
+    await expect(account.locator('.admin-header-user-name')).toHaveText(userName)
+    if (testInfo.project.name === 'chromium-landscape') {
+      await expect(account.locator('.admin-header-user-name')).toBeVisible()
+    } else {
+      await account.click()
+      await expect(page.locator('.admin-header-dropdown-identity')).toHaveText(userName)
+    }
   } finally {
     await platform.dispose()
   }

@@ -81,7 +81,7 @@ function decodeBase32(value: string) {
   return Buffer.from(bytes)
 }
 
-function totpCode(secret: string) {
+export function totpCode(secret: string) {
   const counter = Math.floor(Date.now() / 1000 / 30)
   const payload = Buffer.alloc(8)
   payload.writeBigUInt64BE(BigInt(counter))
