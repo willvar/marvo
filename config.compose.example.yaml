@@ -1,23 +1,22 @@
 server:
-  host: 127.0.0.1
+  host: 0.0.0.0
   port: 9989
   state_dir: /var/lib/marvo
-  # 旧单用户数据目录，仅用于迁移；多用户数据写入 state_dir/users。
+  # 旧单用户目录只作为迁移源，迁移完成后仍原样保留。
   data_dir: /var/lib/marvo/data
   session_secret: "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
   cors_origins:
     - https://YOUR_FRONTEND_DOMAIN
 
 auth:
-  password: CHANGE_ME
+  password: CHANGE_ME_TO_A_STRONG_PLATFORM_PASSWORD
 
 opencode:
   legacy_home_dir: /var/lib/marvo/opencode-state/home
 
 runtime:
-  url: http://127.0.0.1:4097
+  url: http://runtime:4097
   token_file: /var/lib/marvo/control/.runtime-token
 
 log:
   level: info
-  file: /var/log/marvo/marvo.log

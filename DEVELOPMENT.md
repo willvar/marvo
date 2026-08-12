@@ -1,101 +1,97 @@
 # Marvo 开发说明
 
-Marvo 现在只有一套 Vue 响应式用户界面：`frontend/`。`/`、`/note/:title`、`/agent` 和 `/trash` 在同一个应用中适配桌面、平板横屏与手机竖屏；不存在 `/mobile` 应用或路由。
+Marvo 只有一套 Vue 响应式界面。平台入口是 `/admin`；每个用户空间使用 `/user/{userId}`，其笔记、智能体、回收站和设备管理分别位于该前缀下。不存在 `/mobile` 或无用户前缀的业务 API。
 
-## 依赖
+## 运行结构
+
+~~~text
+Vite :5080 ──> Marvo Go :5090 ──Bearer──> marvo-runtime :4097
+                                              │ Docker API
+                                              ├─ marvo-agent-<userA> :4096
+                                              └─ marvo-agent-<userB> :4096
+~~~
+
+`marvo-runtime` 始终运行在 Docker 内。开发时只有网关映射到 `127.0.0.1:4097`；每用户 Agent 容器没有宿主机端口，Go API 通过网关访问。多个用户同时使用智能体时会同时运行多个容器；同一用户的请求复用其容器，默认空闲 30 分钟后停止、再次请求时自动启动，宿主机数据不会删除。
+
+## 依赖与首次配置
 
 - Go（版本见 `go.mod`）
 - Node.js 与 npm
-- Docker（运行 OpenCode）
-- ffmpeg 与 ffprobe（后端处理 HEIC/HEIF、MOV/HEVC 时需要；开发机可不上传这些格式）
-
-## 首次配置
+- Docker
+- 宿主机运行 Go 时需要 ffmpeg/ffprobe；容器化 Marvo 已内置
 
 ~~~bash
 cp config.example.yaml config.yaml
 npm --prefix frontend install
-~~~
-
-默认地址：
-
-| 服务 | 地址 |
-|---|---|
-| 前端 Vite | `http://localhost:5080` |
-| Go API | `http://127.0.0.1:5090` |
-| OpenCode | `http://127.0.0.1:4096` |
-
-`config.yaml` 的 `cors_origins` 必须包含实际前端来源。非回环地址部署时，后端会拒绝默认密码、短 session secret 等不安全配置。
-
-## 启动
-
-一键启动：
-
-~~~bash
 make dev
 ~~~
 
-它会启动 Go、OpenCode Docker 和 Vite。若要分别查看日志，可使用三个终端：
+`make dev` 会使用 Docker 缓存重新构建 Agent 与 Runtime 网关镜像，等待网关健康后再启动 Go 和 Vite。默认地址：
 
-~~~bash
-./docker/opencode/start.sh
-go run . -c config.yaml
-npm --prefix frontend run dev
-~~~
+| 服务 | 地址 |
+|---|---|
+| Vite | `http://localhost:5080` |
+| Go API | `http://127.0.0.1:5090` |
+| Runtime 网关 | `http://127.0.0.1:4097` |
 
-首次启动不要求宿主机执行 `opencode auth login`。批准设备后，在“智能体设置 → 提供商连接”中使用 API Key 或 OAuth 连接提供商；凭据由 OpenCode 写入 Marvo 专用的持久状态目录，前端不会读取或保存密钥。连接后再到“高阶设置”选择全局模型和推理强度。
+结束开发进程后若需要同时释放 Runtime 端口，执行 `make stop-runtime`。它只停止并移除无状态网关、停止受管用户 Agent 容器，用户容器状态和全部宿主机数据都会保留。
 
-在平板、手机或其他局域网设备上进行生产形态验收时，使用：
+局域网生产形态验收使用 `make preview`。它构建前端并启动 Vite Preview；切换 `dev`/`preview` 前应先停止当前进程。正式 `make build` 会把同一份前端嵌入 `dist/marvo`，无需 Vite 或单独静态站点。
 
-~~~bash
-make preview
-~~~
+## 首次进入与权限
 
-它会先构建生产前端，再启动 Go、OpenCode Docker 和不含 HMR 的 Vite Preview 服务。`make dev` 与 `make preview` 使用相同端口，切换前需要先停止正在运行的实例。
+1. 平台管理员在 `/admin/login` 登录，并创建用户。
+2. 把生成的 `/user/{userId}` 链接和初始密码交给对应用户。
+3. 用户从空间登录页进入“管理设备”，验证密码并首次绑定 TOTP 身份验证器。
+4. 普通设备在用户空间提交申请，由该用户自己的管理员会话批准。
 
-第一次打开前端时需要提交设备申请，再从 `/admin/login` 用管理员密码批准。管理员会话本身不能读取笔记；浏览器仍须是已批准设备。
+平台管理员只能创建、停用、重置用户凭据和执行旧数据迁移，不能读取用户内容。用户管理 Cookie 与设备 Cookie 分开；管理会话也不能替代已批准设备读取笔记。
 
-## 数据模型
+## 宿主机数据
 
 ~~~text
-<data_dir>/
-  <笔记标题>/
-    index.md
-    meta.json
-    assets/
-  .trash/
-  theme.json
+<state_dir>/
+  control/
+    platform.sqlite          # 用户与认证控制数据
+    .session-secret
+    .runtime-token
+  users/<userId>/
+    app/                     # 设备、智能体设置、迁移记录
+    workspace/               # 笔记、媒体、回收站、主题、个性化规则
+    agent/home/              # Provider 凭据、OpenCode 会话与用户全局提示词
 ~~~
 
-- 标题同时是笔记名称、目录名和 URL 身份；`meta.json` 只保存标签与创建时间，不重复保存另一套名称。修改标题会原子移动整个笔记目录，且不会覆盖同名笔记。
-- 浏览器保存正文时携带 SHA-256 revision 与进程内 instance token；冲突返回 409，由前端显示三方合并预览。
-- 未保存草稿在 IndexedDB 中按 `instanceToken + draftId` 保存，不会仅凭同名标题自动套用。
-- 删除笔记会移动到 `.trash`，首版不会自动过期。
-- 图片和视频经过设备鉴权的私有 API。上传先写入正文占位；删除占位会取消并清理上传/转码任务。
+这些都是宿主机 bind mount；容器可随时重建。用户内容不在容器可写层，也不在平台 SQLite 中。
+
+笔记仍以标题作为目录名和存储身份：
+
+~~~text
+workspace/<笔记标题>/
+  index.md
+  meta.json
+  assets/
+~~~
+
+浏览器保存正文时携带 SHA-256 revision 与进程实例 token；冲突返回 409，并由前端显示合并预览。草稿在 IndexedDB 中按实例与草稿 ID 隔离。删除进入 `.trash`，首版不自动过期。媒体上传先建立正文占位，删除占位会放弃后续上传或转码。
+
+## 旧单用户数据迁移
+
+`server.data_dir` 与 `opencode.legacy_home_dir` 只作为旧版迁移源。平台用户页会检测旧笔记、回收站、设置、设备以及 Agent 会话/凭据，并允许显式迁移到一个用户。
+
+- 迁移前停止旧版 `marvo-opencode` 与旧 Go 服务，避免 SQLite 正在写入。
+- 同名目标内容不一致时整次操作报冲突，不覆盖。
+- 符号链接和特殊文件会被拒绝。
+- 旧目录始终保留，不会自动删除；迁移可安全重试。
 
 ## 检查
 
 ~~~bash
 go test ./...
-go vet ./...
-npm --prefix frontend run typecheck
-npm --prefix frontend run build
+npm --prefix frontend run check
 npm --prefix frontend run test:e2e
-~~~
-
-提交前可直接运行完整静态审计：
-
-~~~bash
 make audit
 ~~~
 
-它会检查 Go 格式、`go vet`、Staticcheck、Go 不可达代码，以及前端类型、Oxlint、Knip、Prettier 和生产构建。工具版本由 Go/npm 命令固定或锁定，无需全局安装 `golangci-lint`。
+`make audit` 包含 Go 格式、Vet、Staticcheck、不可达代码、前端类型/Lint/死代码/Prettier、测试和生产构建。`make test-webkit` 在 Playwright 官方容器中验证竖屏 WebKit；它代表设计兼容，不替代 iPhone/iPad 真机验收。
 
-`test:e2e` 默认运行 Chromium。WebKit 验收应在 Playwright 官方支持的 Linux 环境或官方容器中运行；它用于确认响应式与 Safari/WebKit 设计兼容，不等同于 iPhone/iPad 真机验收。
-
-Arch Linux 的滚动版 ICU/libxml2 ABI 与 Playwright WebKit 的 Ubuntu 构建不兼容，不要创建旧 soname 软链接。项目提供同版本官方容器入口，会复用 npm 锁定的 Playwright 并在隔离测试数据中运行竖屏核心流程：
-
-~~~bash
-make test-webkit
-~~~
-
-Marvo 1.0 不提供 Markdown 数学公式渲染，`$...$` / `$$...$$` 会作为普通正文保留。智能体对现有文件只能做带旧文本校验的局部编辑，不能整篇覆盖。
+Marvo 1.0 不渲染 Markdown 数学公式。智能体修改已有文件时仍必须使用带旧文本校验的局部编辑，不能整篇覆盖。

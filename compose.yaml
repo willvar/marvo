@@ -1,0 +1,62 @@
+name: marvo
+
+services:
+  agent-image:
+    image: ${MARVO_AGENT_IMAGE:-marvo-opencode:local}
+    build:
+      context: ./docker/opencode
+    profiles: [images]
+    command: ["true"]
+
+  runtime:
+    image: ${MARVO_RUNTIME_IMAGE:-marvo-runtime:local}
+    build:
+      context: .
+      dockerfile: docker/runtime/Dockerfile
+    restart: unless-stopped
+    user: ${MARVO_UID:-1000}:${MARVO_GID:-1000}
+    group_add:
+      - ${MARVO_DOCKER_GID:?set MARVO_DOCKER_GID to the Docker socket group id}
+    environment:
+      MARVO_RUNTIME_LISTEN: 0.0.0.0:4097
+      MARVO_RUNTIME_TOKEN_FILE: /state/control/.runtime-token
+      MARVO_RUNTIME_STATE_DIR: /state
+      MARVO_RUNTIME_HOST_STATE_DIR: ${MARVO_STATE_DIR:?set MARVO_STATE_DIR to an absolute host path}
+      MARVO_RUNTIME_UID: ${MARVO_UID:-1000}
+      MARVO_RUNTIME_GID: ${MARVO_GID:-1000}
+      MARVO_RUNTIME_NETWORK: marvo-runtime
+      MARVO_AGENT_IMAGE: ${MARVO_AGENT_IMAGE:-marvo-opencode:local}
+      MARVO_AGENT_IDLE_TIMEOUT: ${MARVO_AGENT_IDLE_TIMEOUT:-1800}
+    volumes:
+      - ${MARVO_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${MARVO_STATE_DIR}:/state
+    networks:
+      - runtime
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/marvo-runtime-healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app:
+    image: ${MARVO_IMAGE:-marvo:local}
+    build:
+      context: .
+      dockerfile: docker/marvo/Dockerfile
+    restart: unless-stopped
+    user: ${MARVO_UID:-1000}:${MARVO_GID:-1000}
+    command: ["-c", "/etc/marvo/config.yaml"]
+    depends_on:
+      runtime:
+        condition: service_healthy
+    volumes:
+      - ${MARVO_CONFIG_FILE:?set MARVO_CONFIG_FILE to an absolute config path}:/etc/marvo/config.yaml:ro
+      - ${MARVO_STATE_DIR}:/var/lib/marvo
+    ports:
+      - 127.0.0.1:${MARVO_PORT:-9989}:9989
+    networks:
+      - runtime
+
+networks:
+  runtime:
+    name: marvo-runtime

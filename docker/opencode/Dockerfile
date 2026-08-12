@@ -28,9 +28,15 @@ RUN apt-get update && \
     chmod 755 /root && \
     rm -rf /root/.bun/install/cache
 
+COPY --chmod=0444 AGENTS.md /opt/marvo/AGENTS.md
+COPY --chmod=0444 opencode.json /opt/marvo/opencode.json
+COPY --chmod=0555 bin/marvo-personalization /usr/local/bin/marvo-personalization
+COPY --chmod=0555 entrypoint.sh /opt/marvo/entrypoint.sh
+RUN chmod 0755 /opt/marvo
+
 WORKDIR /workspace
 
 EXPOSE 4096
 
-ENTRYPOINT []
+ENTRYPOINT ["/opt/marvo/entrypoint.sh"]
 CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]

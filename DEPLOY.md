@@ -2,82 +2,92 @@
 
 ## 架构
 
-生产环境由一套响应式前端、Go API 和只监听回环地址的 OpenCode 组成：
-
 ~~~text
-浏览器 ─HTTPS─> nginx
-                  ├─ /api/*  ─> Marvo Go
-                  └─ /*      ─> frontend/dist (SPA)
-
-Marvo Go ─> OpenCode 127.0.0.1:4096
-         └> data_dir（笔记、私有媒体、回收站）
+物理机 / Docker Host
+│
+├─ nginx / HTTPS
+│    └─ Marvo（原生进程 或 app 容器）
+│         ├─ control/platform.sqlite
+│         ├─ users/<userId>/app + workspace
+│         └─ HTTP/SSE ──> marvo-runtime 容器
+│                              │ 受限调用 Docker API
+│                              ├─ Agent Runtime A 容器
+│                              ├─ Agent Runtime B 容器
+│                              └─ Agent Runtime C 容器
+│
+└─ 宿主机 <state_dir>/users/<userId>/...
+     └─ 分别 bind mount 给 Marvo、网关和对应用户容器
 ~~~
 
-没有公开阅读端、公开搜索索引、公开附件路径或 `/mobile` 部署。所有笔记、搜索、媒体、SSE 和 Agent API 都要求已批准设备。
+外层 Marvo 可以原生运行，也可以容器化；Runtime 网关始终在 Docker 内。原生模式通过固定回环端口访问网关，容器模式通过 Docker DNS `runtime:4097` 访问。每用户 Agent 仅加入共享的 `marvo-runtime` 网络、没有宿主机端口，并使用各自不可预测的 Basic 凭据；Agent 容器拿不到网关 Bearer token 和 Docker socket。
 
-## 构建
+## 方案一：原生 Marvo + Docker Runtime
 
 ~~~bash
 npm --prefix frontend ci
-npm --prefix frontend run build
 make build
+make start-runtime
+./dist/marvo -c /etc/marvo/config.yaml
 ~~~
 
-产物：
-
-~~~text
-frontend/dist/   # 响应式 SPA
-dist/marvo       # Go 服务
-~~~
-
-部署 OpenCode：
-
-~~~bash
-cd docker/opencode
-./start.sh
-~~~
-
-`start.sh` 只把 OpenCode 暴露到 `127.0.0.1:4096`，并把 `AGENTS.md` 同步到笔记工作区。它不复制宿主机的 OpenCode 认证文件；批准设备可在“智能体设置 → 提供商连接”中完成 API Key 或 OAuth 连接，凭据由 OpenCode 保存在 Marvo 专用状态目录。`docker/opencode/opencode.json` 仍用于服务器侧的 provider 定义和基础运行配置。
-
-## 后端配置
-
-以 `config.production.example.yaml` 为起点。必须替换管理员密码和至少 32 字符的随机 session secret：
+`make build` 生成包含 Vue SPA 的单个 `dist/marvo`。配置使用 `config.production.example.yaml`：
 
 ~~~yaml
 server:
   host: 127.0.0.1
   port: 9989
+  state_dir: /var/lib/marvo
   data_dir: /var/lib/marvo/data
-  session_secret: "REPLACE_WITH_A_LONG_RANDOM_SECRET"
+  session_secret: "至少 32 字符的随机值"
   cors_origins:
     - https://marvo.example.com
 
 auth:
-  password: "REPLACE_WITH_A_STRONG_ADMIN_PASSWORD"
+  password: "平台管理员强密码"
 
 opencode:
-  url: http://127.0.0.1:4096
-  global_instructions_file: /var/lib/marvo/opencode-state/home/.config/opencode/AGENTS.md
+  legacy_home_dir: /var/lib/marvo/opencode-state/home
+
+runtime:
+  url: http://127.0.0.1:4097
+  token_file: /var/lib/marvo/control/.runtime-token
 ~~~
 
-如果 Go 与 nginx 不在同一主机，使用受防火墙保护的私网监听地址，并仍只允许明确的前端 origin。
+启动 Runtime 时让 `MARVO_STATE_DIR` 与 `server.state_dir` 指向同一绝对宿主机目录。Rootless Docker 可另外设置 `MARVO_RUNTIME_DOCKER_SOCKET`；网关仍只映射回环端口。
 
-服务器需要安装 `ffmpeg`/`ffprobe`。媒体没有产品层面的体积、时长或分辨率上限，因此应为 `data_dir` 规划充足磁盘；Marvo 会保留安全余量、流式写入并停止无进展的转码。
+## 方案二：Marvo 全容器化
 
-## nginx 示例
+复制并修改 `config.compose.example.yaml`，尤其是公网 Origin、平台密码和 session secret。然后设置：
+
+~~~bash
+export MARVO_STATE_DIR=/srv/marvo/state
+export MARVO_CONFIG_FILE=/srv/marvo/config.yaml
+export MARVO_UID=$(id -u marvo)
+export MARVO_GID=$(id -g marvo)
+export MARVO_DOCKER_SOCKET=/var/run/docker.sock
+export MARVO_DOCKER_GID=$(stat -c '%g' "$MARVO_DOCKER_SOCKET")
+
+install -d -m 700 -o "$MARVO_UID" -g "$MARVO_GID" "$MARVO_STATE_DIR"
+docker compose --profile images build
+docker compose up -d runtime app
+~~~
+
+Compose 只把 Marvo 的 `9989` 发布到 `127.0.0.1`。Runtime 网关通过 Docker DNS 访问，用户 Agent 容器完全不发布端口。`MARVO_STATE_DIR` 必须是 Docker Host 可识别的绝对路径；网关将同一路径作为子容器 bind mount 的来源。
+
+Docker socket 只挂给 Runtime 网关，不挂给 Marvo 或 Agent。网关 API 只允许固定镜像、固定挂载、固定网络和资源限制，客户端不能提交容器参数。若使用 Docker Socket Proxy，也必须允许 ping、network/image/container inspect、container list/create/start/stop/remove 这些最小操作。
+
+## nginx
+
+前端已经由 Go 提供，因此所有请求代理到同一个服务：
 
 ~~~nginx
 server {
     listen 443 ssl;
     server_name marvo.example.com;
 
-    root /srv/marvo/frontend;
-    index index.html;
-
-    # 产品不设置媒体大小上限。仍由 Marvo 进行磁盘余量和停滞保护。
     client_max_body_size 0;
 
-    location /api/ {
+    location / {
         proxy_pass http://127.0.0.1:9989;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -89,34 +99,25 @@ server {
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
     }
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
 }
 ~~~
 
-不要为 `assets/`、搜索或数据目录增加绕过 `/api` 的静态 location，否则会破坏设备访问控制。
+不要给笔记、媒体、搜索或 `state_dir` 配置绕过 API 的静态路径。
 
-## systemd 示例
+## 数据、备份和恢复
 
-~~~ini
-[Unit]
-Description=Marvo
-After=network.target docker.service
+- 备份整个 `state_dir`，其中包含平台控制库、每用户笔记、设备、设置、Provider 凭据和 Agent 会话。
+- 一致性备份前停止 Marvo 与 Runtime；特别是 `platform.sqlite` 和用户 `opencode.db` 可能使用 WAL。
+- 不要单独旋转 `.session-secret`：它用于验证会话并加密 TOTP secret。丢失后需要重置所有用户凭据。
+- `.runtime-token` 必须与 Marvo 和 Runtime 网关保持一致；丢失只影响网关认证和派生的容器密码，不影响用户文件。
+- Agent 容器和 Runtime 网关镜像不是备份对象，可以从源码重建。
 
-[Service]
-Type=simple
-User=marvo
-Group=marvo
-WorkingDirectory=/opt/marvo
-ExecStart=/opt/marvo/marvo -c /etc/marvo/config.yaml
-Restart=on-failure
-RestartSec=3
-NoNewPrivileges=true
+## 上线检查
 
-[Install]
-WantedBy=multi-user.target
+~~~bash
+make audit
+docker compose config --quiet
+curl -fsS http://127.0.0.1:9989/api/health >/dev/null
 ~~~
 
-上线前至少执行 Go 测试、前端类型检查与构建，并用 Chromium 和 Playwright WebKit 跑核心流程。WebKit 结果只代表设计兼容，不能替代 iPhone 真机验收。
+至少验证：平台用户创建、用户 TOTP 登录、两用户同名笔记互不可见、设备批准与撤回、媒体转码、Agent 并发、服务重启后的会话恢复，以及 Chromium 横屏/竖屏和 Playwright WebKit 核心流程。
