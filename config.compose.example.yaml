@@ -4,7 +4,6 @@ server:
   state_dir: /var/lib/marvo
   # 旧单用户目录只作为迁移源，迁移完成后仍原样保留。
   data_dir: /var/lib/marvo/data
-  session_secret: "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
   cors_origins:
     - https://YOUR_FRONTEND_DOMAIN
 

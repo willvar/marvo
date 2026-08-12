@@ -61,6 +61,8 @@ make dev
     agent/home/              # Provider 凭据、OpenCode 会话与用户全局提示词
 ~~~
 
+`.session-secret` 由 Marvo 自动生成并以 `0600` 权限持久化，不属于用户配置，也不会从旧版单用户目录继承。
+
 这些都是宿主机 bind mount；容器可随时重建。用户内容不在容器可写层，也不在平台 SQLite 中。
 
 笔记仍以标题作为目录名和存储身份：

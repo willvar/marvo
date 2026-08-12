@@ -3,18 +3,17 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
 func TestPublicCORSOriginRequiresStrongCredentialsBehindLoopbackProxy(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
 	cfg := Config{
 		Server: ServerConfig{
-			Host:          "127.0.0.1",
-			StateDir:      filepath.Join(t.TempDir(), "state"),
-			DataDir:       t.TempDir(),
-			SessionSecret: "",
-			CORSOrigins:   []string{"https://marvo.example.com"},
+			Host:        "127.0.0.1",
+			StateDir:    stateDir,
+			DataDir:     t.TempDir(),
+			CORSOrigins: []string{"https://marvo.example.com"},
 		},
 		Auth:     AuthConfig{Password: "marvo"},
 		OpenCode: OpenCodeConfig{URL: "http://127.0.0.1:4096"},
@@ -22,8 +21,13 @@ func TestPublicCORSOriginRequiresStrongCredentialsBehindLoopbackProxy(t *testing
 	if err := cfg.resolve(); err == nil {
 		t.Fatal("loopback backend with public browser origin accepted development credentials")
 	}
+	if len(cfg.Server.SessionSecret) < 32 {
+		t.Fatal("public origin did not create a managed session secret")
+	}
+	if info, err := os.Stat(filepath.Join(stateDir, "control", ".session-secret")); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("managed session secret is missing or not private: info=%v error=%v", info, err)
+	}
 
-	cfg.Server.SessionSecret = "0123456789abcdef0123456789abcdef"
 	cfg.Auth.Password = "a strong admin password"
 	if err := cfg.resolve(); err != nil {
 		t.Fatalf("resolve() with production credentials error = %v", err)
@@ -63,10 +67,10 @@ func TestLocalDevelopmentSecretIsCreatedPrivatelyAndReused(t *testing.T) {
 	}
 }
 
-func TestLegacyLocalSecretIsCopiedWithoutChangingIt(t *testing.T) {
+func TestManagedSessionSecretDoesNotReuseLegacySecret(t *testing.T) {
 	dataDir := t.TempDir()
 	stateDir := filepath.Join(t.TempDir(), "state")
-	legacySecret := "legacy-session-secret-that-is-long-enough"
+	legacySecret := "legacy-session-secret-that-must-not-be-reused"
 	if err := os.WriteFile(filepath.Join(dataDir, ".session-secret"), []byte(legacySecret+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -78,11 +82,11 @@ func TestLegacyLocalSecretIsCopiedWithoutChangingIt(t *testing.T) {
 	if err := cfg.resolve(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Server.SessionSecret != legacySecret {
-		t.Fatalf("session secret = %q", cfg.Server.SessionSecret)
+	if cfg.Server.SessionSecret == legacySecret {
+		t.Fatal("managed session secret reused the legacy value")
 	}
-	if raw, err := os.ReadFile(filepath.Join(stateDir, "control", ".session-secret")); err != nil || strings.TrimSpace(string(raw)) != legacySecret {
-		t.Fatalf("copied secret = %q, error = %v", raw, err)
+	if len(cfg.Server.SessionSecret) < 32 {
+		t.Fatal("managed session secret is too short")
 	}
 }
 

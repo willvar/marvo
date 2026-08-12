@@ -38,7 +38,6 @@ server:
   port: 9989
   state_dir: /var/lib/marvo
   data_dir: /var/lib/marvo/data
-  session_secret: "至少 32 字符的随机值"
   cors_origins:
     - https://marvo.example.com
 
@@ -57,7 +56,7 @@ runtime:
 
 ## 方案二：Marvo 全容器化
 
-复制并修改 `config.compose.example.yaml`，尤其是公网 Origin、平台密码和 session secret。然后设置：
+复制并修改 `config.compose.example.yaml`，尤其是公网 Origin 和平台密码。会话密钥由 Marvo 在私有状态目录自动生成并持久化，无需配置。然后设置：
 
 ~~~bash
 export MARVO_STATE_DIR=/srv/marvo/state

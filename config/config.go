@@ -138,6 +138,11 @@ func (c *Config) resolve() error {
 			return fmt.Errorf("invalid server.cors_origins entry %q", origin)
 		}
 	}
+	secret, err := loadOrCreateSessionSecret(c.Server.StateDir)
+	if err != nil {
+		return fmt.Errorf("initialize managed session secret: %w", err)
+	}
+	c.Server.SessionSecret = secret
 
 	requiresStrongCredentials := !isLoopbackHost(c.Server.Host)
 	for _, origin := range c.Server.CORSOrigins {
@@ -147,17 +152,7 @@ func (c *Config) resolve() error {
 		}
 	}
 	if !requiresStrongCredentials {
-		if c.Server.SessionSecret == "" {
-			secret, err := loadOrCreateLocalSecret(c.Server.StateDir, c.Server.DataDir)
-			if err != nil {
-				return fmt.Errorf("initialize local session secret: %w", err)
-			}
-			c.Server.SessionSecret = secret
-		}
 		return nil
-	}
-	if len(c.Server.SessionSecret) < 32 || strings.HasPrefix(c.Server.SessionSecret, "CHANGE_ME") {
-		return errors.New("server.session_secret must be an explicit random value of at least 32 characters for non-local access")
 	}
 	password := strings.TrimSpace(c.Auth.Password)
 	if utf8.RuneCountInString(password) < 12 || strings.EqualFold(password, "marvo") || strings.HasPrefix(password, "CHANGE_ME") {
@@ -202,7 +197,7 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func loadOrCreateLocalSecret(stateDir, legacyDataDir string) (string, error) {
+func loadOrCreateSessionSecret(stateDir string) (string, error) {
 	controlDir := filepath.Join(stateDir, "control")
 	if err := os.MkdirAll(controlDir, 0700); err != nil {
 		return "", err
@@ -221,14 +216,6 @@ func loadOrCreateLocalSecret(stateDir, legacyDataDir string) (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	legacyPath := filepath.Join(legacyDataDir, ".session-secret")
-	if legacySecret, ok := readExistingSecret(legacyPath); ok {
-		if err := writeNewPrivateFile(path, []byte(legacySecret+"\n")); err != nil {
-			return "", err
-		}
-		return legacySecret, nil
-	}
-
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -238,16 +225,6 @@ func loadOrCreateLocalSecret(stateDir, legacyDataDir string) (string, error) {
 		return "", err
 	}
 	return secret, nil
-}
-
-func readExistingSecret(path string) (string, bool) {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return "", false
-	}
-	raw, err := os.ReadFile(path)
-	secret := strings.TrimSpace(string(raw))
-	return secret, err == nil && len(secret) >= 32
 }
 
 func writeNewPrivateFile(path string, data []byte) error {
@@ -289,7 +266,7 @@ type ServerConfig struct {
 	Port          int      `yaml:"port"`
 	StateDir      string   `yaml:"state_dir"`
 	DataDir       string   `yaml:"data_dir"`
-	SessionSecret string   `yaml:"session_secret"`
+	SessionSecret string   `yaml:"-"`
 	CORSOrigins   []string `yaml:"cors_origins"`
 }
 
