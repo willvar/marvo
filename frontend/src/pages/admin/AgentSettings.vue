@@ -9,21 +9,24 @@ import {
   CloseOutlined,
   DeleteOutlined,
   DownOutlined,
+  GlobalOutlined,
   LayoutOutlined,
   MessageOutlined,
   PlusOutlined,
   RobotOutlined,
   SaveOutlined,
+  UndoOutlined,
 } from '@ant-design/icons-vue'
 import { v4 as uuidv4 } from 'uuid'
 import { useAgentPersonalizationStore } from '../../stores/agentPersonalization'
 import { useAgentSettingsStore } from '../../stores/agentSettings'
 import { useUIPreferencesStore, type AgentAssistantDisplayMode } from '../../stores/uiPreferences'
-import type { AgentModelOption, AgentModelSelection, AgentPersonalizationRule } from '../../sdk'
+import type { AgentModelOption, AgentModelSelection, AgentPersonalizationRule, AgentSettingsUpdate } from '../../sdk'
 import AgentProviderSettings from '../../components/AgentProviderSettings.vue'
 import { XFullscreenTextarea } from '../../components/x'
 
 const MAX_PROMPT_BYTES = 64 * 1024
+const MAX_EXA_API_KEY_BYTES = 4 * 1024
 const MAX_PERSONALIZATION_RULE_BYTES = 4 * 1024
 const MAX_PERSONALIZATION_RULES = 256
 const DEFAULT_VARIANT = '__model_default__'
@@ -42,6 +45,9 @@ const models = ref<AgentModelOption[]>([])
 const selectedValues = ref<string[]>([])
 const selectedVariant = ref(DEFAULT_VARIANT)
 const globalPrompt = ref('')
+const exaConfigured = ref(false)
+const exaAPIKey = ref('')
+const exaClearRequested = ref(false)
 const unavailableModel = ref<AgentModelSelection | null>(null)
 const unavailableVariant = ref('')
 const personalizationRules = ref<AgentPersonalizationRule[]>([])
@@ -77,15 +83,24 @@ const variantOptions = computed(() => [
 ])
 const promptBytes = computed(() => new TextEncoder().encode(globalPrompt.value).byteLength)
 const promptTooLarge = computed(() => promptBytes.value > MAX_PROMPT_BYTES)
+const exaAPIKeyBytes = computed(() => new TextEncoder().encode(exaAPIKey.value.trim()).byteLength)
+const exaAPIKeyTooLarge = computed(() => exaAPIKeyBytes.value > MAX_EXA_API_KEY_BYTES)
 const styleDirty = computed(() => displayMode.value !== styleSnapshot.value)
 const modelDirty = computed(() => settingsReady.value && modelSnapshot.value !== modelDraftSnapshot())
 const promptDirty = computed(() => settingsReady.value && promptSnapshot.value !== globalPrompt.value)
+const exaDirty = computed(() => settingsReady.value && (exaAPIKey.value.trim().length > 0 || exaClearRequested.value))
 const personalizationDirty = computed(
   () => personalizationReady.value && personalizationSnapshot.value !== personalizationDraftSnapshot(),
 )
 const settingsDirty = computed(
-  () => styleDirty.value || modelDirty.value || promptDirty.value || personalizationDirty.value,
+  () => styleDirty.value || modelDirty.value || promptDirty.value || exaDirty.value || personalizationDirty.value,
 )
+const exaStatus = computed(() => {
+  if (!settingsReady.value) return loading.value ? '读取中' : '不可用'
+  if (exaClearRequested.value) return '等待移除'
+  if (exaAPIKey.value.trim()) return exaConfigured.value ? '等待替换' : '等待保存'
+  return exaConfigured.value ? '已配置' : '匿名额度'
+})
 const personalizationInvalid = computed(() => {
   const texts = new Set<string>()
   for (const rule of personalizationRules.value) {
@@ -152,6 +167,8 @@ async function loadSettings() {
   error.value = ''
   unavailableModel.value = null
   unavailableVariant.value = ''
+  exaAPIKey.value = ''
+  exaClearRequested.value = false
   try {
     const settings = await settingsStore.load(true)
     if (sequence !== loadSequence) return
@@ -160,6 +177,7 @@ async function loadSettings() {
       : []
     set(models.value)
     globalPrompt.value = settings.global_prompt || ''
+    exaConfigured.value = Boolean(settings.exa_configured)
     if (settings.model && settings.model_available) {
       selectedValues.value = [modelKey(settings.model)]
       const model = models.value.find((candidate) => modelKey(candidate) === modelKey(settings.model!))
@@ -227,7 +245,7 @@ async function saveSettings() {
       personalizationRevision.value = snapshot.revision
       personalizationSnapshot.value = personalizationDraftSnapshot()
     }
-    if (modelDirty.value || promptDirty.value) {
+    if (modelDirty.value || promptDirty.value || exaDirty.value) {
       savePhase = 'settings'
       await saveAgentSettings()
     }
@@ -246,11 +264,15 @@ async function saveSettings() {
 }
 
 function validateSettings() {
-  if ((modelDirty.value || promptDirty.value) && (!settingsReady.value || !selectedModel.value || loading.value)) {
+  if (
+    (modelDirty.value || promptDirty.value || exaDirty.value) &&
+    (!settingsReady.value || !selectedModel.value || loading.value)
+  ) {
     error.value = '请选择智能体模型'
     return false
   }
   if (promptTooLarge.value) return false
+  if (exaAPIKeyTooLarge.value) return false
   if (personalizationDirty.value && personalizationInvalid.value) {
     touchedPersonalizationRuleIDs.value = new Set(personalizationRules.value.map((rule) => rule.id))
     return false
@@ -261,11 +283,18 @@ function validateSettings() {
 async function saveAgentSettings() {
   const model = selectedModel.value
   if (!model) throw new Error('请选择智能体模型')
-  await settingsStore.save({
+  const update = {
     model: { provider_id: model.provider_id, model_id: model.model_id },
     variant: selectedVariant.value === DEFAULT_VARIANT ? '' : selectedVariant.value,
     global_prompt: globalPrompt.value,
-  })
+  } as AgentSettingsUpdate
+  const key = exaAPIKey.value.trim()
+  if (key) update.exa_api_key = key
+  else if (exaClearRequested.value) update.clear_exa_api_key = true
+  const settings = await settingsStore.save(update)
+  exaConfigured.value = Boolean(settings.exa_configured)
+  exaAPIKey.value = ''
+  exaClearRequested.value = false
   modelSnapshot.value = modelDraftSnapshot()
   promptSnapshot.value = globalPrompt.value
 }
@@ -314,11 +343,22 @@ function restoreSettingsDraft() {
     selectedVariant.value = snapshot.variant || DEFAULT_VARIANT
   }
   globalPrompt.value = promptSnapshot.value
+  exaAPIKey.value = ''
+  exaClearRequested.value = false
   if (personalizationSnapshot.value) {
     personalizationRules.value = JSON.parse(personalizationSnapshot.value) as AgentPersonalizationRule[]
   }
   touchedPersonalizationRuleIDs.value = new Set()
   personalizationError.value = ''
+}
+
+function handleExaAPIKeyInput() {
+  exaClearRequested.value = false
+}
+
+function toggleExaRemoval() {
+  exaAPIKey.value = ''
+  exaClearRequested.value = !exaClearRequested.value
 }
 
 function handleComboboxOpen(details: { open: boolean }) {
@@ -612,6 +652,59 @@ function formatLimit(limit?: number) {
           </section>
         </div>
 
+        <section class="agent-settings-section agent-exa-section" aria-labelledby="agent-exa-heading">
+          <div class="agent-settings-section-heading">
+            <div>
+              <h2 id="agent-exa-heading">联网搜索</h2>
+              <p>为 OpenCode 内置的 Exa 搜索配置个人额度，避免匿名服务的共享限流。</p>
+            </div>
+            <span class="agent-exa-status" :data-state="exaStatus">{{ exaStatus }}</span>
+          </div>
+
+          <div class="agent-exa-layout">
+            <div class="agent-exa-summary">
+              <span class="agent-exa-icon"><GlobalOutlined aria-hidden="true" /></span>
+              <div>
+                <strong>Exa API</strong>
+                <p>未配置时仍会使用 OpenCode 官方匿名额度；配置后，当前用户空间的联网搜索将使用你的 Exa Key。</p>
+              </div>
+            </div>
+
+            <Field.Root class="agent-exa-field" :invalid="exaAPIKeyTooLarge">
+              <Field.Label class="agent-settings-field-label">Exa API Key</Field.Label>
+              <div class="agent-exa-control">
+                <Field.Input
+                  v-model="exaAPIKey"
+                  type="password"
+                  class="agent-exa-input"
+                  autocomplete="new-password"
+                  :disabled="!settingsReady || loading || exaClearRequested"
+                  :placeholder="exaConfigured ? '已配置；输入新密钥可替换' : '粘贴 Exa API Key'"
+                  aria-label="Exa API Key"
+                  aria-describedby="agent-exa-help"
+                  @input="handleExaAPIKeyInput"
+                />
+                <button
+                  v-if="exaConfigured"
+                  type="button"
+                  class="admin-btn agent-exa-remove"
+                  :disabled="!settingsReady || loading"
+                  @click="toggleExaRemoval"
+                >
+                  <UndoOutlined v-if="exaClearRequested" aria-hidden="true" />
+                  <DeleteOutlined v-else aria-hidden="true" />
+                  <span>{{ exaClearRequested ? '保留密钥' : '移除密钥' }}</span>
+                </button>
+              </div>
+              <Field.HelperText id="agent-exa-help" class="agent-exa-help">
+                密钥只发送到 Marvo
+                后端并加密保存在当前用户空间，浏览器不会读取已保存的原值。保存后将在下一次智能体请求前更新运行环境。
+              </Field.HelperText>
+              <Field.ErrorText v-if="exaAPIKeyTooLarge">Exa API Key 不能超过 4 KiB。</Field.ErrorText>
+            </Field.Root>
+          </div>
+        </section>
+
         <section class="agent-settings-block" aria-label="进阶设置">
           <div v-if="loading" class="agent-settings-loading" aria-label="正在读取进阶设置">
             <span class="page-loading-spinner" />
@@ -817,6 +910,134 @@ function formatLimit(limit?: number) {
   flex-shrink: 0;
   color: var(--text-muted);
   font-size: var(--marvo-type-12);
+}
+.agent-exa-status {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: var(--marvo-type-11);
+}
+.agent-exa-status[data-state='已配置'] {
+  background: color-mix(in srgb, #16a34a 11%, transparent);
+  color: #15803d;
+}
+.agent-exa-status[data-state='等待保存'],
+.agent-exa-status[data-state='等待替换'],
+.agent-exa-status[data-state='等待移除'] {
+  background: color-mix(in srgb, #d97706 12%, transparent);
+  color: #b45309;
+}
+.agent-exa-status[data-state='不可用'] {
+  background: color-mix(in srgb, var(--text-danger) 10%, transparent);
+  color: var(--text-danger);
+}
+:root[data-color-scheme='dark'] .agent-exa-status[data-state='已配置'] {
+  color: #4ade80;
+}
+:root[data-color-scheme='dark'] .agent-exa-status[data-state='等待保存'],
+:root[data-color-scheme='dark'] .agent-exa-status[data-state='等待替换'],
+:root[data-color-scheme='dark'] .agent-exa-status[data-state='等待移除'] {
+  color: #fbbf24;
+}
+.agent-exa-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.72fr) minmax(460px, 1.28fr);
+  align-items: center;
+  gap: 22px;
+}
+.agent-exa-summary {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+.agent-exa-icon {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--marvo-accent-color) 10%, var(--bg-primary));
+  color: var(--text-accent);
+  font-size: var(--marvo-type-17);
+}
+.agent-exa-summary strong {
+  color: var(--text-primary);
+  font-size: var(--marvo-type-13);
+}
+.agent-exa-summary p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: var(--marvo-type-11);
+  line-height: 1.6;
+}
+.agent-exa-field {
+  min-width: 0;
+}
+.agent-exa-control {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.agent-exa-input {
+  min-width: 0;
+  height: 40px;
+  flex: 1;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--marvo-type-13);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.agent-exa-input::placeholder {
+  color: var(--text-muted);
+}
+.agent-exa-input:focus {
+  border-color: var(--text-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color) 13%, transparent);
+}
+.agent-exa-input:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+}
+.agent-exa-remove {
+  min-width: 106px;
+  height: 40px;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+.agent-exa-remove:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text-danger) 42%, var(--border-primary));
+  color: var(--text-danger);
+}
+.agent-exa-remove:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.agent-exa-help {
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: var(--marvo-type-11);
+  line-height: 1.55;
 }
 .agent-display-mode-group {
   display: grid;
@@ -1567,11 +1788,19 @@ function formatLimit(limit?: number) {
     flex-direction: column;
     gap: 3px;
   }
+  .agent-exa-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .agent-exa-remove {
+    align-self: flex-end;
+  }
 }
 
 @media (max-width: 1200px) {
   .agent-style-layout,
   .agent-model-layout,
+  .agent-exa-layout,
   .agent-advanced-grid {
     grid-template-columns: 1fr;
   }

@@ -84,12 +84,15 @@ export interface AgentSettingsResponse {
   models: AgentModelOption[]
   model_available: boolean
   source: 'saved' | 'opencode' | 'none'
+  exa_configured: boolean
 }
 
 export interface AgentSettingsUpdate {
   model: AgentModelSelection | null
   variant: string
   global_prompt: string
+  exa_api_key?: string
+  clear_exa_api_key?: boolean
 }
 
 export interface AgentPersonalizationRule {

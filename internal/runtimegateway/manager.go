@@ -17,14 +17,16 @@ import (
 	"sync"
 	"time"
 
+	"marvo/internal/agentcredentials"
 	"marvo/internal/userid"
 )
 
 const (
-	labelRole       = "com.marvo.role"
-	labelUserID     = "com.marvo.user-id"
-	labelGeneration = "com.marvo.generation"
-	labelNetwork    = "com.marvo.runtime-network"
+	labelRole                  = "com.marvo.role"
+	labelUserID                = "com.marvo.user-id"
+	labelGeneration            = "com.marvo.generation"
+	labelNetwork               = "com.marvo.runtime-network"
+	labelCredentialFingerprint = "com.marvo.agent-credentials"
 )
 
 type RuntimeTarget struct {
@@ -100,6 +102,19 @@ func (m *RuntimeManager) Ensure(ctx context.Context, userID string) (*RuntimeTar
 	if err := m.validateUserDirectories(userID); err != nil {
 		return nil, err
 	}
+	credentialStore, err := agentcredentials.NewStore(
+		filepath.Join(m.config.StateDir, "users", userID, "app"),
+		userID,
+		m.config.Token,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open Agent credentials: %w", err)
+	}
+	credentials, err := credentialStore.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load Agent credentials: %w", err)
+	}
+	credentialFingerprint := credentialStore.Fingerprint(credentials)
 	name := runtimeContainerName(userID)
 	container, err := m.docker.InspectContainer(ctx, name)
 	if err != nil && !errors.Is(err, ErrDockerNotFound) {
@@ -110,7 +125,8 @@ func (m *RuntimeManager) Ensure(ctx context.Context, userID string) (*RuntimeTar
 			container.Config.Labels[labelNetwork] != m.config.Network {
 			return nil, fmt.Errorf("container name %q is already used by an unmanaged container", name)
 		}
-		if container.Config.Labels[labelGeneration] != m.generation {
+		if container.Config.Labels[labelGeneration] != m.generation ||
+			container.Config.Labels[labelCredentialFingerprint] != credentialFingerprint {
 			if err := m.docker.RemoveContainer(ctx, container.ID); err != nil {
 				return nil, fmt.Errorf("replace outdated Agent runtime: %w", err)
 			}
@@ -118,7 +134,7 @@ func (m *RuntimeManager) Ensure(ctx context.Context, userID string) (*RuntimeTar
 		}
 	}
 	if container == nil {
-		id, err := m.docker.CreateContainer(ctx, name, m.containerSpec(userID))
+		id, err := m.docker.CreateContainer(ctx, name, m.containerSpec(userID, credentials, credentialFingerprint))
 		if err != nil {
 			return nil, fmt.Errorf("create Agent runtime: %w", err)
 		}
@@ -242,22 +258,31 @@ func (m *RuntimeManager) RunIdleReaper(ctx context.Context) {
 	}
 }
 
-func (m *RuntimeManager) containerSpec(userID string) ContainerSpec {
+func (m *RuntimeManager) containerSpec(
+	userID string,
+	credentials agentcredentials.Credentials,
+	credentialFingerprint string,
+) ContainerSpec {
 	userRoot := filepath.Join(m.config.HostStateDir, "users", userID)
 	initEnabled := true
+	environment := []string{
+		"HOME=/home/marvo",
+		"TZ=Asia/Hong_Kong",
+		"OPENCODE_ENABLE_EXA=1",
+		"OPENCODE_SERVER_USERNAME=opencode",
+		"OPENCODE_SERVER_PASSWORD=" + runtimePassword(m.config.Token, userID),
+	}
+	if credentials.ExaAPIKey != "" {
+		environment = append(environment, "EXA_API_KEY="+credentials.ExaAPIKey)
+	}
 	return ContainerSpec{
-		Image: m.config.AgentImage,
-		Env: []string{
-			"HOME=/home/marvo",
-			"TZ=Asia/Hong_Kong",
-			"OPENCODE_ENABLE_EXA=1",
-			"OPENCODE_SERVER_USERNAME=opencode",
-			"OPENCODE_SERVER_PASSWORD=" + runtimePassword(m.config.Token, userID),
-		},
+		Image:      m.config.AgentImage,
+		Env:        environment,
 		WorkingDir: "/workspace",
 		User:       fmt.Sprintf("%d:%d", m.config.RuntimeUID, m.config.RuntimeGID),
 		Labels: map[string]string{
 			labelRole: "agent", labelUserID: userID, labelGeneration: m.generation, labelNetwork: m.config.Network,
+			labelCredentialFingerprint: credentialFingerprint,
 		},
 		Healthcheck: &Healthcheck{
 			Test:     []string{"CMD-SHELL", `curl -fsS --max-time 2 -u "${OPENCODE_SERVER_USERNAME}:${OPENCODE_SERVER_PASSWORD}" http://127.0.0.1:4096/global/health >/dev/null`},
@@ -279,7 +304,13 @@ func (m *RuntimeManager) containerSpec(userID string) ContainerSpec {
 
 func (m *RuntimeManager) validateUserDirectories(userID string) error {
 	root := filepath.Join(m.config.StateDir, "users", userID)
-	for _, path := range []string{root, filepath.Join(root, "workspace"), filepath.Join(root, "agent"), filepath.Join(root, "agent", "home")} {
+	for _, path := range []string{
+		root,
+		filepath.Join(root, "app"),
+		filepath.Join(root, "workspace"),
+		filepath.Join(root, "agent"),
+		filepath.Join(root, "agent", "home"),
+	} {
 		info, err := os.Lstat(path)
 		if err != nil {
 			return fmt.Errorf("inspect runtime directory %q: %w", path, err)

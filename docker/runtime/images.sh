@@ -71,6 +71,7 @@ ensure_runtime_image() {
     docker/runtime/go.mod \
     docker/runtime/healthcheck.sh \
     cmd/marvo-runtime \
+    internal/agentcredentials \
     internal/runtimeauth \
     internal/runtimegateway \
     internal/userid)"

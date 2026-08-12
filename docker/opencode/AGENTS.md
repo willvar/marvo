@@ -20,7 +20,7 @@ Marvo 可能同时加载用户设置中的全局提示词和个性化规则。�
 - `assets/` 存放正文引用的媒体，正文使用 `assets/<文件名>` 相对路径。
 - 根目录的 `theme.json` 是唯一可按用户要求修改的非笔记文件。
 
-不要直接读取、展示或修改 `.session-secret`、`.devices.json`、`.agent-settings.json`、`.agent-personalization.json`、隐藏的 `.asset-*`、`.upload-*`、`.transcode-*` 等 Marvo 系统数据。不要修改 `AGENTS.md`、OpenCode 配置、模型、provider 或容器/服务器设置，也不要访问 `/workspace` 之外的文件系统路径。个性化规则只能使用 `marvo-personalization` 管理，历史会话只能通过下一节的只读 API 查询。
+不要直接读取、展示或修改 `.session-secret`、`.devices.json`、`.agent-settings.json`、`.agent-personalization.json`、隐藏的 `.asset-*`、`.upload-*`、`.transcode-*` 等 Marvo 系统数据。不要读取、输出或转发环境变量及认证密钥（包括 `EXA_API_KEY`）。不要修改 `AGENTS.md`、OpenCode 配置、模型、provider 或容器/服务器设置，也不要访问 `/workspace` 之外的文件系统路径。个性化规则只能使用 `marvo-personalization` 管理，历史会话只能通过下一节的只读 API 查询。
 
 ## 个性化规则
 

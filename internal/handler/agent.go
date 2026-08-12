@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"marvo/internal/agentcredentials"
 	"marvo/internal/store"
 	"net/http"
 	"net/url"
@@ -29,6 +30,7 @@ type AgentDeps struct {
 	upstreamBearer   string
 	ShuttingDown     <-chan struct{}
 	settingsStore    *store.AgentSettingsStore
+	credentialStore  *agentcredentials.Store
 	personalization  *store.AgentPersonalizationStore
 	globalPromptFile *store.AgentGlobalPromptFile
 	promptMu         sync.Mutex
@@ -86,6 +88,10 @@ func (d *AgentDeps) jsonClient() *http.Client {
 
 func (d *AgentDeps) SetUpstreamBearer(token string) {
 	d.upstreamBearer = strings.TrimSpace(token)
+}
+
+func (d *AgentDeps) SetCredentialStore(credentials *agentcredentials.Store) {
+	d.credentialStore = credentials
 }
 
 type agentUpstreamTransport struct {

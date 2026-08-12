@@ -3,6 +3,7 @@ FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY docker/runtime/go.mod ./go.mod
 COPY cmd/marvo-runtime ./cmd/marvo-runtime
+COPY internal/agentcredentials ./internal/agentcredentials
 COPY internal/runtimeauth ./internal/runtimeauth
 COPY internal/runtimegateway ./internal/runtimegateway
 COPY internal/userid ./internal/userid

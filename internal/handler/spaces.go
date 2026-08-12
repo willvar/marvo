@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"marvo/config"
+	"marvo/internal/agentcredentials"
 	"marvo/internal/collab"
 	"marvo/internal/control"
 	"marvo/internal/media"
@@ -148,6 +149,11 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 		cleanup()
 		return nil, fmt.Errorf("%w: load Agent settings: %v", ErrUserSpaceUnavailable, err)
 	}
+	credentials, err := agentcredentials.NewStore(paths.App, userID, r.config.Runtime.Token)
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("%w: initialize Agent credentials: %v", ErrUserSpaceUnavailable, err)
+	}
 	personalization, err := store.NewAgentPersonalizationStore(paths.Workspace)
 	if err != nil {
 		cleanup()
@@ -161,6 +167,7 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 	runtimeURL := r.config.Runtime.URL + "/user/" + userID
 	space.AgentDeps = NewAgentDeps(runtimeURL, r.shuttingDown, settings, personalization, globalPrompt)
 	space.AgentDeps.SetUpstreamBearer(r.config.Runtime.Token)
+	space.AgentDeps.SetCredentialStore(credentials)
 	mediaManager.SetChangeHandler(func(title string, asset media.Asset) {
 		hub.BroadcastToNote(title, "", store.MustJSON(map[string]any{
 			"action": "asset_changed", "title": title, "asset": asset,

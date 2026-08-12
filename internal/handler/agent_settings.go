@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"marvo/internal/agentcredentials"
 	"marvo/internal/store"
 	"net/http"
 	"sort"
@@ -57,6 +58,15 @@ type agentSettingsResponse struct {
 	Models              []agentModelOption         `json:"models"`
 	ModelAvailable      bool                       `json:"model_available"`
 	Source              string                     `json:"source"`
+	ExaConfigured       bool                       `json:"exa_configured"`
+}
+
+type agentSettingsUpdate struct {
+	Model          *store.AgentModelSelection `json:"model"`
+	Variant        string                     `json:"variant"`
+	GlobalPrompt   string                     `json:"global_prompt"`
+	ExaAPIKey      *string                    `json:"exa_api_key,omitempty"`
+	ClearExaAPIKey bool                       `json:"clear_exa_api_key,omitempty"`
 }
 
 type openCodeProviderResponse struct {
@@ -109,6 +119,12 @@ func (d *AgentDeps) GetSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "智能体设置不可用"})
 		return
 	}
+	exaConfigured, err := d.exaConfigured()
+	if err != nil {
+		slog.Error("agent settings: load Exa credentials failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "无法读取 Exa 搜索凭据"})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), agentSettingsTimeout)
 	defer cancel()
@@ -137,7 +153,7 @@ func (d *AgentDeps) GetSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "无法应用全局提示词"})
 		return
 	}
-	writeJSON(w, http.StatusOK, buildAgentSettingsResponse(settings, models, source, pending))
+	writeJSON(w, http.StatusOK, buildAgentSettingsResponse(settings, models, source, pending, exaConfigured))
 }
 
 func (d *AgentDeps) UpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -145,14 +161,34 @@ func (d *AgentDeps) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "智能体设置不可用"})
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, store.MaxGlobalPromptBytes+4096)
-	var settings store.AgentSettings
-	if err := readJSON(r, &settings); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, store.MaxGlobalPromptBytes+agentcredentials.MaxExaAPIKeyBytes+4096)
+	var update agentSettingsUpdate
+	if err := readJSON(r, &update); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "设置格式无效"})
 		return
 	}
+	settings := store.AgentSettings{Model: update.Model, Variant: update.Variant, GlobalPrompt: update.GlobalPrompt}
 	if settings.Model == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请选择智能体模型"})
+		return
+	}
+	if update.ExaAPIKey != nil && update.ClearExaAPIKey {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "不能同时更新并清除 Exa API Key"})
+		return
+	}
+	var credentialUpdate *agentcredentials.Credentials
+	if update.ExaAPIKey != nil {
+		normalized, normalizeErr := agentcredentials.Normalize(agentcredentials.Credentials{ExaAPIKey: *update.ExaAPIKey})
+		if normalizeErr != nil || normalized.ExaAPIKey == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Exa API Key 格式无效"})
+			return
+		}
+		credentialUpdate = &normalized
+	} else if update.ClearExaAPIKey {
+		credentialUpdate = &agentcredentials.Credentials{}
+	}
+	if credentialUpdate != nil && d.credentialStore == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Exa 搜索凭据设置不可用"})
 		return
 	}
 
@@ -182,13 +218,37 @@ func (d *AgentDeps) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存智能体设置失败"})
 		return
 	}
+	if credentialUpdate != nil {
+		if err := d.credentialStore.Save(*credentialUpdate); err != nil {
+			slog.Error("agent settings: save Exa credentials failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "智能体设置已保存，但 Exa API Key 保存失败"})
+			return
+		}
+	}
 	pending, activateErr := d.activateSavedGlobalPrompt(ctx)
 	if activateErr != nil {
 		slog.Error("agent settings: activate global prompt failed", "error", activateErr)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "设置已保存，但全局提示词未能应用"})
 		return
 	}
-	writeJSON(w, http.StatusOK, buildAgentSettingsResponse(d.settingsStore.Get(), models, "saved", pending))
+	exaConfigured, err := d.exaConfigured()
+	if err != nil {
+		slog.Error("agent settings: reload Exa credentials failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "设置已保存，但无法确认 Exa 搜索凭据状态"})
+		return
+	}
+	writeJSON(w, http.StatusOK, buildAgentSettingsResponse(d.settingsStore.Get(), models, "saved", pending, exaConfigured))
+}
+
+func (d *AgentDeps) exaConfigured() (bool, error) {
+	if d.credentialStore == nil {
+		return false, nil
+	}
+	credentials, err := d.credentialStore.Load()
+	if err != nil {
+		return false, err
+	}
+	return credentials.ExaAPIKey != "", nil
 }
 
 func (d *AgentDeps) connectedModels(ctx context.Context) ([]agentModelOption, error) {
@@ -359,11 +419,13 @@ func buildAgentSettingsResponse(
 	models []agentModelOption,
 	source string,
 	globalPromptPending bool,
+	exaConfigured bool,
 ) agentSettingsResponse {
 	return agentSettingsResponse{
 		Model: settings.Model, Variant: settings.Variant, GlobalPrompt: settings.GlobalPrompt,
 		GlobalPromptPending: globalPromptPending, Models: models,
 		ModelAvailable: modelInCatalog(settings.Model, models) != nil, Source: source,
+		ExaConfigured: exaConfigured,
 	}
 }
 

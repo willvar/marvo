@@ -56,7 +56,7 @@ make dev
     .session-secret
     .runtime-token
   users/<userId>/
-    app/                     # 设备、智能体设置、迁移记录
+    app/                     # 设备、智能体设置、加密工具凭据、迁移记录
     workspace/               # 笔记、媒体、回收站、主题、个性化规则
     agent/home/              # Provider 凭据、OpenCode 会话与用户全局提示词
 ~~~
