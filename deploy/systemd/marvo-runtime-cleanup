@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+runtime_network="${MARVO_RUNTIME_NETWORK:-marvo-runtime}"
+if docker container inspect marvo-runtime >/dev/null 2>&1; then
+  role="$(docker container inspect --format '{{ index .Config.Labels "com.marvo.role" }}' marvo-runtime)"
+  if [ "$role" = runtime-gateway ]; then
+    docker rm -f marvo-runtime >/dev/null
+  fi
+fi
+
+while IFS= read -r agent_id; do
+  [ -n "$agent_id" ] || continue
+  docker stop "$agent_id" >/dev/null
+done < <(docker ps -q --filter label=com.marvo.role=agent --filter "label=com.marvo.runtime-network=$runtime_network")

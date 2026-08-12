@@ -1,0 +1,19 @@
+[Unit]
+Description=Marvo Runtime gateway
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/marvo/runtime.env
+ExecStart=/usr/local/libexec/marvo-runtime-run
+ExecStop=/usr/bin/docker stop --time 20 marvo-runtime
+ExecStopPost=/usr/local/libexec/marvo-runtime-cleanup
+Restart=always
+RestartSec=3s
+TimeoutStartSec=90s
+TimeoutStopSec=45s
+
+[Install]
+WantedBy=multi-user.target

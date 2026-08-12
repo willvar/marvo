@@ -1,0 +1,80 @@
+#!/bin/bash
+set -euo pipefail
+
+required=(
+  MARVO_STATE_DIR
+  MARVO_UID
+  MARVO_GID
+  MARVO_DOCKER_GID
+  MARVO_AGENT_MEMORY_BYTES
+  MARVO_AGENT_NANO_CPUS
+  MARVO_AGENT_PIDS_LIMIT
+  MARVO_AGENT_IDLE_TIMEOUT
+)
+for name in "${required[@]}"; do
+  if [ -z "${!name:-}" ]; then
+    echo "$name is required" >&2
+    exit 1
+  fi
+done
+
+runtime_image="${MARVO_RUNTIME_IMAGE:-marvo-runtime:local}"
+agent_image="${MARVO_AGENT_IMAGE:-marvo-opencode:local}"
+runtime_network="${MARVO_RUNTIME_NETWORK:-marvo-runtime}"
+runtime_port="${MARVO_RUNTIME_PORT:-4097}"
+docker_socket="${MARVO_DOCKER_SOCKET:-/var/run/docker.sock}"
+
+case "$MARVO_STATE_DIR" in /*) ;; *) echo "MARVO_STATE_DIR must be absolute" >&2; exit 1 ;; esac
+case "$runtime_port" in ''|*[!0-9]*) echo "MARVO_RUNTIME_PORT must be numeric" >&2; exit 1 ;; esac
+for value in "$MARVO_UID" "$MARVO_GID" "$MARVO_DOCKER_GID" "$MARVO_AGENT_MEMORY_BYTES" \
+  "$MARVO_AGENT_NANO_CPUS" "$MARVO_AGENT_PIDS_LIMIT" "$MARVO_AGENT_IDLE_TIMEOUT"; do
+  case "$value" in ''|*[!0-9]*) echo "Runtime numeric setting is invalid" >&2; exit 1 ;; esac
+done
+
+state_dir="$(realpath -e "$MARVO_STATE_DIR")"
+case "$state_dir" in /var/lib/marvo) ;; *) echo "Unexpected state directory: $state_dir" >&2; exit 1 ;; esac
+if [ ! -S "$docker_socket" ]; then
+  echo "Docker socket is unavailable: $docker_socket" >&2
+  exit 1
+fi
+
+docker image inspect "$runtime_image" >/dev/null
+agent_generation="$(docker image inspect --format '{{.Id}}' "$agent_image")"
+
+if docker container inspect marvo-runtime >/dev/null 2>&1; then
+  role="$(docker container inspect --format '{{ index .Config.Labels "com.marvo.role" }}' marvo-runtime)"
+  if [ "$role" != runtime-gateway ]; then
+    echo "Container name marvo-runtime is occupied by an unmanaged container" >&2
+    exit 1
+  fi
+  docker rm -f marvo-runtime >/dev/null
+fi
+
+if ! docker network inspect "$runtime_network" >/dev/null 2>&1; then
+  docker network create --driver bridge --label com.marvo.role=runtime-network "$runtime_network" >/dev/null
+fi
+
+exec docker run --rm \
+  --name marvo-runtime \
+  --label com.marvo.role=runtime-gateway \
+  --label "com.marvo.runtime-network=$runtime_network" \
+  --network "$runtime_network" \
+  -p "127.0.0.1:$runtime_port:4097" \
+  --user "$MARVO_UID:$MARVO_GID" \
+  --group-add "$MARVO_DOCKER_GID" \
+  --mount "type=bind,src=$docker_socket,dst=/var/run/docker.sock" \
+  --mount "type=bind,src=$state_dir,dst=/state" \
+  -e MARVO_RUNTIME_LISTEN=0.0.0.0:4097 \
+  -e MARVO_RUNTIME_TOKEN_FILE=/state/control/.runtime-token \
+  -e MARVO_RUNTIME_STATE_DIR=/state \
+  -e "MARVO_RUNTIME_HOST_STATE_DIR=$state_dir" \
+  -e "MARVO_RUNTIME_UID=$MARVO_UID" \
+  -e "MARVO_RUNTIME_GID=$MARVO_GID" \
+  -e "MARVO_RUNTIME_NETWORK=$runtime_network" \
+  -e "MARVO_AGENT_IMAGE=$agent_image" \
+  -e "MARVO_AGENT_GENERATION=$agent_generation" \
+  -e "MARVO_AGENT_MEMORY_BYTES=$MARVO_AGENT_MEMORY_BYTES" \
+  -e "MARVO_AGENT_NANO_CPUS=$MARVO_AGENT_NANO_CPUS" \
+  -e "MARVO_AGENT_PIDS_LIMIT=$MARVO_AGENT_PIDS_LIMIT" \
+  -e "MARVO_AGENT_IDLE_TIMEOUT=$MARVO_AGENT_IDLE_TIMEOUT" \
+  "$runtime_image"

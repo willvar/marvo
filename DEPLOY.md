@@ -30,6 +30,16 @@ make start-runtime
 ./dist/marvo -c /etc/marvo/config.yaml
 ~~~
 
+生产机可使用 `deploy/systemd/` 中的单元和脚本管理原生 Marvo 与 Runtime。Marvo 本体不进入容器；
+Runtime 网关仍通过 Docker 创建相互隔离的用户 Agent。复制 `runtime.env.example` 到
+`/etc/marvo/runtime.env`，填写 Marvo 用户、Docker socket 的 UID/GID 和资源上限后启用：
+
+~~~bash
+systemctl enable --now marvo-runtime.service marvo.service
+~~~
+
+`MARVO_AGENT_IDLE_TIMEOUT` 默认保持 1800 秒；设为 `0` 才会关闭空闲停止。
+
 `make build` 生成包含 Vue SPA 的单个 `dist/marvo`。配置使用 `config.production.example.yaml`：
 
 ~~~yaml
@@ -78,6 +88,9 @@ Docker socket 只挂给 Runtime 网关，不挂给 Marvo 或 Agent。网关 API 
 ## nginx
 
 前端已经由 Go 提供，因此所有请求代理到同一个服务：
+
+仓库内的 `deploy/nginx/marvo.conf.example` 包含独立证书、HTTP/2、HTTP/3、SSE 和流式上传配置；
+部署时替换 `YOUR_MARVO_DOMAIN` 后安装到 nginx 的站点目录。
 
 ~~~nginx
 server {

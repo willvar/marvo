@@ -1,0 +1,33 @@
+[Unit]
+Description=Marvo application
+Wants=network-online.target
+After=network-online.target marvo-runtime.service
+Requires=marvo-runtime.service
+
+[Service]
+Type=simple
+User=marvo
+Group=marvo
+WorkingDirectory=/var/lib/marvo
+Environment=HOME=/var/lib/marvo
+UMask=0077
+ExecStart=/usr/local/bin/marvo -c /etc/marvo/config.yaml
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/marvo
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
