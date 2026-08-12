@@ -1,16 +1,16 @@
 import { expect, test } from '@playwright/test'
-import { approveDevice } from './helpers'
+import { approveDevice, workspaceAPI, workspaceAPIRegex, workspacePath, workspaceURL } from './helpers'
 
 test('已回答的智能体提问按纵向问答呈现', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright answered question layout')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const messageID = 'assistant-answered-question'
   const now = Date.now()
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -47,7 +47,7 @@ test('已回答的智能体提问按纵向问答呈现', async ({ page }, testIn
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const summary = page.locator('.x-question-summary')
   const intro = page.getByText('我需要确认一个选项。', { exact: true })
@@ -76,7 +76,7 @@ test('已回答的智能体提问按纵向问答呈现', async ({ page }, testIn
 test('多轮提问按真实顺序渲染且等待态不重复旧思考标题', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright question reasoning order')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const messageID = 'assistant-question-reasoning-order'
@@ -87,10 +87,10 @@ test('多轮提问按真实顺序渲染且等待态不重复旧思考标题', as
     ...value,
   })
 
-  await page.route(/\/api\/agent\/session\/status(?:\?.*)?$/, (route) =>
+  await page.route(new RegExp(workspaceAPIRegex('/api/agent/session/status(?:\\?.*)?$')), (route) =>
     route.fulfill({ json: { [session.id]: { type: 'busy' } } }),
   )
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -128,7 +128,7 @@ test('多轮提问按真实顺序渲染且等待态不重复旧思考标题', as
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const blocks = page
     .locator('.agent-message-assistant .x-bubble-content')
@@ -148,7 +148,7 @@ test('多轮提问按真实顺序渲染且等待态不重复旧思考标题', as
 test('Agent 重连和空闲收尾不会让已显示的回复消失', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent monotonic reconciliation')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const userID = 'monotonic-user'
@@ -158,7 +158,7 @@ test('Agent 重连和空闲收尾不会让已显示的回复消失', async ({ pa
   const finalAnswer = '状态确认完成后的最终回复'
   const now = Date.now()
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -169,7 +169,7 @@ test('Agent 重连和空闲收尾不会让已显示的回复消失', async ({ pa
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   await page.evaluate(
     async ({ sessionID, userMessageID, assistantMessageID, answerText, createdAt }) => {
@@ -305,7 +305,7 @@ test('Agent 重连和空闲收尾不会让已显示的回复消失', async ({ pa
 test('Agent 思考过程默认收起并可手动展开', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright collapsed reasoning')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const messageID = 'assistant-collapsed-reasoning'
@@ -325,7 +325,7 @@ test('Agent 思考过程默认收起并可手动展开', async ({ page }, testIn
     })
   })
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -358,7 +358,7 @@ test('Agent 思考过程默认收起并可手动展开', async ({ page }, testIn
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const think = page.locator('.agent-message-assistant .x-think')
   const trigger = think.locator('.x-think-status')
@@ -380,7 +380,7 @@ test('Agent 思考过程默认收起并可手动展开', async ({ page }, testIn
 test('Agent 按消息归属保留文本与动作的实际顺序', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent timeline projection')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const now = Date.now()
@@ -398,7 +398,7 @@ test('Agent 按消息归属保留文本与动作的实际顺序', async ({ page 
     ...value,
   })
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -446,7 +446,7 @@ test('Agent 按消息归属保留文本与动作的实际顺序', async ({ page 
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   await expect(page.locator('.agent-message-user')).toHaveCount(2)
   await expect(page.locator('.agent-message-assistant')).toHaveCount(2)
@@ -472,11 +472,11 @@ test('Agent 按消息归属保留文本与动作的实际顺序', async ({ page 
 test('Agent 重试状态使用面向用户的提示', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent retry status')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -494,7 +494,7 @@ test('Agent 重试状态使用面向用户的提示', async ({ page }, testInfo)
       ],
     }),
   )
-  await page.route(/\/api\/agent\/session\/status(?:\?.*)?$/, (route) =>
+  await page.route(new RegExp(workspaceAPIRegex('/api/agent/session/status(?:\\?.*)?$')), (route) =>
     route.fulfill({
       json: {
         [session.id]: {
@@ -515,7 +515,7 @@ test('Agent 重试状态使用面向用户的提示', async ({ page }, testInfo)
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const retry = page.locator('.agent-message-assistant .x-retry')
   await expect(retry).toBeVisible()
@@ -531,12 +531,12 @@ test('Agent 重试状态使用面向用户的提示', async ({ page }, testInfo)
 test('Agent 流式回复不显示光标且链接在新窗口打开', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent link behavior')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const messageID = 'assistant-link-behavior'
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -561,7 +561,7 @@ test('Agent 流式回复不显示光标且链接在新窗口打开', async ({ pa
   )
   await page.context().route('https://example.com/**', (route) => route.fulfill({ body: 'opened' }))
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const answer = page.locator('.agent-message-assistant .agent-message-text')
   const link = answer.getByRole('link', { name: '外部链接' })
@@ -574,6 +574,6 @@ test('Agent 流式回复不显示光标且链接在新窗口打开', async ({ pa
   const newPage = await newPagePromise
   await newPage.waitForLoadState()
   await expect(newPage).toHaveURL('https://example.com/agent-link')
-  await expect(page).toHaveURL('http://127.0.0.1:15080/agent')
+  await expect(page).toHaveURL(workspaceURL('/agent'))
   await newPage.close()
 })

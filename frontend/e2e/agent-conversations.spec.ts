@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test'
-import { approveDevice, createLongAgentSession } from './helpers'
+import {
+  approveDevice,
+  createLongAgentSession,
+  workspaceAPI,
+  workspaceAPIRegex,
+  workspacePath,
+  workspaceURL,
+} from './helpers'
 
 test('进入和切换长 Agent 会话后定位到消息底部', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
@@ -7,7 +14,7 @@ test('进入和切换长 Agent 会话后定位到消息底部', async ({ page },
   const firstID = await createLongAgentSession(page, 'FIRST SCROLL SESSION')
   const secondID = await createLongAgentSession(page, 'SECOND SCROLL SESSION')
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), firstID)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const messageScroller = page.locator('.x-bubble-list-scroll')
   await expect(page.getByText('FIRST SCROLL SESSION 18', { exact: false })).toBeAttached()
@@ -60,14 +67,14 @@ test('进入和切换长 Agent 会话后定位到消息底部', async ({ page },
 test('子会话提问和权限请求会在根会话完成响应', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent child requests')
-  const created = await page.request.post('/api/agent/session')
-  const alternateCreated = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
+  const alternateCreated = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   expect(alternateCreated.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const alternate = (await alternateCreated.json()) as { id: string }
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
   await expect(page.locator(`.x-conversations-item[data-key="${session.id}"]`)).toHaveClass(/active/)
 
   const childID = `${session.id}-child`
@@ -181,12 +188,12 @@ test('子会话提问和权限请求会在根会话完成响应', async ({ page 
 test('刷新页面时会补齐待响应请求所属的子会话', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent child request restore')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const childID = `${session.id}-restored-child`
 
-  await page.route(/\/api\/agent\/question(?:\?.*)?$/, (route) =>
+  await page.route(new RegExp(workspaceAPIRegex('/api/agent/question(?:\\?.*)?$')), (route) =>
     route.fulfill({
       json: [
         {
@@ -205,7 +212,7 @@ test('刷新页面时会补齐待响应请求所属的子会话', async ({ page 
       ],
     }),
   )
-  await page.route(new RegExp(`/api/agent/session/${childID}(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${childID}(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: {
         id: childID,
@@ -216,7 +223,7 @@ test('刷新页面时会补齐待响应请求所属的子会话', async ({ page 
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   await expect(page.locator('.agent-chat-input .agent-question')).toContainText('页面刷新后仍然可以看到吗？')
   await expect(
@@ -226,13 +233,13 @@ test('刷新页面时会补齐待响应请求所属的子会话', async ({ page 
 
 test('子任务卡片可进入只读子会话并返回主对话', async ({ page }, testInfo) => {
   await approveDevice(page, `Playwright Agent subtask navigation ${testInfo.project.name}`)
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const childID = `${session.id}-visible-child`
   const now = Date.now()
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -282,7 +289,7 @@ test('子任务卡片可进入只读子会话并返回主对话', async ({ page 
       ],
     }),
   )
-  await page.route(new RegExp(`/api/agent/session/${childID}(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${childID}(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: {
         id: childID,
@@ -292,7 +299,7 @@ test('子任务卡片可进入只读子会话并返回主对话', async ({ page 
       },
     }),
   )
-  await page.route(new RegExp(`/api/agent/session/${childID}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${childID}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -332,7 +339,7 @@ test('子任务卡片可进入只读子会话并返回主对话', async ({ page 
   )
 
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const card = page.getByRole('button', { name: '查看子任务：核对历史资料' })
   await expect(card).toBeVisible()
@@ -356,7 +363,7 @@ test('浮动智能体可从子任务卡片进入只读记录', async ({ page }, 
   const childID = 'floating-subtask-child'
   const now = Date.now()
 
-  await page.route(new RegExp(`/api/agent/session/${childID}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${childID}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -395,7 +402,7 @@ test('浮动智能体可从子任务卡片进入只读记录', async ({ page }, 
     }),
   )
 
-  await page.goto('/')
+  await page.goto(workspacePath())
   await page.locator('.agent-fab').click()
   const panel = page.locator('.agent-float-panel')
   await expect(panel).toBeVisible()
@@ -476,18 +483,18 @@ test('浮动智能体可从子任务卡片进入只读记录', async ({ page }, 
 test('智能体加载与子会话执行异常不会显示成空白状态', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent visible errors')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   let rejectSessionList = true
-  await page.route(/\/api\/agent\/session(?:\?.*)?$/, async (route) => {
+  await page.route(new RegExp(workspaceAPIRegex('/api/agent/session(?:\\?.*)?$')), async (route) => {
     if (route.request().method() !== 'GET' || !rejectSessionList) {
       await route.continue()
       return
     }
     await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'offline' }) })
   })
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
   const runtimeNotice = page.locator('.agent-chat-runtime-notice')
   await expect(runtimeNotice).toContainText('无法加载对话')
   await expect(page.locator('.x-conversations-empty')).toContainText('暂无对话')
@@ -533,14 +540,14 @@ test('智能体加载与子会话执行异常不会显示成空白状态', async
 test('Agent 输入草稿按会话分别恢复', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent conversation drafts')
-  const firstResponse = await page.request.post('/api/agent/session')
-  const secondResponse = await page.request.post('/api/agent/session')
+  const firstResponse = await page.request.post(workspaceAPI('/api/agent/session'))
+  const secondResponse = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(firstResponse.ok()).toBeTruthy()
   expect(secondResponse.ok()).toBeTruthy()
   const first = (await firstResponse.json()) as { id: string }
   const second = (await secondResponse.json()) as { id: string }
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), first.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const input = page.locator('.agent-chat-input .x-sender-input')
   await input.fill('第一段未发送草稿')
@@ -563,14 +570,14 @@ test('根路由 Agent 输入创建新会话并发送后进入 Agent 页面', asy
   let createRequests = 0
   page.on('request', (request) => {
     const url = new URL(request.url())
-    if (request.method() === 'POST' && url.pathname === '/api/agent/session') createRequests++
+    if (request.method() === 'POST' && url.pathname === workspaceAPI('/api/agent/session')) createRequests++
   })
 
   const promptText = `HOME AGENT ${Date.now()}`
   const promptRequestPromise = page.waitForRequest(
     (request) =>
       request.method() === 'POST' &&
-      request.url().includes('/api/agent/session/') &&
+      request.url().includes(workspaceAPI('/api/agent/session/')) &&
       request.url().endsWith('/prompt_async'),
   )
   const input = page.locator('.home-agent-composer .x-sender-input')
@@ -580,10 +587,10 @@ test('根路由 Agent 输入创建新会话并发送后进入 Agent 页面', asy
 
   const promptRequest = await promptRequestPromise
   const promptPath = new URL(promptRequest.url()).pathname
-  const sessionID = decodeURIComponent(promptPath.match(/\/api\/agent\/session\/([^/]+)\/prompt_async$/)?.[1] || '')
+  const sessionID = decodeURIComponent(promptPath.match(/\/agent\/session\/([^/]+)\/prompt_async$/)?.[1] || '')
   expect(sessionID).not.toBe('')
   expect(promptRequest.postDataJSON().parts[0].text).toBe(promptText)
-  await expect(page).toHaveURL('http://127.0.0.1:15080/agent')
+  await expect(page).toHaveURL(workspaceURL('/agent'))
   await expect(page.locator('.x-conversations-item.active')).toHaveAttribute('data-key', sessionID)
   await expect(page.getByText(promptText, { exact: true })).toBeVisible()
   expect(createRequests).toBe(1)
@@ -592,11 +599,11 @@ test('根路由 Agent 输入创建新会话并发送后进入 Agent 页面', asy
 test('智能体附件会提示重复选择并显示发送前准备状态', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright Agent attachment feedback')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const imageInput = page.locator('.agent-chat-input .agent-composer-picker input[type="file"]').first()
   const duplicateFile = {

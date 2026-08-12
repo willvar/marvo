@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test'
-import { approveDevice, closeCompactSidebar, openSidebar } from './helpers'
+import {
+  approveDevice,
+  closeCompactSidebar,
+  openSidebar,
+  workspaceAPI,
+  workspaceAPIRegex,
+  workspacePath,
+  workspaceURL,
+} from './helpers'
 
 test('核心笔记流程在响应式布局中安全工作', async ({ page }, testInfo) => {
   const suffix = testInfo.project.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
@@ -25,7 +33,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page.locator('.dsh-footer')).not.toContainText('智能体设置')
   await closeCompactSidebar(page)
   await page.locator('.dsh-header-agent').click()
-  await expect(page).toHaveURL('http://127.0.0.1:15080/agent')
+  await expect(page).toHaveURL(workspaceURL('/agent'))
   const staticHeaderTitle = page.locator('.dsh-header-title')
   await expect(staticHeaderTitle).toHaveText('智能体对话')
   await expect(staticHeaderTitle).not.toHaveClass(/is-clickable/)
@@ -102,7 +110,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await search.fill('非法/标题')
   await search.press('Enter')
   await expect(page.getByRole('alert')).toContainText('标题不能包含')
-  await expect(page).toHaveURL('http://127.0.0.1:15080/agent')
+  await expect(page).toHaveURL(workspaceURL('/agent'))
   await search.fill(title)
   await search.press('Enter')
   await expect(page).toHaveURL(new RegExp(`/note/${encodedTitle}$`))
@@ -131,12 +139,12 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await page.locator('.dsh-header-title-input').press('Enter')
   await expect(page).toHaveURL(new RegExp(`/note/${encodedTitle}$`))
   await expect(page.locator('.dsh-header-title')).toHaveText(title)
-  expect((await page.request.get(`/api/notes/${encodeURIComponent(previousTitle)}`)).status()).toBe(404)
-  expect((await page.request.get(`/api/notes/${encodedTitle}`)).ok()).toBeTruthy()
+  expect((await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(previousTitle)}`))).status()).toBe(404)
+  expect((await page.request.get(workspaceAPI(`/api/notes/${encodedTitle}`))).ok()).toBeTruthy()
 
   await editor.fill('DRAFT SURVIVES REFRESH')
   await page.waitForTimeout(350)
-  const beforeDraftSave = await (await page.request.get(`/api/notes/${encodeURIComponent(title)}`)).json()
+  const beforeDraftSave = await (await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(title)}`))).json()
   expect(beforeDraftSave.content).not.toContain('DRAFT SURVIVES REFRESH')
   await page.reload()
   await expect(page.locator('.note-preview')).toContainText('DRAFT SURVIVES REFRESH')
@@ -147,13 +155,15 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
 
   await editor.fill('ORPHAN DRAFT RECOVERY')
   await page.waitForTimeout(350)
-  const beforeReplacement = await (await page.request.get(`/api/notes/${encodeURIComponent(title)}`)).json()
-  const trashed = await page.request.delete(`/api/notes/${encodeURIComponent(title)}`, {
+  const beforeReplacement = await (
+    await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(title)}`))
+  ).json()
+  const trashed = await page.request.delete(workspaceAPI(`/api/notes/${encodeURIComponent(title)}`), {
     data: { instance_token: beforeReplacement.instance_token },
   })
   expect(trashed.ok()).toBeTruthy()
   const trashPayload = await trashed.json()
-  const restored = await page.request.post(`/api/trash/${trashPayload.trash.id}/restore`, {
+  const restored = await page.request.post(workspaceAPI(`/api/trash/${trashPayload.trash.id}/restore`), {
     data: { new_title: title },
   })
   expect(restored.ok()).toBeTruthy()
@@ -172,10 +182,10 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page.locator('.note-preview .katex')).toHaveCount(0)
   await page.getByRole('button', { name: '编辑' }).click()
 
-  const snapshotResponse = await page.request.get(`/api/notes/${encodeURIComponent(title)}`)
+  const snapshotResponse = await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(title)}`))
   const snapshot = await snapshotResponse.json()
   await editor.fill('LOCAL VERSION')
-  const remoteWrite = await page.request.put(`/api/notes/${encodeURIComponent(title)}/content`, {
+  const remoteWrite = await page.request.put(workspaceAPI(`/api/notes/${encodeURIComponent(title)}/content`), {
     data: {
       content: 'REMOTE VERSION',
       base_revision: snapshot.content_revision,
@@ -197,7 +207,8 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page.locator('.dsh-header-title')).toHaveAttribute('aria-disabled', 'false')
   await expect(page.locator('.dsh-header-save-status')).toHaveText('已保存', { timeout: 10_000 })
 
-  await page.route(/\/api\/notes\/.*\/assets\/[^/]+\/content$/, async (route) => {
+  const assetUploadRoute = new RegExp(workspaceAPIRegex('/api/notes/.*/assets/[^/]+/content$'))
+  await page.route(assetUploadRoute, async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 500))
     await route.continue()
   })
@@ -214,14 +225,14 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   })
   await expect(page.locator('.marvo-asset-placeholder')).toBeVisible()
   await expect(page.locator('.tiptap img')).toBeVisible({ timeout: 15_000 })
-  await page.unroute(/\/api\/notes\/.*\/assets\/[^/]+\/content$/)
+  await page.unroute(assetUploadRoute)
   await expect(page.locator('.dsh-header-save-status')).toHaveText('已保存', { timeout: 10_000 })
 
   await page.getByTitle('移到回收站').click()
   await page.getByRole('button', { name: '移到回收站', exact: true }).last().click()
-  await expect(page).toHaveURL('http://127.0.0.1:15080/')
+  await expect(page).toHaveURL(workspaceURL())
 
-  await page.goto('/trash')
+  await page.goto(workspacePath('/trash'))
   await page.getByRole('button', { name: '恢复', exact: true }).click()
   await expect(page.getByLabel('新标题')).toHaveValue(title)
   await page.getByRole('button', { name: '确认恢复' }).click()
@@ -283,7 +294,9 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await page.keyboard.type(`\n${editDuringAgent}`)
   await expect(page.locator('.dsh-header-save-status')).toHaveText(/草稿已保护|保存中…/)
   await expect(page.locator('.dsh-header-save-status')).toHaveText('已保存', { timeout: 10_000 })
-  const duringAgentRemote = await (await page.request.get(`/api/notes/${encodeURIComponent(title)}`)).json()
+  const duringAgentRemote = await (
+    await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(title)}`))
+  ).json()
   expect(duringAgentRemote.content).toContain(editDuringAgent)
 
   await page.locator('.agent-fab').click()
@@ -291,7 +304,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await floatingPanel.getByRole('button', { name: '停止', exact: true }).click()
   await expect(floatingPanel.getByRole('button', { name: '发送', exact: true })).toBeVisible()
 
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
   const sessionItems = page.locator('.x-conversations-item')
   await expect.poll(() => sessionItems.count()).toBeGreaterThan(0)
   const sessionCount = await sessionItems.count()
@@ -339,7 +352,8 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
     releaseHistory = resolve
   })
   let historyDelayed = false
-  await page.route('**/api/agent/session/*/message', async (route) => {
+  const messageRoute = `**${workspaceAPI('/api/agent/session/*/message')}`
+  await page.route(messageRoute, async (route) => {
     const shouldDelay =
       !historyDelayed &&
       route.request().method() === 'GET' &&
@@ -362,7 +376,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(activeSession).toHaveClass(/active/)
   releaseHistory()
   await historyFinished
-  await page.unroute('**/api/agent/session/*/message')
+  await page.unroute(messageRoute)
   await expect(page.getByText(floatingText, { exact: true })).toHaveCount(0)
 
   const agentInput = page.locator('.agent-chat-input .x-sender-input')
@@ -451,7 +465,9 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
 
   const promptedSessionID = await page.locator('.x-conversations-item.active').getAttribute('data-key')
   expect(promptedSessionID).toBeTruthy()
-  const upstreamMessages = await (await page.request.get(`/api/agent/session/${promptedSessionID}/message`)).json()
+  const upstreamMessages = await (
+    await page.request.get(workspaceAPI(`/api/agent/session/${promptedSessionID}/message`))
+  ).json()
   const injectedPrompt = [...upstreamMessages]
     .reverse()
     .find((message: any) => message.parts?.some((part: any) => part.type === 'text' && part.text === slashText))
@@ -462,10 +478,13 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page.getByText(slashText, { exact: true })).toBeVisible()
   await expect(page.locator('.x-bubble-list .x-attachment-card')).toContainText(['agent-pixel.png', 'agent-notes.txt'])
   await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible()
-  await page.route(new RegExp(`/api/agent/session/${promptedSessionID}/abort(?:\\?.*)?$`), async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 600))
-    await route.continue()
-  })
+  await page.route(
+    new RegExp(workspaceAPIRegex(`/api/agent/session/${promptedSessionID}/abort(?:\\?.*)?$`)),
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      await route.continue()
+    },
+  )
   await page.getByRole('button', { name: '停止', exact: true }).click()
   await expect(agentInput).toHaveAttribute('placeholder', '正在停止…')
   await expect(page.getByRole('button', { name: '正在停止', exact: true })).toBeVisible()

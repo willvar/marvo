@@ -73,7 +73,7 @@ vite_pid=$!
 
 for _attempt in $(seq 1 120); do
   if curl -fs http://127.0.0.1:15096/config >/dev/null \
-    && curl -fs 'http://127.0.0.1:15090/api/auth/token?local_device_id=readiness' >/dev/null \
+    && curl -fs http://127.0.0.1:15090/api/health >/dev/null \
     && curl -fs http://127.0.0.1:15080/ >/dev/null; then
     break
   fi
@@ -81,7 +81,7 @@ for _attempt in $(seq 1 120); do
 done
 
 if ! curl -fsS http://127.0.0.1:15096/config >/dev/null \
-  || ! curl -fsS 'http://127.0.0.1:15090/api/auth/token?local_device_id=readiness' >/dev/null \
+  || ! curl -fsS http://127.0.0.1:15090/api/health >/dev/null \
   || ! curl -fsS http://127.0.0.1:15080/ >/dev/null; then
   tail -80 /tmp/marvo-fake.log /tmp/marvo-api.log /tmp/marvo-vite.log
   exit 1

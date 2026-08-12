@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { toMarkdownAssetPath, toNoteAssetUrl } from '../src/sdk/utils/noteAssets'
-import { approveDevice } from './helpers'
+import { approveDevice, authenticateUserAdministrator, workspaceAPI, workspacePath, workspaceURL } from './helpers'
 
 test('中文媒体路径不会被重复编码', () => {
   const expected = '/api/notes/%E6%96%B0%E4%B8%AD%E5%9B%BD/assets/%E6%97%B6%E9%97%B4%E7%BA%BF.svg'
@@ -13,15 +13,17 @@ test('编辑状态下点击超链接不会打开页面', async ({ page }, testIn
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright editor link behavior')
   const title = 'E2E editor link behavior'
-  const created = await page.request.post('/api/notes', {
+  const created = await page.request.post(workspaceAPI('/api/notes'), {
     data: { title, content: '![](assets/时间线.svg)\n\n[编辑态链接](https://example.com)', tags: [] },
   })
   expect(created.ok()).toBeTruthy()
 
-  await page.goto(`/note/${encodeURIComponent(title)}`)
+  await page.goto(workspacePath(`/note/${encodeURIComponent(title)}`))
   await expect(page.locator('.note-preview')).toBeVisible()
   await page.locator('.editor-toolbar-left > .toolbar-btn').nth(1).click()
-  const expectedAssetURL = `/api/notes/${encodeURIComponent(title)}/assets/${encodeURIComponent('时间线.svg')}`
+  const expectedAssetURL = workspaceAPI(
+    `/api/notes/${encodeURIComponent(title)}/assets/${encodeURIComponent('时间线.svg')}`,
+  )
   await expect(page.locator('.tiptap img')).toHaveAttribute('src', expectedAssetURL)
   const editorLink = page.locator('.tiptap a', { hasText: '编辑态链接' })
   await expect(editorLink).toBeVisible()
@@ -36,7 +38,7 @@ test('编辑状态下点击超链接不会打开页面', async ({ page }, testIn
   await page.keyboard.type('\n保存路径检查')
   await expect(page.locator('.dsh-header-save-status')).toHaveText(/草稿已保护|保存中…/)
   await expect(page.locator('.dsh-header-save-status')).toHaveText('已保存', { timeout: 10_000 })
-  const saved = await (await page.request.get(`/api/notes/${encodeURIComponent(title)}`)).json()
+  const saved = await (await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(title)}`))).json()
   expect(saved.content).toContain('assets/时间线.svg')
   expect(saved.content).not.toContain('assets/%E6%97%B6%E9%97%B4%E7%BA%BF.svg')
 
@@ -53,10 +55,12 @@ test('长标签保持局部滚动且保存状态位于标题右侧', async ({ pa
   await approveDevice(page, 'Playwright long note tags')
   const title = 'E2E long note tags'
   const tags = Array.from({ length: 16 }, (_, index) => `很长的标签-${index + 1}-${'内容'.repeat(8)}`)
-  const created = await page.request.post('/api/notes', { data: { title, content: '标签布局检查', tags } })
+  const created = await page.request.post(workspaceAPI('/api/notes'), {
+    data: { title, content: '标签布局检查', tags },
+  })
   expect(created.ok()).toBeTruthy()
 
-  await page.goto(`/note/${encodeURIComponent(title)}`)
+  await page.goto(workspacePath(`/note/${encodeURIComponent(title)}`))
   const saving = page.locator('.dsh-header-save-status')
   const headerTitle = page.locator('.dsh-header-title')
   const header = page.locator('.dsh-header')
@@ -89,11 +93,11 @@ test('笔记列表品牌栏与内容标题栏保持对齐', async ({ page }, tes
   await approveDevice(page, 'Playwright shell header alignment')
 
   const noteTitle = 'E2E shell alignment'
-  const note = await page.request.post('/api/notes', {
+  const note = await page.request.post(workspaceAPI('/api/notes'), {
     data: { title: noteTitle, content: 'alignment', tags: [] },
   })
   expect(note.ok()).toBeTruthy()
-  const session = await page.request.post('/api/agent/session')
+  const session = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(session.ok()).toBeTruthy()
 
   const brand = page.locator('.dsh-brand')
@@ -126,7 +130,7 @@ test('笔记列表品牌栏与内容标题栏保持对齐', async ({ page }, tes
     ),
   ).toBeLessThanOrEqual(0.5)
 
-  await page.goto(`/note/${encodeURIComponent(noteTitle)}`)
+  await page.goto(workspacePath(`/note/${encodeURIComponent(noteTitle)}`))
   const [searchRowBounds, editorToolbarBounds] = await Promise.all([
     page.locator('.dsh-search').boundingBox(),
     page.locator('.editor-toolbar').boundingBox(),
@@ -135,11 +139,11 @@ test('笔记列表品牌栏与内容标题栏保持对齐', async ({ page }, tes
   expect(searchRowBounds!.height).toBe(editorToolbarBounds!.height)
 
   const logo = page.locator('.dsh-logo')
-  await expect(logo).toHaveAttribute('href', '/')
+  await expect(logo).toHaveAttribute('href', workspacePath())
   await logo.click()
-  await expect(page).toHaveURL('http://127.0.0.1:15080/')
+  await expect(page).toHaveURL(workspaceURL())
 
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
   const search = page.locator('.dsh-search-inp')
   const sessionsPane = page.locator('.agent-chat-sessions')
   const creation = page.locator('.x-conversations-creation')
@@ -188,7 +192,7 @@ test('笔记列表品牌栏与内容标题栏保持对齐', async ({ page }, tes
 
   await page.evaluate(() => localStorage.setItem('marvo.ui.agentAssistantDisplayMode', 'sidebar'))
   await page.reload()
-  await page.goto('/')
+  await page.goto(workspacePath())
   const sideHeader = page.locator('.agent-side-header')
   const sideAction = page.locator('.agent-side-action')
   await expect(sideHeader).toBeVisible()
@@ -233,7 +237,7 @@ test('主题 fontSize 按同一比例缩放全站文字', async ({ page }, testI
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright global font scaling')
   let fontSize = 14
-  await page.route('**/api/theme', async (route) => {
+  await page.route(`**${workspaceAPI('/api/theme')}`, async (route) => {
     await route.fulfill({
       json: {
         fontSize,
@@ -247,9 +251,11 @@ test('主题 fontSize 按同一比例缩放全站文字', async ({ page }, testI
   })
 
   const title = 'E2E global font scaling'
-  const created = await page.request.post('/api/notes', { data: { title, content: '全站字号比例测试', tags: [] } })
+  const created = await page.request.post(workspaceAPI('/api/notes'), {
+    data: { title, content: '全站字号比例测试', tags: [] },
+  })
   expect(created.ok()).toBeTruthy()
-  await page.goto(`/note/${encodeURIComponent(title)}`)
+  await page.goto(workspacePath(`/note/${encodeURIComponent(title)}`))
   await expect(page.locator('.note-preview')).toBeVisible()
 
   const typographySizes = () =>
@@ -284,10 +290,10 @@ test('回收站破坏性操作统一使用组件确认弹框', async ({ page }, 
   await approveDevice(page, 'Playwright trash confirmations')
   const titles = ['E2E trash restore field', 'E2E trash single delete', 'E2E trash empty']
   for (const title of titles) {
-    const created = await page.request.post('/api/notes', { data: { title, content: '', tags: [] } })
+    const created = await page.request.post(workspaceAPI('/api/notes'), { data: { title, content: '', tags: [] } })
     expect(created.ok()).toBeTruthy()
     const note = (await created.json()) as { instance_token: string }
-    const trashed = await page.request.delete(`/api/notes/${encodeURIComponent(title)}`, {
+    const trashed = await page.request.delete(workspaceAPI(`/api/notes/${encodeURIComponent(title)}`), {
       data: { instance_token: note.instance_token },
     })
     expect(trashed.ok()).toBeTruthy()
@@ -298,7 +304,7 @@ test('回收站破坏性操作统一使用组件确认弹框', async ({ page }, 
     nativeDialogs++
     await dialog.dismiss()
   })
-  await page.goto('/trash')
+  await page.goto(workspacePath('/trash'))
 
   const restoreCard = page.locator('.trash-card').filter({ hasText: titles[0] })
   await restoreCard.getByRole('button', { name: '恢复', exact: true }).click()
@@ -323,10 +329,11 @@ test('回收站破坏性操作统一使用组件确认弹框', async ({ page }, 
 
 test('撤回设备批准需要组件确认', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
+  await approveDevice(page, 'Playwright device administration')
   const suffix = Date.now()
   const deviceName = `Playwright 撤回确认 ${suffix}`
   const localDeviceID = `marvo-playwright-revoke-${suffix}`
-  const application = await page.request.post('/api/auth/apply', {
+  const application = await page.request.post(workspaceAPI('/api/auth/apply'), {
     data: {
       local_device_id: localDeviceID,
       device_name: deviceName,
@@ -340,10 +347,9 @@ test('撤回设备批准需要组件确认', async ({ page }, testInfo) => {
     nativeDialogs++
     await dialog.dismiss()
   })
-  await page.goto('/admin/login')
-  await page.getByPlaceholder('请输入密码').fill('e2e-admin-password')
-  await page.getByRole('button', { name: '进入' }).click()
-  await expect(page).toHaveURL(/\/admin$/)
+  await authenticateUserAdministrator(page)
+  await page.goto(workspacePath('/admin'))
+  await expect(page).toHaveURL(workspaceURL('/admin'))
 
   const pendingRow = page.locator('tbody tr').filter({ hasText: deviceName })
   await expect(pendingRow).toBeVisible()
@@ -373,7 +379,7 @@ test('撤回设备批准需要组件确认', async ({ page }, testInfo) => {
 test('路由资源版本失效时自动恢复到当前前端版本', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright stale route recovery')
-  await page.goto('/')
+  await page.goto(workspacePath())
 
   let trashModuleRequests = 0
   await page.route('**/src/pages/desktop/Trash.vue*', async (route) => {

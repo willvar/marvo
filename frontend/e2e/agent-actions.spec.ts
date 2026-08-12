@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test'
-import { approveDevice } from './helpers'
+import { approveDevice, workspaceAPI, workspaceAPIRegex, workspacePath } from './helpers'
 
 test('Agent 会话隐藏内部压缩消息并正确呈现恢复与停止结果', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright normalized Agent messages')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const now = Date.now()
@@ -15,7 +15,7 @@ test('Agent 会话隐藏内部压缩消息并正确呈现恢复与停止结果',
     ...value,
   })
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -131,7 +131,7 @@ test('Agent 会话隐藏内部压缩消息并正确呈现恢复与停止结果',
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   await expect(page.locator('.agent-message-user')).toHaveCount(3)
   await expect(page.locator('.agent-message-assistant')).toHaveCount(2)
@@ -151,7 +151,7 @@ test('Agent 会话隐藏内部压缩消息并正确呈现恢复与停止结果',
 test('Agent 动作链按用户语义合并且仅总状态可展开', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
   await approveDevice(page, 'Playwright structured thought chain')
-  const created = await page.request.post('/api/agent/session')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
   const readMessageID = 'assistant-tools-read'
@@ -159,7 +159,7 @@ test('Agent 动作链按用户语义合并且仅总状态可展开', async ({ pa
   const answerMessageID = 'assistant-tools-answer'
   const startedAt = Date.now()
 
-  await page.route(new RegExp(`/api/agent/session/${session.id}/message(?:\\?.*)?$`), (route) =>
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
     route.fulfill({
       json: [
         {
@@ -332,7 +332,7 @@ test('Agent 动作链按用户语义合并且仅总状态可展开', async ({ pa
     }),
   )
   await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
-  await page.goto('/agent')
+  await page.goto(workspacePath('/agent'))
 
   const chain = page.locator('.agent-message-assistant > .x-bubble-body .x-thought-chain').first()
   const rootTrigger = chain.locator(':scope > .x-thought-node > .x-thought-node-main > .x-thought-node-trigger')

@@ -4,7 +4,6 @@ const reuseServers = process.env.E2E_REUSE_SERVERS === '1'
 
 export default defineConfig({
   testDir: './e2e',
-  globalSetup: './e2e/global-setup.ts',
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
@@ -25,7 +24,7 @@ export default defineConfig({
       env: { MARVO_FAKE_OPENCODE_ADDR: '127.0.0.1:15096' },
     },
     {
-      command: 'go run . -c frontend/e2e/config.yaml',
+      command: 'go run ./testsupport/e2eserver',
       cwd: '..',
       port: 15090,
       reuseExistingServer: reuseServers,
