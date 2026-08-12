@@ -416,7 +416,7 @@ onBeforeUnmount(stopPolling)
                 <strong>{{ provider.name }}</strong>
                 <span>{{ provider.id }} · {{ provider.model_count }} 个模型</span>
               </span>
-              <span class="provider-status connected">{{ provider.can_disconnect ? '已连接' : '环境管理' }}</span>
+              <span v-if="!provider.can_disconnect" class="provider-status connected">环境管理</span>
               <button
                 v-if="provider.can_disconnect"
                 type="button"

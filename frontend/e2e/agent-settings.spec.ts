@@ -124,6 +124,12 @@ test('智能体设置可连接 API Key 与 OAuth 提供商并即时刷新模型'
   await page.getByLabel('API Key').fill('e2e-api-key')
   await page.getByRole('button', { name: '连接提供商', exact: true }).click()
   await expect(page.locator('.provider-connected-item').filter({ hasText: 'E2E API Key Provider' })).toHaveCount(1)
+  await expect(
+    page
+      .locator('.provider-connected-item')
+      .filter({ hasText: 'E2E API Key Provider' })
+      .getByText('已连接', { exact: true }),
+  ).toHaveCount(0)
   await providerInput().click()
   await providerInput().fill('E2E API Key Provider')
   await expect(page.locator('.provider-picker-item').filter({ hasText: 'E2E API Key Provider' })).toHaveCount(0)
