@@ -119,6 +119,7 @@ server {
 ## 数据、备份和恢复
 
 - 备份整个 `state_dir`，其中包含平台控制库、每用户笔记、设备、设置、Provider 凭据和 Agent 会话。
+- `control/android` 保存平台管理员发布的 Android APK 与版本元数据，也包含在完整备份中。
 - 一致性备份前停止 Marvo 与 Runtime；特别是 `platform.sqlite` 和用户 `opencode.db` 可能使用 WAL。
 - 不要单独旋转 `.session-secret`：它用于验证会话并加密 TOTP secret。丢失后需要重置所有用户凭据。
 - `.runtime-token` 必须与 Marvo 和 Runtime 网关保持一致；丢失只影响网关认证和派生的容器密码，不影响用户文件。

@@ -53,6 +53,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', closeExpandedFromEsc
     <Field.Textarea
       v-model="model"
       v-bind="$attrs"
+      class="x-fullscreen-textarea-input"
       :placeholder="placeholder"
       :disabled="disabled"
       :readonly="readonly"
@@ -66,7 +67,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', closeExpandedFromEsc
   </div>
 
   <Dialog.Root :open="expanded" :close-on-escape="false" lazy-mount unmount-on-exit @update:open="updateExpanded">
-    <Teleport to="body">
+    <Teleport v-if="expanded" to="body">
       <Dialog.Backdrop class="dialog-backdrop x-fullscreen-textarea-backdrop" />
       <Dialog.Positioner class="dialog-positioner x-fullscreen-textarea-positioner">
         <Dialog.Content class="dialog-panel x-fullscreen-textarea-dialog">
@@ -104,6 +105,32 @@ onBeforeUnmount(() => window.removeEventListener('keydown', closeExpandedFromEsc
 .x-fullscreen-textarea {
   min-width: 0;
 }
+.x-fullscreen-textarea-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 116px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--marvo-type-13);
+  line-height: 1.6;
+}
+.x-fullscreen-textarea-input::placeholder {
+  color: var(--text-muted);
+}
+.x-fullscreen-textarea-input:focus {
+  border-color: var(--text-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color) 13%, transparent);
+}
+.x-fullscreen-textarea-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .x-fullscreen-textarea-toolbar {
   display: flex;
   justify-content: flex-end;
@@ -119,9 +146,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', closeExpandedFromEsc
   overflow: hidden;
 }
 .x-fullscreen-textarea-dialog {
-  width: 100vw;
+  width: 100%;
   max-width: none;
-  height: 100dvh;
+  height: 100%;
   max-height: none;
   border: 0;
   border-radius: 0;

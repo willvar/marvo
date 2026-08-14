@@ -16,6 +16,7 @@ export function currentUserID(pathname = typeof window === 'undefined' ? '' : wi
 export function scopedAPIPath(path: string, userID = currentUserID()) {
   if (!path.startsWith('/api/') || path.startsWith('/api/user/')) return path
   if (path.startsWith('/api/platform/')) return path
+  if (path.startsWith('/api/app/')) return path
   if (userID) {
     if (!isValidUserID(userID)) throw new Error('Invalid user ID for scoped API request')
     return `/api/user/${userID}${path.slice('/api'.length)}`

@@ -4,14 +4,16 @@ import { api, userLoginRoute, workspaceRoute } from '../sdk'
 import { useAuthStore } from '../stores/auth'
 import { useRouter, useRoute } from 'vue-router'
 import { setUserRouteTitleName } from '../router'
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import MarvoMark from '../components/MarvoMark.vue'
 import {
   CheckOutlined,
+  AndroidOutlined,
   CloseOutlined,
-  FileTextOutlined,
   HomeOutlined,
   InfoCircleOutlined,
   LoadingOutlined,
+  MenuOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
   LockOutlined,
@@ -24,6 +26,7 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const collapsed = ref(false)
+const mobileNavigationOpen = ref(false)
 const menuOpen = ref(false)
 const dropdownRef = ref<HTMLElement>()
 const userName = ref('')
@@ -35,7 +38,7 @@ const workspaceEntryError = ref('')
 const userID = computed(() => (typeof route.params.userId === 'string' ? route.params.userId : ''))
 const isUserAdmin = computed(() => !!userID.value)
 const adminTitle = computed(() => {
-  if (!isUserAdmin.value) return '用户管理'
+  if (!isUserAdmin.value) return route.name === 'platform-android' ? 'Android APP' : '用户管理'
   if (route.name === 'user-space-info') return '空间信息'
   if (route.name === 'user-agent-settings') return '智能体设置'
   if (route.name === 'user-security') return '安全设置'
@@ -43,6 +46,35 @@ const adminTitle = computed(() => {
 })
 const userAdminRoot = computed(() => workspaceRoute('/admin', userID.value))
 const accountName = computed(() => (isUserAdmin.value ? userName.value || '用户管理员' : '平台管理员'))
+const navigationItems = computed(() => {
+  if (!isUserAdmin.value) {
+    return [
+      { to: '/admin', routeName: 'platform-users', label: '用户管理', icon: SafetyCertificateOutlined },
+      { to: '/admin/android', routeName: 'platform-android', label: 'Android APP', icon: AndroidOutlined },
+    ]
+  }
+  return [
+    { to: userAdminRoot.value, routeName: 'user-devices', label: '设备审批', icon: SafetyCertificateOutlined },
+    {
+      to: `${userAdminRoot.value}/settings`,
+      routeName: 'user-space-info',
+      label: '空间信息',
+      icon: InfoCircleOutlined,
+    },
+    {
+      to: `${userAdminRoot.value}/agent`,
+      routeName: 'user-agent-settings',
+      label: '智能体设置',
+      icon: RobotOutlined,
+    },
+    {
+      to: `${userAdminRoot.value}/security`,
+      routeName: 'user-security',
+      label: '安全设置',
+      icon: LockOutlined,
+    },
+  ]
+})
 
 function suggestedDeviceName() {
   const userAgent = navigator.userAgent
@@ -149,6 +181,14 @@ function onDocClick(e: MouseEvent) {
   }
 }
 
+watch(
+  () => route.fullPath,
+  () => {
+    mobileNavigationOpen.value = false
+    menuOpen.value = false
+  },
+)
+
 onMounted(() => {
   document.addEventListener('mousedown', onDocClick)
   void loadUserIdentity()
@@ -161,66 +201,49 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
   <div class="admin-shell">
     <aside :class="['admin-sidebar', { collapsed }]">
       <div class="admin-sidebar-brand">
-        <FileTextOutlined />
-        <span v-if="!collapsed">{{ isUserAdmin ? 'Marvo' : 'Marvo Admin' }}</span>
+        <MarvoMark />
+        <span v-if="!collapsed" class="admin-sidebar-label">{{ isUserAdmin ? 'Marvo' : 'Marvo Admin' }}</span>
       </div>
 
       <nav class="admin-sidebar-nav">
         <router-link
-          v-if="!isUserAdmin"
-          to="/admin"
-          :class="{ active: route.name === 'platform-users' }"
-          title="用户管理"
+          v-for="item in navigationItems"
+          :key="item.routeName"
+          :to="item.to"
+          :class="{ active: route.name === item.routeName }"
+          :aria-label="item.label"
+          :title="item.label"
         >
-          <SafetyCertificateOutlined />
-          <span v-if="!collapsed">用户管理</span>
-        </router-link>
-        <router-link
-          v-if="isUserAdmin"
-          :to="userAdminRoot"
-          :class="{ active: route.name === 'user-devices' }"
-          title="设备审批"
-        >
-          <SafetyCertificateOutlined />
-          <span v-if="!collapsed">设备审批</span>
-        </router-link>
-        <router-link
-          v-if="isUserAdmin"
-          :to="`${userAdminRoot}/settings`"
-          :class="{ active: route.name === 'user-space-info' }"
-          title="空间信息"
-        >
-          <InfoCircleOutlined />
-          <span v-if="!collapsed">空间信息</span>
-        </router-link>
-        <router-link
-          v-if="isUserAdmin"
-          :to="`${userAdminRoot}/agent`"
-          :class="{ active: route.name === 'user-agent-settings' }"
-          title="智能体设置"
-        >
-          <RobotOutlined />
-          <span v-if="!collapsed">智能体设置</span>
-        </router-link>
-        <router-link
-          v-if="isUserAdmin"
-          :to="`${userAdminRoot}/security`"
-          :class="{ active: route.name === 'user-security' }"
-          title="安全设置"
-        >
-          <LockOutlined />
-          <span v-if="!collapsed">安全设置</span>
+          <component :is="item.icon" />
+          <span v-if="!collapsed" class="admin-sidebar-label">{{ item.label }}</span>
         </router-link>
       </nav>
 
-      <button class="admin-sidebar-toggle" @click="collapsed = !collapsed">
+      <button
+        class="admin-sidebar-toggle"
+        type="button"
+        :aria-label="collapsed ? '展开后台导航' : '收起后台导航'"
+        :title="collapsed ? '展开后台导航' : '收起后台导航'"
+        @click="collapsed = !collapsed"
+      >
         <LeftOutlined />
       </button>
     </aside>
 
     <div class="admin-main">
       <header class="admin-header">
-        <span class="admin-header-title">{{ adminTitle }}</span>
+        <div class="admin-header-heading">
+          <button
+            class="admin-mobile-nav-trigger"
+            type="button"
+            aria-label="打开后台导航"
+            :aria-expanded="mobileNavigationOpen"
+            @click="mobileNavigationOpen = true"
+          >
+            <MenuOutlined aria-hidden="true" />
+          </button>
+          <span class="admin-header-title">{{ adminTitle }}</span>
+        </div>
         <div class="admin-header-actions">
           <a
             v-if="isUserAdmin && auth.isAuthenticated"
@@ -270,6 +293,37 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
       </main>
     </div>
   </div>
+
+  <Dialog.Root :open="mobileNavigationOpen" lazy-mount unmount-on-exit @update:open="mobileNavigationOpen = $event">
+    <Teleport to="body">
+      <Dialog.Backdrop class="dialog-backdrop admin-mobile-nav-backdrop" />
+      <Dialog.Positioner class="admin-mobile-nav-positioner">
+        <Dialog.Content class="admin-mobile-nav-panel">
+          <div class="admin-mobile-nav-header">
+            <div class="admin-mobile-nav-brand">
+              <MarvoMark />
+              <Dialog.Title>{{ isUserAdmin ? 'Marvo' : 'Marvo Admin' }}</Dialog.Title>
+            </div>
+            <Dialog.CloseTrigger class="admin-mobile-nav-close" aria-label="关闭后台导航">
+              <CloseOutlined aria-hidden="true" />
+            </Dialog.CloseTrigger>
+          </div>
+          <nav class="admin-mobile-nav" aria-label="后台导航">
+            <router-link
+              v-for="item in navigationItems"
+              :key="item.routeName"
+              :to="item.to"
+              :class="{ active: route.name === item.routeName }"
+              @click="mobileNavigationOpen = false"
+            >
+              <component :is="item.icon" aria-hidden="true" />
+              <span>{{ item.label }}</span>
+            </router-link>
+          </nav>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Teleport>
+  </Dialog.Root>
 
   <Dialog.Root
     :open="workspaceAuthorizationOpen"

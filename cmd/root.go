@@ -15,6 +15,7 @@ import (
 
 	"marvo/config"
 	webapp "marvo/frontend"
+	"marvo/internal/apprelease"
 	"marvo/internal/control"
 	"marvo/internal/handler"
 	"marvo/internal/userspace"
@@ -41,6 +42,14 @@ func Execute() {
 		os.Exit(1)
 	}
 	defer controlDB.Close()
+	appReleases, err := apprelease.Open(layout.AndroidReleaseDirectory())
+	if err != nil {
+		if appReleases == nil {
+			slog.Error("failed to initialize Android release store", "error", err)
+			os.Exit(1)
+		}
+		slog.Warn("published Android release is unavailable; continuing without it", "error", err)
+	}
 	mux := http.NewServeMux()
 
 	shuttingDown := make(chan struct{})
@@ -56,6 +65,7 @@ func Execute() {
 			Workspace: cfg.Server.DataDir,
 			AgentHome: cfg.OpenCode.LegacyHomeDir,
 		},
+		AppReleases: appReleases,
 	}
 	handler.RegisterRoutes(mux, deps)
 	if frontend := webapp.Handler(); frontend != nil {

@@ -41,6 +41,13 @@ func (l *Layout) ControlDatabase() string {
 	return filepath.Join(l.root, "control", "platform.sqlite")
 }
 
+// AndroidReleaseDirectory is the global Android distribution boundary. APKs
+// are platform artifacts, not user content, so they live beside the control
+// database instead of inside any user's isolated space.
+func (l *Layout) AndroidReleaseDirectory() string {
+	return filepath.Join(l.root, "control", "android")
+}
+
 func (l *Layout) UserPaths(userID string) (Paths, error) {
 	if l == nil || !control.ValidateUserID(userID) {
 		return Paths{}, errors.New("invalid user id")

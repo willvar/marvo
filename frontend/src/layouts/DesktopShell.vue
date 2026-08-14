@@ -1,18 +1,24 @@
 <script setup lang="ts">
+import { Dialog } from '@ark-ui/vue/dialog'
+import QrcodeVue from 'qrcode.vue'
 import { useAuthStore } from '../stores/auth'
 import { useNoteStore } from '../stores/note'
 import AgentFloating from '../components/AgentFloating.vue'
+import MarvoMark from '../components/MarvoMark.vue'
 import {
   on,
   connect,
   disconnect,
   api,
+  ApiError,
   normalizeTheme,
+  setColorSchemePreference,
   prepareNoteForAgent,
   DEFAULT_CONTENT_FONT_SIZE,
   DEFAULT_FONT_FAMILY,
   DEFAULT_FONT_SIZE,
   DEFAULT_ACCENT_COLOR,
+  isMarvoAndroidApp,
   type ThemeFile,
   currentUserID,
   userLoginRoute,
@@ -23,8 +29,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { ref, onMounted, onBeforeUnmount, computed, nextTick, watch } from 'vue'
 import {
   DeleteOutlined,
+  AndroidOutlined,
+  CloseOutlined,
+  DownloadOutlined,
   LeftOutlined,
   MenuOutlined,
+  MobileOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons-vue'
@@ -33,6 +43,7 @@ const auth = useAuthStore()
 const noteStore = useNoteStore()
 const router = useRouter()
 const route = useRoute()
+const androidApp = isMarvoAndroidApp()
 const loading = ref(true)
 const creating = ref(false)
 const searchQuery = ref('')
@@ -42,6 +53,14 @@ const noteMutationBlocked = ref(false)
 type NoteSaveState = 'saved' | 'draft' | 'saving' | 'conflict' | 'error'
 const noteSaveStatus = ref<{ state: NoteSaveState; label: string; error: string } | null>(null)
 const brandName = ref('Marvo')
+const usesPlatformBrand = computed(() => brandName.value === 'Marvo')
+const androidOpen = ref(false)
+const androidMode = ref<'choice' | 'download' | 'bind'>('choice')
+const androidReleaseLoading = ref(false)
+const androidReleaseAvailable = ref(false)
+const androidReleaseVersion = ref('')
+const androidReleaseError = ref('')
+const androidDownloadURL = computed(() => new URL('/api/app/android/apk', window.location.origin).toString())
 
 const SIDER_COLLAPSED_STORAGE_KEY = 'marvo.ui.noteListCollapsed'
 
@@ -110,9 +129,7 @@ async function loadBrand() {
 }
 
 function applyTheme(tf: ThemeFile) {
-  const isSystemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  const dark = tf.darkMode === undefined || tf.darkMode === 'system' ? isSystemDark : tf.darkMode
-  document.documentElement.dataset.colorScheme = dark ? 'dark' : 'light'
+  setColorSchemePreference(tf.darkMode ?? 'system')
 
   const fontFamily = tf.fontFamily || DEFAULT_FONT_FAMILY
   const fontSize = typeof tf.fontSize === 'number' ? tf.fontSize : DEFAULT_FONT_SIZE
@@ -159,6 +176,36 @@ const headerTitle = computed(() => {
 })
 function openAgentPage() {
   void router.push(workspaceRoute('/agent'))
+}
+
+async function openAndroidEntry() {
+  androidMode.value = 'choice'
+  androidReleaseError.value = ''
+  androidOpen.value = true
+  androidReleaseLoading.value = true
+  try {
+    const { data } = await api.get('/api/app/android/release')
+    androidReleaseAvailable.value = true
+    androidReleaseVersion.value = typeof data.version_name === 'string' ? data.version_name : ''
+  } catch (error) {
+    androidReleaseAvailable.value = false
+    androidReleaseVersion.value = ''
+    if (!(error instanceof ApiError && error.status === 404)) {
+      androidReleaseError.value = 'Android 版本信息加载失败，请稍后重试'
+    }
+  } finally {
+    androidReleaseLoading.value = false
+  }
+}
+
+function updateAndroidOpen(open: boolean) {
+  androidOpen.value = open
+}
+
+function completeAndroidClose() {
+  if (androidOpen.value) return
+  androidMode.value = 'choice'
+  androidReleaseError.value = ''
 }
 
 onMounted(async () => {
@@ -327,8 +374,10 @@ async function confirmTitle() {
           :title="`返回 ${brandName} 首页`"
           :aria-label="`返回 ${brandName} 首页`"
           @click="isCompact && setSiderCollapsed(true)"
-          >{{ brandName }}</RouterLink
         >
+          <MarvoMark v-if="usesPlatformBrand" class="dsh-logo-mark" />
+          <span class="dsh-logo-label">{{ brandName }}</span>
+        </RouterLink>
         <button class="dsh-sider-toggle" title="收起列表" @click="setSiderCollapsed(true)">
           <LeftOutlined />
         </button>
@@ -441,16 +490,30 @@ async function confirmTitle() {
           >
           <span v-if="headerError" class="dsh-header-error" :title="headerError">{{ headerError }}</span>
         </div>
-        <button
-          v-if="route.name !== 'user-agent'"
-          class="dsh-header-agent"
-          title="智能体"
-          aria-label="智能体"
-          @click="openAgentPage"
-        >
-          <RobotOutlined aria-hidden="true" />
-          <span>智能体</span>
-        </button>
+        <div class="dsh-header-actions">
+          <button
+            v-if="route.name === 'user-home' && !androidApp"
+            class="dsh-header-action dsh-header-app"
+            type="button"
+            title="APP"
+            aria-label="APP"
+            @click="openAndroidEntry"
+          >
+            <MobileOutlined aria-hidden="true" />
+            <span>APP</span>
+          </button>
+          <button
+            v-if="route.name !== 'user-agent'"
+            class="dsh-header-action dsh-header-agent"
+            type="button"
+            title="智能体"
+            aria-label="智能体"
+            @click="openAgentPage"
+          >
+            <RobotOutlined aria-hidden="true" />
+            <span>智能体</span>
+          </button>
+        </div>
       </header>
       <div class="dsh-content">
         <router-view v-slot="{ Component }">
@@ -465,6 +528,95 @@ async function confirmTitle() {
 
     <AgentFloating />
   </div>
+
+  <Dialog.Root
+    :open="androidOpen"
+    lazy-mount
+    unmount-on-exit
+    @exit-complete="completeAndroidClose"
+    @update:open="updateAndroidOpen"
+  >
+    <Teleport to="body">
+      <Dialog.Backdrop class="dialog-backdrop" />
+      <Dialog.Positioner class="dialog-positioner">
+        <Dialog.Content class="dialog-panel android-entry-dialog">
+          <div class="dialog-header">
+            <div>
+              <Dialog.Title>Android APP</Dialog.Title>
+              <Dialog.Description>
+                {{
+                  androidMode === 'choice'
+                    ? '下载安装或将 APP 绑定到当前用户空间'
+                    : androidMode === 'download'
+                      ? '扫码下载或在当前设备直接下载'
+                      : '使用 APP 扫描二维码'
+                }}
+              </Dialog.Description>
+            </div>
+            <Dialog.CloseTrigger class="dialog-close" aria-label="关闭 Android APP">
+              <CloseOutlined />
+            </Dialog.CloseTrigger>
+          </div>
+          <div class="dialog-body android-entry-body">
+            <template v-if="androidMode === 'choice'">
+              <div class="android-entry-options">
+                <button
+                  v-if="androidReleaseAvailable"
+                  class="android-entry-option"
+                  type="button"
+                  @click="androidMode = 'download'"
+                >
+                  <span class="android-entry-option-icon"><DownloadOutlined aria-hidden="true" /></span>
+                  <strong>下载 APK</strong>
+                  <small>扫码或直接下载{{ androidReleaseVersion ? ` ${androidReleaseVersion}` : '' }} 通用安装包</small>
+                </button>
+                <button v-else class="android-entry-option" type="button" disabled>
+                  <span class="android-entry-option-icon"><DownloadOutlined aria-hidden="true" /></span>
+                  <strong>{{ androidReleaseLoading ? '正在检查版本' : '暂未开放下载' }}</strong>
+                  <small>{{ androidReleaseLoading ? '请稍候…' : '平台管理员尚未发布安装包' }}</small>
+                </button>
+                <button class="android-entry-option" type="button" @click="androidMode = 'bind'">
+                  <span class="android-entry-option-icon"><AndroidOutlined aria-hidden="true" /></span>
+                  <strong>登录 APP</strong>
+                  <small>生成当前用户空间的绑定二维码</small>
+                </button>
+              </div>
+              <p v-if="androidReleaseError" class="android-entry-error" role="alert">{{ androidReleaseError }}</p>
+            </template>
+
+            <template v-else-if="androidMode === 'download'">
+              <div class="android-entry-qr">
+                <div class="android-entry-qr-frame">
+                  <QrcodeVue :value="androidDownloadURL" :size="220" level="M" />
+                </div>
+                <strong>使用 Android 设备扫码下载</strong>
+                <p>二维码将打开当前发布版本的 APK 下载地址。</p>
+              </div>
+              <div class="dialog-footer android-entry-footer">
+                <button class="admin-btn" type="button" @click="androidMode = 'choice'">返回</button>
+                <a class="admin-btn admin-btn-primary" href="/api/app/android/apk" download>直接下载</a>
+              </div>
+            </template>
+
+            <template v-else>
+              <div class="android-entry-qr">
+                <div class="android-entry-qr-frame">
+                  <QrcodeVue :value="currentUserID()" :size="220" level="M" />
+                </div>
+                <strong>在 Marvo APP 中扫描</strong>
+                <p>扫描后，APP 会作为新设备提交申请，请在用户后台完成审批。</p>
+                <code>{{ currentUserID() }}</code>
+              </div>
+              <div class="dialog-footer android-entry-footer">
+                <button class="admin-btn" type="button" @click="androidMode = 'choice'">返回</button>
+                <Dialog.CloseTrigger class="admin-btn admin-btn-primary">完成</Dialog.CloseTrigger>
+              </div>
+            </template>
+          </div>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Teleport>
+  </Dialog.Root>
 </template>
 
 <style lang="scss" scoped>
@@ -480,8 +632,7 @@ async function confirmTitle() {
   --dsh-pane-toolbar-height: 52px;
   --dsh-pane-control-height: 40px;
   display: flex;
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   overflow: hidden;
   background: var(--bg-primary);
 }
@@ -489,8 +640,7 @@ async function confirmTitle() {
 .dsh-sider {
   width: clamp(240px, 22vw, 300px);
   min-width: clamp(240px, 22vw, 300px);
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
@@ -519,8 +669,9 @@ async function confirmTitle() {
 .dsh-logo {
   display: inline-flex;
   align-items: center;
-  min-height: 32px;
-  max-width: calc(100% - 40px);
+  gap: 8px;
+  min-height: 40px;
+  max-width: calc(100% - 48px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -539,12 +690,23 @@ async function confirmTitle() {
     outline-offset: 2px;
   }
 }
+.dsh-logo-mark {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  color: #5848f5;
+}
+.dsh-logo-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .dsh-sider-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   border: none;
   background: transparent;
   border-radius: 8px;
@@ -695,7 +857,7 @@ async function confirmTitle() {
   justify-content: center;
   gap: 6px;
   width: 100%;
-  height: 36px;
+  min-height: 40px;
   border: 1px solid var(--border-light);
   border-radius: 8px;
   background: var(--bg-primary);
@@ -707,6 +869,126 @@ async function confirmTitle() {
   font-weight: 600;
   &:hover {
     background: var(--bg-hover);
+  }
+}
+
+.android-entry-dialog {
+  max-width: 620px;
+}
+
+.android-entry-body {
+  padding-top: 8px;
+}
+
+.android-entry-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.android-entry-option {
+  min-height: 164px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 20px;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    transform 0.15s;
+  &:hover:not(:disabled) {
+    border-color: var(--text-accent);
+    background: color-mix(in srgb, var(--text-accent) 5%, var(--bg-primary));
+    transform: translateY(-1px);
+  }
+  &:disabled {
+    color: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+  strong {
+    font-size: var(--marvo-type-15);
+  }
+  small {
+    color: var(--text-tertiary);
+    font-size: var(--marvo-type-12);
+    line-height: 1.45;
+  }
+}
+
+.android-entry-option-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 3px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-accent) 10%, transparent);
+  color: var(--text-accent);
+  font-size: var(--marvo-type-22);
+}
+
+.android-entry-error {
+  margin: 12px 0 0;
+  color: var(--text-danger);
+  text-align: center;
+  font-size: var(--marvo-type-12);
+}
+
+.android-entry-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  strong {
+    margin-top: 16px;
+    color: var(--text-primary);
+    font-size: var(--marvo-type-15);
+  }
+  p {
+    max-width: 430px;
+    margin: 7px 0 12px;
+    color: var(--text-tertiary);
+    font-size: var(--marvo-type-12);
+    line-height: 1.6;
+  }
+  code {
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: var(--marvo-type-11);
+  }
+}
+
+.android-entry-qr-frame {
+  padding: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: #fff;
+  line-height: 0;
+}
+
+.android-entry-footer {
+  margin-top: 18px;
+}
+
+@media (max-width: 560px) {
+  .android-entry-options {
+    grid-template-columns: 1fr;
+  }
+  .android-entry-option {
+    min-height: 132px;
   }
 }
 
@@ -764,6 +1046,7 @@ async function confirmTitle() {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -882,7 +1165,14 @@ async function confirmTitle() {
   font-size: var(--marvo-type-11);
 }
 
-.dsh-header-agent {
+.dsh-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.dsh-header-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -908,6 +1198,7 @@ async function confirmTitle() {
 
 .dsh-content {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -933,6 +1224,9 @@ async function confirmTitle() {
   .dsh-edge-toggle {
     left: 12px;
     z-index: 101;
+    top: calc((var(--dsh-shell-header-height) - 40px) / 2);
+    width: 40px;
+    height: 40px;
   }
   .sider-collapsed .dsh-header {
     padding-left: 56px;
@@ -942,6 +1236,32 @@ async function confirmTitle() {
   }
   .dsh-header-title-input {
     max-width: 160px;
+    height: 40px;
+  }
+  .dsh-header-title.is-clickable {
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .dsh-header-action {
+    min-height: 40px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .dsh-edge-toggle {
+    top: calc((var(--dsh-shell-header-height) - 40px) / 2);
+    width: 40px;
+    height: 40px;
+  }
+  .dsh-header-title-input,
+  .dsh-header-title.is-clickable,
+  .dsh-header-action {
+    min-height: 40px;
+  }
+  .dsh-header-title.is-clickable {
+    display: inline-flex;
+    align-items: center;
   }
 }
 

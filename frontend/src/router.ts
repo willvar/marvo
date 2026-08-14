@@ -16,6 +16,8 @@ function routeTitleParts(route: RouteLocationNormalizedLoaded) {
       return ['平台登录']
     case 'platform-users':
       return ['用户管理']
+    case 'platform-android':
+      return ['Android APP']
     case 'user-login':
       return [route.query.mode === 'admin' ? '用户后台登录' : '设备访问']
     case 'user-devices': {
@@ -88,7 +90,14 @@ export const router = createRouter({
     {
       path: '/admin',
       component: () => import('./layouts/AdminLayout.vue'),
-      children: [{ path: '', name: 'platform-users', component: () => import('./pages/admin/Users.vue') }],
+      children: [
+        { path: '', name: 'platform-users', component: () => import('./pages/admin/Users.vue') },
+        {
+          path: 'android',
+          name: 'platform-android',
+          component: () => import('./pages/admin/AndroidRelease.vue'),
+        },
+      ],
     },
     {
       path: `${USER_ROUTE_BASE}/login`,

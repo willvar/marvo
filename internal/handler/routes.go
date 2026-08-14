@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"marvo/internal/apprelease"
 	"marvo/internal/collab"
 	"marvo/internal/control"
 	"marvo/internal/media"
@@ -26,6 +27,7 @@ type Dependencies struct {
 	DeviceStore  *store.DeviceStore
 	BrandStore   *store.BrandStore
 	Legacy       userspace.LegacySources
+	AppReleases  *apprelease.Store
 	migrationMu  sync.Mutex
 	securityMu   sync.Mutex
 	rateLimits   map[string]rateWindow
@@ -42,6 +44,8 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	mux.HandleFunc("GET /api/app/android/release", deps.GetAndroidRelease)
+	mux.HandleFunc("GET /api/app/android/apk", deps.DownloadAndroidAPK)
 
 	// Platform administrator authentication remains separate from every user's
 	// own management session and never grants access to user content.
@@ -65,6 +69,8 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 		mux.Handle("POST /api/admin/users/{userID}/credentials", admin(http.HandlerFunc(deps.ResetUserCredentials)))
 		mux.Handle("GET /api/admin/legacy-migration", admin(http.HandlerFunc(deps.LegacyMigrationStatus)))
 		mux.Handle("POST /api/admin/users/{userID}/migrate-legacy", admin(http.HandlerFunc(deps.MigrateLegacyUser)))
+		mux.Handle("GET /api/admin/android/release", admin(http.HandlerFunc(deps.GetAndroidRelease)))
+		mux.Handle("PUT /api/admin/android/release", admin(http.HandlerFunc(deps.PublishAndroidRelease)))
 	}
 }
 

@@ -38,6 +38,10 @@ make dev
 
 局域网生产形态验收使用 `make preview`。它构建前端并启动 Vite Preview；切换 `dev`/`preview` 前应先停止当前进程。正式 `make build` 会把同一份前端嵌入 `dist/marvo`，无需 Vite 或单独静态站点。
 
+Android 通用 APK 位于 `frontend/android`。调试构建使用
+`make android-debug SERVER_ORIGIN=https://marvo.example.com`；正式发布、版本递增和签名配置见
+`frontend/android/README.md`。服务 Origin 是显式构建参数，不与仓库或二维码绑定。
+
 ## 首次进入与权限
 
 1. 平台管理员在 `/admin/login` 登录，并创建用户。
@@ -55,6 +59,7 @@ make dev
     platform.sqlite          # 用户与认证控制数据
     .session-secret
     .runtime-token
+    android/                 # 平台发布的最新 Android APK 与版本元数据
   users/<userId>/
     app/                     # 设备、智能体设置、加密工具凭据、迁移记录
     workspace/               # 笔记、媒体、回收站、主题、个性化规则
