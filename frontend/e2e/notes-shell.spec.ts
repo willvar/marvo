@@ -4,6 +4,7 @@ import {
   approveDevice,
   authenticateUserAdministrator,
   expectDialogTextRetainedDuringClose,
+  openSidebar,
   workspaceAPI,
   workspacePath,
   workspaceURL,
@@ -92,6 +93,53 @@ test('长标签保持局部滚动且保存状态位于标题右侧', async ({ pa
   expect(savingBounds!.x + savingBounds!.width).toBeLessThanOrEqual(headerBounds!.x + headerBounds!.width)
   expect(tagsBounds!.x + tagsBounds!.width).toBeLessThanOrEqual(deleteBounds!.x)
   await expect(page.locator('.editor-toolbar .dsh-header-save-status')).toHaveCount(0)
+})
+
+test('标签失焦时写入原笔记且不会跟随笔记切换', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === 'webkit-portrait')
+  await approveDevice(page, 'Playwright pending note tag')
+  const suffix = testInfo.project.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+  const firstTitle = `E2E pending tag first ${suffix}`
+  const secondTitle = `E2E pending tag second ${suffix}`
+  for (const title of [firstTitle, secondTitle]) {
+    const created = await page.request.post(workspaceAPI('/api/notes'), {
+      data: { title, content: title, tags: [] },
+    })
+    expect(created.ok()).toBeTruthy()
+  }
+
+  await page.goto(workspacePath(`/note/${encodeURIComponent(firstTitle)}`))
+  const tagInput = page.getByPlaceholder('添加标签')
+  const tag = '失焦提交的标签'
+  await page.route('**/api/notes/*/meta', async (route) => {
+    if (
+      route
+        .request()
+        .url()
+        .includes(`${encodeURIComponent(firstTitle)}/meta`)
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+    await route.continue()
+  })
+  await tagInput.fill(tag)
+  await openSidebar(page)
+  await page.locator('.dsh-nav-item').filter({ hasText: secondTitle }).click()
+
+  await expect(page).toHaveURL(new RegExp(`/note/${encodeURIComponent(secondTitle)}$`))
+  await expect(tagInput).toHaveValue('')
+  await expect(page.locator('.note-preview')).toContainText(secondTitle)
+  await expect
+    .poll(async () => {
+      const response = await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(firstTitle)}`))
+      const note = await response.json()
+      return note.note.tags
+    })
+    .toEqual([tag])
+  const secondNote = await (
+    await page.request.get(workspaceAPI(`/api/notes/${encodeURIComponent(secondTitle)}`))
+  ).json()
+  expect(secondNote.note.tags).toEqual([])
 })
 
 test('笔记列表品牌栏与内容标题栏保持对齐', async ({ page }, testInfo) => {

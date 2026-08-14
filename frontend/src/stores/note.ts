@@ -81,8 +81,10 @@ export const useNoteStore = defineStore('note', {
         base_revision: snapshot.meta_revision,
         instance_token: snapshot.instance_token,
       })
-      this.currentNote = data as NoteDetail
-      this.latestRemote = data as NoteDetail
+      if (this.currentNote?.instance_token === snapshot.instance_token) {
+        this.currentNote = data as NoteDetail
+        this.latestRemote = data as NoteDetail
+      }
       await this.fetchNotes()
       return data as NoteDetail
     },

@@ -150,6 +150,7 @@ async function loadNote(nextTitle: string, previousTitle?: string) {
   unregisterPreparation = null
   loading.value = true
   editMode.value = false
+  addTagInput.value = ''
   notFound.value = false
   loadError.value = ''
   editor.value = null
@@ -490,23 +491,25 @@ async function mutateTags(operation: (current: string[]) => string[]) {
   if (editorLocked.value) return
   let base = serverBase.value
   if (!base) return
+  const targetInstanceToken = base.instance_token
   for (let attempt = 0; attempt < 4; attempt++) {
     const desired = operation([...base.note.tags])
     try {
       const saved = await noteStore.updateMeta(base.note.title, { tags: desired }, base)
+      if (serverBase.value?.instance_token !== targetInstanceToken) return
       serverBase.value = { ...saved, content: dirty.value ? base.content : saved.content }
       tags.value = [...saved.note.tags]
       return
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 409 || !error.data?.current) {
-        saveError.value = '标签保存失败'
+        if (serverBase.value?.instance_token === targetInstanceToken) saveError.value = '标签保存失败'
         return
       }
       base = error.data.current as NoteDetail
       if (error.data.code === 'note_instance_changed') return
     }
   }
-  saveError.value = '标签持续发生冲突，请稍后重试'
+  if (serverBase.value?.instance_token === targetInstanceToken) saveError.value = '标签持续发生冲突，请稍后重试'
 }
 
 async function addTag() {
@@ -611,6 +614,7 @@ onBeforeUnmount(() => {
             placeholder="添加标签"
             :disabled="editorLocked"
             @keydown.enter="addTag"
+            @blur="addTag"
           />
         </div>
         <button
