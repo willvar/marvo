@@ -2,14 +2,18 @@ package cn.willvar.marvo
 
 import android.content.Intent
 import android.provider.Settings
+import android.text.format.Formatter
+import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.progressindicator.CircularProgressIndicator
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -36,6 +40,8 @@ internal class AndroidUpdateManager(
     private var downloadCall: Call? = null
     private var prompt: AlertDialog? = null
     private var progress: AlertDialog? = null
+    private var progressIndicator: LinearProgressIndicator? = null
+    private var progressLabel: TextView? = null
     private var pendingPermission: Release? = null
     private var installerOpened = false
     private var destroyed = false
@@ -101,6 +107,8 @@ internal class AndroidUpdateManager(
         progress?.dismiss()
         prompt = null
         progress = null
+        progressIndicator = null
+        progressLabel = null
         pendingPermission = null
     }
 
@@ -182,49 +190,79 @@ internal class AndroidUpdateManager(
                     object : Callback {
                         override fun onFailure(call: Call, error: IOException) {
                             if (call.isCanceled()) return
-                            activity.runOnUiThread { updateFailed(release) }
+                            activity.runOnUiThread {
+                                if (downloadCall === call) updateFailed(release)
+                            }
                         }
 
                         override fun onResponse(call: Call, response: Response) {
                             response.use {
                                 if (!response.isSuccessful) {
-                                    activity.runOnUiThread { updateFailed(release) }
+                                    activity.runOnUiThread {
+                                        if (downloadCall === call) updateFailed(release)
+                                    }
                                     return
                                 }
                                 val body = response.body
-                                if (body.contentLength() > MAX_APK_BYTES) {
-                                    activity.runOnUiThread { updateFailed(release) }
+                                val contentLength = body.contentLength()
+                                if (contentLength > MAX_APK_BYTES) {
+                                    activity.runOnUiThread {
+                                        if (downloadCall === call) updateFailed(release)
+                                    }
                                     return
                                 }
+                                val totalBytes = contentLength.takeIf { it > 0 }
                                 val directory = File(activity.cacheDir, "update").apply { mkdirs() }
                                 val target = File(directory, "Marvo-${release.versionCode}.apk")
                                 directory.listFiles()?.filter { it != target }?.forEach(File::delete)
                                 val copied =
                                     runCatching {
+                                        updateDownloadProgress(call, 0, totalBytes)
                                         body.byteStream().use { input ->
                                             FileOutputStream(target).use { output ->
                                                 val buffer = ByteArray(64 * 1024)
                                                 var total = 0L
+                                                var lastPercentage = -1
+                                                var lastUnknownProgress = 0L
                                                 while (true) {
                                                     val read = input.read(buffer)
                                                     if (read < 0) break
                                                     total += read
                                                     if (total > MAX_APK_BYTES) error("APK too large")
                                                     output.write(buffer, 0, read)
+                                                    if (totalBytes != null) {
+                                                        val percentage = ((total * 100) / totalBytes).toInt().coerceIn(0, 100)
+                                                        if (percentage != lastPercentage) {
+                                                            lastPercentage = percentage
+                                                            updateDownloadProgress(call, total, totalBytes)
+                                                        }
+                                                    } else if (total - lastUnknownProgress >= UNKNOWN_PROGRESS_STEP_BYTES) {
+                                                        lastUnknownProgress = total
+                                                        updateDownloadProgress(call, total, null)
+                                                    }
                                                 }
                                                 output.fd.sync()
                                                 total
                                             }
                                         }
                                     }.getOrNull()
+                                if (call.isCanceled() || downloadCall !== call) {
+                                    target.delete()
+                                    return
+                                }
                                 if (copied == null || copied <= 0) {
                                     target.delete()
-                                    activity.runOnUiThread { updateFailed(release) }
+                                    activity.runOnUiThread {
+                                        if (downloadCall === call) updateFailed(release)
+                                    }
                                     return
                                 }
                                 activity.runOnUiThread {
+                                    if (downloadCall !== call || call.isCanceled()) return@runOnUiThread
                                     progress?.dismiss()
                                     progress = null
+                                    progressIndicator = null
+                                    progressLabel = null
                                     downloadCall = null
                                     install(target, release)
                                 }
@@ -236,19 +274,38 @@ internal class AndroidUpdateManager(
     }
 
     private fun showProgress(required: Boolean) {
-        val indicator = CircularProgressIndicator(activity).apply { isIndeterminate = true }
+        val indicator = LinearProgressIndicator(activity).apply {
+            isIndeterminate = false
+            max = 100
+            progress = 0
+            contentDescription = "下载进度 0%"
+        }
+        val label = TextView(activity).apply {
+            text = "正在连接服务器…"
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
         val spacing = (24 * activity.resources.displayMetrics.density).toInt()
-        val wrapper = android.widget.FrameLayout(activity).apply {
+        val labelSpacing = (12 * activity.resources.displayMetrics.density).toInt()
+        val wrapper = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(spacing, spacing, spacing, spacing)
             addView(
                 indicator,
-                android.widget.FrameLayout.LayoutParams(
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    android.view.Gravity.CENTER,
                 ),
             )
+            addView(
+                label,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = labelSpacing },
+            )
         }
+        progressIndicator = indicator
+        progressLabel = label
         progress =
             MaterialAlertDialogBuilder(activity)
                 .setTitle("正在下载更新…")
@@ -260,10 +317,34 @@ internal class AndroidUpdateManager(
                     setOnCancelListener {
                         downloadCall?.cancel()
                         downloadCall = null
+                    }
+                    setOnDismissListener {
                         progress = null
+                        progressIndicator = null
+                        progressLabel = null
                     }
                     show()
                 }
+    }
+
+    private fun updateDownloadProgress(call: Call, downloadedBytes: Long, totalBytes: Long?) {
+        activity.runOnUiThread {
+            if (destroyed || downloadCall !== call || call.isCanceled()) return@runOnUiThread
+            val indicator = progressIndicator ?: return@runOnUiThread
+            val label = progressLabel ?: return@runOnUiThread
+            val downloaded = Formatter.formatFileSize(activity, downloadedBytes)
+            if (totalBytes != null) {
+                val percentage = ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
+                indicator.isIndeterminate = false
+                indicator.setProgressCompat(percentage, true)
+                indicator.contentDescription = "下载进度 $percentage%"
+                label.text = "$downloaded / ${Formatter.formatFileSize(activity, totalBytes)} · $percentage%"
+            } else {
+                indicator.isIndeterminate = true
+                indicator.contentDescription = "正在下载更新"
+                label.text = "已下载 $downloaded"
+            }
+        }
     }
 
     private fun install(file: File, release: Release) {
@@ -286,6 +367,8 @@ internal class AndroidUpdateManager(
     private fun updateFailed(release: Release?) {
         progress?.dismiss()
         progress = null
+        progressIndicator = null
+        progressLabel = null
         downloadCall = null
         if (destroyed || activity.isFinishing) return
         val builder =
@@ -319,5 +402,6 @@ internal class AndroidUpdateManager(
 
     private companion object {
         const val MAX_APK_BYTES = 256L shl 20
+        const val UNKNOWN_PROGRESS_STEP_BYTES = 512L shl 10
     }
 }
