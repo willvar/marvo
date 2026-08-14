@@ -1,0 +1,323 @@
+package cn.willvar.marvo
+
+import android.content.Intent
+import android.provider.Settings
+import android.view.ViewGroup
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.core.content.FileProvider
+import androidx.core.net.toUri
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.progressindicator.CircularProgressIndicator
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal class AndroidUpdateManager(
+    private val activity: ComponentActivity,
+    private val network: OkHttpClient,
+) {
+    private data class Release(
+        val versionCode: Long,
+        val versionName: String,
+        val required: Boolean,
+        val message: String,
+    )
+
+    private var checkCall: Call? = null
+    private var downloadCall: Call? = null
+    private var prompt: AlertDialog? = null
+    private var progress: AlertDialog? = null
+    private var pendingPermission: Release? = null
+    private var installerOpened = false
+    private var destroyed = false
+    private val checking = AtomicBoolean(false)
+
+    private val settingsLauncher =
+        activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            val release = pendingPermission
+            pendingPermission = null
+            if (release != null && canInstallPackages()) {
+                download(release)
+            } else if (release?.required == true) {
+                showPermissionRequired(release)
+            }
+        }
+
+    fun checkAtStartup() {
+        if (BuildConfig.DEBUG || destroyed || !checking.compareAndSet(false, true)) return
+        val request =
+            Request.Builder()
+                .url(BuildConfig.SERVER_ORIGIN + "/api/app/android/release")
+                .header("User-Agent", "MarvoAndroid/${BuildConfig.VERSION_NAME}")
+                .get()
+                .build()
+        checkCall =
+            network.newCall(request).also { call ->
+                call.enqueue(
+                    object : Callback {
+                        override fun onFailure(call: Call, error: IOException) {
+                            checking.set(false)
+                            checkCall = null
+                        }
+
+                        override fun onResponse(call: Call, response: Response) {
+                            response.use {
+                                checking.set(false)
+                                checkCall = null
+                                if (response.code == 404 || !response.isSuccessful) return
+                                val raw = response.body.string()
+                                val release = parseRelease(raw) ?: return
+                                if (release.versionCode <= BuildConfig.VERSION_CODE) return
+                                activity.runOnUiThread { showPrompt(release) }
+                            }
+                        }
+                    },
+                )
+            }
+    }
+
+    fun onResume() {
+        if (!installerOpened || destroyed) return
+        installerOpened = false
+        activity.window.decorView.postDelayed(::checkAtStartup, 600)
+    }
+
+    fun destroy() {
+        destroyed = true
+        checkCall?.cancel()
+        downloadCall?.cancel()
+        checkCall = null
+        downloadCall = null
+        prompt?.dismiss()
+        progress?.dismiss()
+        prompt = null
+        progress = null
+        pendingPermission = null
+    }
+
+    private fun parseRelease(raw: String): Release? =
+        runCatching {
+            val json = JSONObject(raw)
+            val code = json.getLong("version_code")
+            val name = json.getString("version_name").trim()
+            if (code <= 0 || name.isBlank()) return null
+            Release(
+                versionCode = code,
+                versionName = name,
+                required = json.optBoolean("required", false),
+                message = json.optString("message").trim(),
+            )
+        }.getOrNull()
+
+    private fun showPrompt(release: Release) {
+        if (destroyed || activity.isFinishing || prompt?.isShowing == true || progress?.isShowing == true) return
+        val message =
+            buildString {
+                append("发现新版本 ")
+                append(release.versionName)
+                if (release.message.isNotBlank()) {
+                    append("\n\n")
+                    append(release.message)
+                }
+            }
+        val builder =
+            MaterialAlertDialogBuilder(activity)
+                .setTitle(if (release.required) "需要更新 Marvo" else "Marvo 有新版本")
+                .setMessage(message)
+                .setPositiveButton("立即更新") { _, _ -> beginUpdate(release) }
+        if (release.required) {
+            builder.setNegativeButton("退出") { _, _ -> activity.finishAndRemoveTask() }
+        } else {
+            builder.setNegativeButton("稍后", null)
+        }
+        prompt =
+            builder.create().apply {
+                setCanceledOnTouchOutside(!release.required)
+                setCancelable(!release.required)
+                setOnDismissListener { prompt = null }
+                show()
+            }
+    }
+
+    private fun beginUpdate(release: Release) {
+        if (!canInstallPackages()) {
+            pendingPermission = release
+            runCatching {
+                settingsLauncher.launch(
+                    Intent(
+                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        "package:${activity.packageName}".toUri(),
+                    ),
+                )
+            }.onFailure {
+                pendingPermission = null
+                updateFailed(release)
+            }
+            return
+        }
+        download(release)
+    }
+
+    private fun download(release: Release) {
+        if (destroyed || downloadCall?.isExecuted() == true) return
+        showProgress(release.required)
+        val request =
+            Request.Builder()
+                .url(BuildConfig.SERVER_ORIGIN + "/api/app/android/apk")
+                .header("User-Agent", "MarvoAndroid/${BuildConfig.VERSION_NAME}")
+                .get()
+                .build()
+        downloadCall =
+            network.newCall(request).also { call ->
+                call.enqueue(
+                    object : Callback {
+                        override fun onFailure(call: Call, error: IOException) {
+                            if (call.isCanceled()) return
+                            activity.runOnUiThread { updateFailed(release) }
+                        }
+
+                        override fun onResponse(call: Call, response: Response) {
+                            response.use {
+                                if (!response.isSuccessful) {
+                                    activity.runOnUiThread { updateFailed(release) }
+                                    return
+                                }
+                                val body = response.body
+                                if (body.contentLength() > MAX_APK_BYTES) {
+                                    activity.runOnUiThread { updateFailed(release) }
+                                    return
+                                }
+                                val directory = File(activity.cacheDir, "update").apply { mkdirs() }
+                                val target = File(directory, "Marvo-${release.versionCode}.apk")
+                                directory.listFiles()?.filter { it != target }?.forEach(File::delete)
+                                val copied =
+                                    runCatching {
+                                        body.byteStream().use { input ->
+                                            FileOutputStream(target).use { output ->
+                                                val buffer = ByteArray(64 * 1024)
+                                                var total = 0L
+                                                while (true) {
+                                                    val read = input.read(buffer)
+                                                    if (read < 0) break
+                                                    total += read
+                                                    if (total > MAX_APK_BYTES) error("APK too large")
+                                                    output.write(buffer, 0, read)
+                                                }
+                                                output.fd.sync()
+                                                total
+                                            }
+                                        }
+                                    }.getOrNull()
+                                if (copied == null || copied <= 0) {
+                                    target.delete()
+                                    activity.runOnUiThread { updateFailed(release) }
+                                    return
+                                }
+                                activity.runOnUiThread {
+                                    progress?.dismiss()
+                                    progress = null
+                                    downloadCall = null
+                                    install(target, release)
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+    }
+
+    private fun showProgress(required: Boolean) {
+        val indicator = CircularProgressIndicator(activity).apply { isIndeterminate = true }
+        val spacing = (24 * activity.resources.displayMetrics.density).toInt()
+        val wrapper = android.widget.FrameLayout(activity).apply {
+            setPadding(spacing, spacing, spacing, spacing)
+            addView(
+                indicator,
+                android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    android.view.Gravity.CENTER,
+                ),
+            )
+        }
+        progress =
+            MaterialAlertDialogBuilder(activity)
+                .setTitle("正在下载更新…")
+                .setView(wrapper)
+                .create()
+                .apply {
+                    setCancelable(!required)
+                    setCanceledOnTouchOutside(false)
+                    setOnCancelListener {
+                        downloadCall?.cancel()
+                        downloadCall = null
+                        progress = null
+                    }
+                    show()
+                }
+    }
+
+    private fun install(file: File, release: Release) {
+        val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.files", file)
+        val intent =
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (intent.resolveActivity(activity.packageManager) == null) {
+            updateFailed(release)
+            return
+        }
+        installerOpened = true
+        runCatching { activity.startActivity(intent) }.onFailure {
+            installerOpened = false
+            updateFailed(release)
+        }
+    }
+
+    private fun updateFailed(release: Release?) {
+        progress?.dismiss()
+        progress = null
+        downloadCall = null
+        if (destroyed || activity.isFinishing) return
+        val builder =
+            MaterialAlertDialogBuilder(activity)
+                .setTitle("更新失败")
+                .setMessage("无法下载或打开安装包，请检查网络和安装权限后重试。")
+        if (release != null) {
+            builder.setPositiveButton("重试") { _, _ -> beginUpdate(release) }
+            if (release.required) {
+                builder.setNegativeButton("退出") { _, _ -> activity.finishAndRemoveTask() }
+            } else {
+                builder.setNegativeButton("稍后", null)
+            }
+        } else {
+            builder.setPositiveButton("知道了", null)
+        }
+        builder.setCancelable(release?.required != true).show()
+    }
+
+    private fun showPermissionRequired(release: Release) {
+        MaterialAlertDialogBuilder(activity)
+            .setTitle("需要安装权限")
+            .setMessage("请允许 Marvo 安装更新，才能继续使用当前版本。")
+            .setPositiveButton("前往设置") { _, _ -> beginUpdate(release) }
+            .setNegativeButton("退出") { _, _ -> activity.finishAndRemoveTask() }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun canInstallPackages(): Boolean = activity.packageManager.canRequestPackageInstalls()
+
+    private companion object {
+        const val MAX_APK_BYTES = 256L shl 20
+    }
+}

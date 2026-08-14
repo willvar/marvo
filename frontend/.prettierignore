@@ -4,4 +4,7 @@ test-results/
 playwright-report/
 blob-report/
 e2e/.data/
+android/.gradle/
+android/.kotlin/
+android/app/build/
 package-lock.json

@@ -1,4 +1,4 @@
-.PHONY: build build-frontend build-agent build-runtime rebuild-images start-runtime stop-runtime wait-runtime dev preview test test-runtime test-webkit lint lint-go lint-frontend deadcode audit clean
+.PHONY: build build-frontend build-agent build-runtime rebuild-images start-runtime stop-runtime wait-runtime dev preview android-debug android-apk test test-runtime test-webkit lint lint-go lint-frontend deadcode audit clean
 
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.1.0")
 
@@ -7,6 +7,24 @@ build: build-frontend
 
 build-frontend:
 	npm --prefix frontend run build
+
+android-debug:
+	@test -n "$(SERVER_ORIGIN)" || { echo "SERVER_ORIGIN=https://your-domain.example is required" >&2; exit 1; }
+	@$(MAKE) --no-print-directory build-frontend
+	frontend/android/run-gradle.sh -p frontend/android :app:assembleDebug -Pmarvo.serverOrigin="$(SERVER_ORIGIN)"
+	@mkdir -p dist/android
+	cp frontend/android/app/build/outputs/apk/debug/app-debug.apk dist/android/Marvo-debug.apk
+
+android-apk:
+	@test -n "$(SERVER_ORIGIN)" || { echo "SERVER_ORIGIN=https://your-domain.example is required" >&2; exit 1; }
+	@test -f frontend/android/signing.properties || { echo "frontend/android/signing.properties is required for a release APK" >&2; exit 1; }
+	@$(MAKE) --no-print-directory build-frontend
+	frontend/android/run-gradle.sh -p frontend/android :app:assembleRelease -Pmarvo.serverOrigin="$(SERVER_ORIGIN)"
+	@mkdir -p dist/android
+	@version_name="$$(sed -n 's/^VERSION_NAME=//p' frontend/android/version.properties)"; \
+		test -n "$$version_name"; \
+		cp frontend/android/app/build/outputs/apk/release/app-release.apk "dist/android/Marvo-$$version_name.apk"; \
+		echo "Built dist/android/Marvo-$$version_name.apk"
 
 build-agent:
 	MARVO_FORCE_REBUILD=1 bash docker/runtime/images.sh agent

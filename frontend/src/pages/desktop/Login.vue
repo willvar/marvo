@@ -2,14 +2,9 @@
 import { useAuthStore } from '../../stores/auth'
 import { useRoute, useRouter } from 'vue-router'
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
-import { api, currentUserID, userLoginRoute, workspaceRoute } from '../../sdk'
-import {
-  FileTextOutlined,
-  LeftOutlined,
-  LoginOutlined,
-  SafetyCertificateOutlined,
-  SendOutlined,
-} from '@ant-design/icons-vue'
+import { api, currentUserID, isMarvoAndroidApp, userLoginRoute, workspaceRoute } from '../../sdk'
+import MarvoMark from '../../components/MarvoMark.vue'
+import { LeftOutlined, LoginOutlined, SafetyCertificateOutlined, SendOutlined } from '@ant-design/icons-vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -22,8 +17,18 @@ const error = ref('')
 const password = ref('')
 const challengeToken = ref('')
 const verificationCode = ref('')
+const isAndroidApp = isMarvoAndroidApp()
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let polling = false
+
+function androidDeviceName() {
+  if (!isAndroidApp) return ''
+  try {
+    return localStorage.getItem('marvo_android_device_name')?.trim() || 'Marvo Android'
+  } catch {
+    return 'Marvo Android'
+  }
+}
 
 function startPolling() {
   if (pollTimer) return
@@ -49,7 +54,21 @@ onMounted(async () => {
     router.push(workspaceRoute())
     return
   }
-  if (auth.applyStatus === 'pending') startPolling()
+  if (auth.applyStatus === 'pending') {
+    startPolling()
+  } else if (isAndroidApp) {
+    deviceName.value = androidDeviceName()
+    try {
+      await auth.apply(deviceName.value)
+      if (auth.isAuthenticated) {
+        await router.push(workspaceRoute())
+        return
+      }
+      startPolling()
+    } catch {
+      error.value = '自动提交设备申请失败，可以稍后重试'
+    }
+  }
   loading.value = false
 })
 
@@ -127,8 +146,7 @@ function resetAdminLogin() {
   <div v-else class="login-container">
     <div class="login-card">
       <div class="login-logo">
-        <SafetyCertificateOutlined v-if="adminMode" />
-        <FileTextOutlined v-else />
+        <MarvoMark />
       </div>
       <h1 class="login-title">
         {{ adminMode ? '用户空间管理' : auth.applyStatus === 'pending' ? '等待审批' : 'Marvo' }}

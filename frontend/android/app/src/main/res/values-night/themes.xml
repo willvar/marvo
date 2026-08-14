@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.Marvo" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/marvo_accent</item>
+        <item name="android:statusBarColor">?android:colorBackground</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">?android:colorBackground</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:fontFamily">sans</item>
+    </style>
+</resources>

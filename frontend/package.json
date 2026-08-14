@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/check-production-css.mjs",
     "preview": "vite preview --port 5080",
     "typecheck": "vue-tsc --noEmit",
     "lint": "oxlint src e2e playwright.config.ts vite.config.ts --deny-warnings && node scripts/check-dialog-lifecycle.mjs",
@@ -13,6 +13,7 @@
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run lint && npm run deadcode && npm run format:check",
     "test:e2e": "playwright test",
+    "test:e2e:preview": "npm run build && E2E_PREVIEW=1 playwright test e2e/responsive-layout.spec.ts --project=chromium-portrait",
     "test:e2e:webkit": "bash e2e/run-webkit.sh"
   },
   "dependencies": {

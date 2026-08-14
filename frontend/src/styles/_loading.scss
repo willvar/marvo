@@ -3,7 +3,7 @@
 @use 'mixins' as *;
 
 .page-loading {
-  height: 100vh;
+  height: 100%;
   @include flexCenter;
   background: var(--bg-primary);
   color: var(--text-primary);
