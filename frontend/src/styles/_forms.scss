@@ -2,7 +2,7 @@
 
 @mixin login-styles {
   .login-container {
-    height: 100vh;
+    height: 100%;
     @include flexCenter;
     background: var(--bg-login);
   }
@@ -20,13 +20,15 @@
   .login-logo {
     width: 56px;
     height: 56px;
-    border-radius: 14px;
-    background: var(--marvo-accent-color, #4f46e5);
-    color: #fff;
+    color: #5848f5;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     margin-bottom: 20px;
+    .marvo-mark {
+      width: 56px;
+      height: 56px;
+    }
   }
 
   .login-title {

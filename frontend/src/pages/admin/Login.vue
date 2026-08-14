@@ -2,7 +2,8 @@
 import { ref } from 'vue'
 import { api } from '../../sdk'
 import { useRouter } from 'vue-router'
-import { FileTextOutlined, LoginOutlined } from '@ant-design/icons-vue'
+import { LoginOutlined } from '@ant-design/icons-vue'
+import MarvoMark from '../../components/MarvoMark.vue'
 
 const router = useRouter()
 const password = ref('')
@@ -29,7 +30,7 @@ async function handleLogin() {
   <div class="login-container">
     <div class="login-card">
       <div class="login-logo">
-        <FileTextOutlined />
+        <MarvoMark />
       </div>
       <h1 class="login-title">Marvo Admin</h1>
       <p class="login-subtitle">系统管理</p>
