@@ -18,8 +18,11 @@ function routeTitleParts(route: RouteLocationNormalizedLoaded) {
       return ['用户管理']
     case 'platform-android':
       return ['Android APP']
-    case 'user-login':
-      return [route.query.mode === 'admin' ? '用户后台登录' : '设备访问']
+    case 'user-login': {
+      const userName = userTitleNames.get(routeParameter(route.params.userId))
+      const area = route.query.mode === 'admin' ? '用户后台登录' : '设备访问'
+      return userName ? [area, userName] : [area]
+    }
     case 'user-devices': {
       const userName = userTitleNames.get(routeParameter(route.params.userId))
       return userName ? ['设备审批', userName] : ['设备审批']

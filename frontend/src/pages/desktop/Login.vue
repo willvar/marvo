@@ -3,6 +3,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useRoute, useRouter } from 'vue-router'
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { api, currentUserID, isMarvoAndroidApp, userLoginRoute, workspaceRoute } from '../../sdk'
+import { setUserRouteTitleName } from '../../router'
 import MarvoMark from '../../components/MarvoMark.vue'
 import { LeftOutlined, LoginOutlined, SafetyCertificateOutlined, SendOutlined } from '@ant-design/icons-vue'
 
@@ -11,8 +12,11 @@ const router = useRouter()
 const route = useRoute()
 const userID = currentUserID()
 const adminMode = computed(() => route.query.mode === 'admin')
+const userName = ref('')
+const spaceTitle = computed(() => (userName.value ? `您正在访问 ${userName.value} 的空间` : '您正在访问此空间'))
 const deviceName = ref('')
 const loading = ref(true)
+const identityLoading = ref(true)
 const error = ref('')
 const password = ref('')
 const challengeToken = ref('')
@@ -20,6 +24,18 @@ const verificationCode = ref('')
 const isAndroidApp = isMarvoAndroidApp()
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let polling = false
+
+async function loadUserIdentity() {
+  try {
+    const { data } = await api.get('/api/identity')
+    userName.value = typeof data.name === 'string' ? data.name.trim() : ''
+  } catch {
+    userName.value = ''
+  } finally {
+    identityLoading.value = false
+  }
+  setUserRouteTitleName(userID, userName.value)
+}
 
 function androidDeviceName() {
   if (!isAndroidApp) return ''
@@ -45,11 +61,13 @@ function startPolling() {
 }
 
 onMounted(async () => {
+  const identityRequest = loadUserIdentity()
   if (adminMode.value) {
+    await identityRequest
     loading.value = false
     return
   }
-  await auth.check()
+  await Promise.all([identityRequest, auth.check()])
   if (auth.isAuthenticated) {
     router.push(workspaceRoute())
     return
@@ -140,22 +158,20 @@ function resetAdminLogin() {
 </script>
 
 <template>
-  <div v-if="loading && !adminMode && auth.applyStatus === 'idle'" class="page-loading">
+  <div v-if="identityLoading || (loading && !adminMode && auth.applyStatus === 'idle')" class="page-loading">
     <span class="page-loading-spinner" />
   </div>
   <div v-else class="login-container">
-    <div class="login-card">
+    <div class="login-card user-space-login-card">
       <div class="login-logo">
         <MarvoMark />
       </div>
-      <h1 class="login-title">
-        {{ adminMode ? '用户空间管理' : auth.applyStatus === 'pending' ? '等待审批' : 'Marvo' }}
-      </h1>
+      <h1 class="login-title" :title="spaceTitle">{{ spaceTitle }}</h1>
       <p v-if="adminMode" class="login-subtitle">
         {{ challengeToken ? '输入身份验证器生成的 6 位验证码' : '输入密码进入用户后台' }}
       </p>
       <p v-else class="login-subtitle">
-        {{ auth.applyStatus === 'pending' ? '用户管理员正在审核您的设备' : '输入设备名称以申请访问' }}
+        {{ auth.applyStatus === 'pending' ? '用户管理员正在审核您的设备' : '输入设备名称以申请权限' }}
       </p>
       <div v-if="error" class="login-error">{{ error }}</div>
 
@@ -200,7 +216,7 @@ function resetAdminLogin() {
           <input class="login-password" v-model="deviceName" placeholder="设备名称" maxlength="50" autofocus />
           <button class="login-submit" type="submit" :disabled="loading || !deviceName">
             <SendOutlined aria-hidden="true" />
-            <span>{{ loading ? '申请中...' : '申请访问' }}</span>
+            <span>{{ loading ? '申请中...' : '申请权限' }}</span>
           </button>
         </form>
       </template>
@@ -221,6 +237,21 @@ function resetAdminLogin() {
 </template>
 
 <style scoped>
+.user-space-login-card {
+  width: fit-content;
+  min-width: min(340px, calc(100vw - 24px));
+  max-width: min(720px, calc(100vw - 24px));
+}
+.login-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-space-login-card :is(.login-form, .login-error, .login-pending, .login-admin-entry) {
+  width: min(340px, 100%);
+  margin-right: auto;
+  margin-left: auto;
+}
 .login-admin-entry {
   width: 100%;
   margin-top: 12px;

@@ -53,6 +53,7 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.HandleFunc("POST /api/platform/auth", deps.Login)
 	mux.HandleFunc("POST /api/platform/auth/logout", deps.Logout)
 	if deps.Control != nil {
+		mux.HandleFunc("GET /api/user/{userID}/identity", deps.GetUserIdentity)
 		mux.HandleFunc("POST /api/user/{userID}/auth/verify", deps.VerifyUser)
 		mux.HandleFunc("POST /api/user/{userID}/auth", deps.LoginUser)
 		mux.HandleFunc("POST /api/user/{userID}/auth/logout", deps.LogoutUser)

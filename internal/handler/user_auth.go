@@ -12,6 +12,24 @@ import (
 	"marvo/internal/control"
 )
 
+func (d *Dependencies) GetUserIdentity(w http.ResponseWriter, r *http.Request) {
+	userID := r.PathValue("userID")
+	if !control.ValidateUserID(userID) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
+		return
+	}
+	user, err := d.Control.GetUser(r.Context(), userID)
+	if errors.Is(err, control.ErrUserNotFound) || (err == nil && user.Status == control.UserStatusDisabled) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to load user"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": user.Name})
+}
+
 func (d *Dependencies) VerifyUser(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
 	if !control.ValidateUserID(userID) {
