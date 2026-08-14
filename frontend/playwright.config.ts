@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const reuseServers = process.env.E2E_REUSE_SERVERS === '1'
+const previewBuild = process.env.E2E_PREVIEW === '1'
 
 export default defineConfig({
   testDir: './e2e',
@@ -31,7 +32,9 @@ export default defineConfig({
       timeout: 60_000,
     },
     {
-      command: 'npm run dev -- --host 127.0.0.1 --port 15080',
+      command: previewBuild
+        ? 'npx vite preview --host 127.0.0.1 --port 15080'
+        : 'npm run dev -- --host 127.0.0.1 --port 15080',
       port: 15080,
       reuseExistingServer: reuseServers,
       timeout: 60_000,

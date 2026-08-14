@@ -1,5 +1,16 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { platformContext, totpCode } from './helpers'
+
+async function openAdminNavigation(page: Page) {
+  const trigger = page.getByRole('button', { name: '打开后台导航' })
+  if (await trigger.isVisible()) {
+    await trigger.click()
+    const navigation = page.getByRole('navigation', { name: '后台导航' })
+    await expect(navigation).toBeVisible()
+    return navigation
+  }
+  return page.locator('.admin-sidebar-nav')
+}
 
 test('非法用户 ID 不会渲染用户后台或请求无作用域管理接口', async ({ page }) => {
   const unscopedUserAdminRequests: string[] = []
@@ -46,7 +57,16 @@ test('用户可在后台管理密码与可选身份验证器', async ({ page }, 
         }),
       )
       .toBe(true)
-    await expect(page.getByRole('link', { name: '智能体设置' })).toHaveAttribute('href', `/user/${user.id}/admin/agent`)
+    const initialNavigation = await openAdminNavigation(page)
+    await expect(
+      page.locator('.admin-sidebar:visible .marvo-mark, .admin-mobile-nav-panel:visible .marvo-mark'),
+    ).toBeVisible()
+    await expect(initialNavigation.getByRole('link', { name: '智能体设置' })).toHaveAttribute(
+      'href',
+      `/user/${user.id}/admin/agent`,
+    )
+    const navigationClose = page.getByRole('button', { name: '关闭后台导航' })
+    if (await navigationClose.isVisible()) await navigationClose.click()
 
     const account = page.locator('.admin-header-user')
     await expect(account).toHaveAttribute('aria-label', userName)
@@ -59,7 +79,8 @@ test('用户可在后台管理密码与可选身份验证器', async ({ page }, 
       await account.click()
     }
 
-    await page.getByRole('link', { name: '空间信息' }).click()
+    const spaceNavigation = await openAdminNavigation(page)
+    await spaceNavigation.getByRole('link', { name: '空间信息' }).click()
     await expect(page).toHaveURL(`/user/${user.id}/admin/settings`)
     await expect(page).toHaveTitle(`空间信息 · ${userName} · Marvo`)
     await expect(page.getByRole('heading', { name: '空间占用' })).toBeVisible()
@@ -72,7 +93,8 @@ test('用户可在后台管理密码与可选身份验证器', async ({ page }, 
     await expect(page.getByRole('status')).toHaveText('品牌名称已保存')
     await expect(page.locator('.admin-sidebar-brand')).toContainText('Marvo')
 
-    await page.getByRole('link', { name: '安全设置' }).click()
+    const securityNavigation = await openAdminNavigation(page)
+    await securityNavigation.getByRole('link', { name: '安全设置' }).click()
     await expect(page).toHaveURL(`/user/${user.id}/admin/security`)
     await expect(page).toHaveTitle(`安全设置 · ${userName} · Marvo`)
     const authenticatorCard = page
@@ -135,12 +157,14 @@ test('用户可在后台管理密码与可选身份验证器', async ({ page }, 
     await page.getByRole('button', { name: '登录', exact: true }).click()
     await expect(page).toHaveURL(`/user/${user.id}/admin`)
 
-    const sidebarLinks = page.locator('.admin-sidebar-nav a')
-    const firstLinkBounds = await sidebarLinks.nth(0).boundingBox()
-    const secondLinkBounds = await sidebarLinks.nth(1).boundingBox()
+    const currentNavigation = await openAdminNavigation(page)
+    const navigationLinks = currentNavigation.locator('a')
+    const firstLinkBounds = await navigationLinks.nth(0).boundingBox()
+    const secondLinkBounds = await navigationLinks.nth(1).boundingBox()
     expect(firstLinkBounds).not.toBeNull()
     expect(secondLinkBounds).not.toBeNull()
     expect(secondLinkBounds!.y - (firstLinkBounds!.y + firstLinkBounds!.height)).toBeGreaterThanOrEqual(6)
+    if (await navigationClose.isVisible()) await navigationClose.click()
 
     await page.getByRole('button', { name: '进入工作区' }).click()
     const authorizationDialog = page.getByRole('dialog', { name: '授权当前设备' })

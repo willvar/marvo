@@ -266,6 +266,21 @@ export async function closeCompactSidebar(page: Page) {
   if (await overlay.isVisible()) await page.getByTitle('收起列表').click()
 }
 
+export async function openAgentSessions(page: Page) {
+  const trigger = page.getByRole('button', { name: '对话列表', exact: true })
+  const desktopSessions = page.locator('.agent-chat-sessions')
+  await expect(trigger.or(desktopSessions)).toBeVisible()
+  if (await desktopSessions.isVisible()) return false
+  const dialog = page.getByRole('dialog', { name: '对话列表' })
+  const dialogIsOpen = (await dialog.count()) > 0 && (await dialog.getAttribute('data-state')) === 'open'
+  if (!dialogIsOpen) {
+    await expect(dialog).toBeHidden()
+    await trigger.click()
+  }
+  await expect(dialog).toBeVisible()
+  return true
+}
+
 export async function createLongAgentSession(page: Page, label: string) {
   const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()

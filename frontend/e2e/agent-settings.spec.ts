@@ -18,6 +18,8 @@ test('智能体设置在单页展示所有分区并始终显示统一保存', as
   await expect(page.getByRole('heading', { name: '当前设备的智能体布局' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '提供商', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: '模型', exact: true })).toBeVisible()
+  await expect(page.locator('.agent-variant-group')).toContainText('关闭')
+  await expect(page.locator('.agent-variant-group')).not.toContainText('none')
   await expect(page.getByRole('heading', { name: '联网搜索' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '全局提示词' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '个性化规则' })).toBeVisible()
@@ -312,6 +314,23 @@ test('智能体设置可连接 API Key 与 OAuth 提供商并即时刷新模型'
 test('提供商选择器在竖屏中横向不越界且即时操作无需底部保存', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === 'chromium-landscape')
   await authenticateUserAdministrator(page)
+  await page.route('**/api/user/*/agent/settings', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue()
+      return
+    }
+    const response = await route.fetch()
+    const settings = (await response.json()) as Record<string, unknown>
+    await route.fulfill({
+      response,
+      json: {
+        ...settings,
+        model: { provider_id: 'fake', model_id: 'vision' },
+        model_available: true,
+        variant: 'max',
+      },
+    })
+  })
   await page.goto(workspacePath('/admin/agent'))
 
   const search = page.getByRole('combobox', { name: '选择提供商' })
@@ -320,6 +339,38 @@ test('提供商选择器在竖屏中横向不越界且即时操作无需底部�
   await expect(settingsPage).toBeVisible()
   await expect(page.locator('.agent-settings-page-actions')).toBeVisible()
   await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeDisabled()
+
+  const variantScroller = page.locator('.agent-variant-scroll')
+  const variantGroup = page.locator('.agent-variant-group')
+  await expect(variantScroller).toBeVisible()
+  await expect(variantGroup).toHaveCSS('flex-wrap', 'nowrap')
+  const variantLayout = await variantScroller.evaluate((scroller) => {
+    const bounds = scroller.getBoundingClientRect()
+    const items = [...scroller.querySelectorAll<HTMLElement>('.agent-variant-item')]
+    const selected = scroller.querySelector<HTMLElement>('.agent-variant-item[data-state="checked"]')
+    const selectedBounds = selected?.getBoundingClientRect()
+    return {
+      clientWidth: scroller.clientWidth,
+      scrollWidth: scroller.scrollWidth,
+      itemTops: [...new Set(items.map((item) => Math.round(item.getBoundingClientRect().top)))],
+      selectedVisible:
+        !!selectedBounds && selectedBounds.left >= bounds.left - 1 && selectedBounds.right <= bounds.right + 1,
+    }
+  })
+  expect(variantLayout.scrollWidth).toBeGreaterThan(variantLayout.clientWidth)
+  expect(variantLayout.itemTops).toHaveLength(1)
+  expect(variantLayout.selectedVisible).toBe(true)
+
+  const exaInput = page.getByLabel('Exa API Key')
+  await exaInput.scrollIntoViewIfNeeded()
+  const [exaInputBounds, exaControlBounds] = await Promise.all([
+    exaInput.boundingBox(),
+    page.locator('.agent-exa-control').boundingBox(),
+  ])
+  expect(exaInputBounds).not.toBeNull()
+  expect(exaControlBounds).not.toBeNull()
+  expect(exaInputBounds!.height).toBeGreaterThanOrEqual(40)
+  expect(Math.abs(exaInputBounds!.width - exaControlBounds!.width)).toBeLessThanOrEqual(1)
 
   await search.click()
   await search.fill('E2E API Key Provider')
@@ -374,6 +425,11 @@ test('1366×768 触摸缩放浮动 Agent 窗口不会溢出视口顶部', async 
 
   const client = await page.context().newCDPSession(page)
   await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
+  await expect(page.locator('.dsh-header-agent')).toHaveCSS('min-height', '40px')
+  const siderToggleBounds = await page.locator('.dsh-sider-toggle').boundingBox()
+  expect(siderToggleBounds).not.toBeNull()
+  expect(siderToggleBounds!.width).toBeGreaterThanOrEqual(40)
+  expect(siderToggleBounds!.height).toBeGreaterThanOrEqual(40)
   const touchX = handleBounds!.x + handleBounds!.width / 2
   const touchY = handleBounds!.y + handleBounds!.height / 2
   await client.send('Input.dispatchTouchEvent', {

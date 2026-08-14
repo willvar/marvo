@@ -198,8 +198,12 @@ func newFakeHandler() http.Handler {
 						"vision": map[string]any{
 							"id": "vision", "providerID": "fake", "name": "E2E Vision", "family": "vision", "status": "active",
 							"variants": map[string]any{
-								"low":  map[string]string{"reasoningEffort": "low"},
-								"high": map[string]string{"reasoningEffort": "high"},
+								"none":   map[string]string{"reasoningEffort": "none"},
+								"low":    map[string]string{"reasoningEffort": "low"},
+								"medium": map[string]string{"reasoningEffort": "medium"},
+								"high":   map[string]string{"reasoningEffort": "high"},
+								"xhigh":  map[string]string{"reasoningEffort": "xhigh"},
+								"max":    map[string]string{"reasoningEffort": "max"},
 							},
 							"capabilities": map[string]any{
 								"attachment": true, "reasoning": true, "toolcall": true,

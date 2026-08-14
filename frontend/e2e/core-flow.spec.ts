@@ -3,6 +3,7 @@ import {
   approveDevice,
   authenticateUserAdministrator,
   closeCompactSidebar,
+  openAgentSessions,
   openSidebar,
   workspaceAPI,
   workspaceAPIRegex,
@@ -21,6 +22,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   expect(brandUpdate.ok()).toBeTruthy()
   await page.reload()
   await expect(page.locator('.dsh-logo')).toHaveText(brand)
+  await expect(page.locator('.dsh-logo .marvo-mark')).toHaveCount(0)
   await expect(page).toHaveTitle(`工作区 · ${brand}`)
 
   await expect(page.locator('.dsh-header-title-input')).toHaveCount(0)
@@ -33,15 +35,25 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
     '向智能体描述你想完成的内容...',
   )
 
+  const appEntry = page.getByRole('button', { name: 'APP', exact: true })
+  const agentEntry = page.getByRole('button', { name: '智能体', exact: true })
+  await expect(appEntry).toBeVisible()
+  await expect(agentEntry).toBeVisible()
+  const [appEntryBounds, agentEntryBounds] = await Promise.all([appEntry.boundingBox(), agentEntry.boundingBox()])
+  expect(appEntryBounds).not.toBeNull()
+  expect(agentEntryBounds).not.toBeNull()
+  expect(appEntryBounds!.x + appEntryBounds!.width).toBeLessThanOrEqual(agentEntryBounds!.x)
+
   await openSidebar(page)
   await expect(page.locator('.dsh-footer')).not.toContainText('智能体')
   const footerButtons = page.locator('.dsh-footer-button')
   await expect(footerButtons).toHaveCount(2)
   await expect(footerButtons.nth(0)).toHaveText(/回收站/)
   await expect(footerButtons.nth(1)).toHaveText(/管理后台/)
+  await expect(page.locator('.dsh-footer')).not.toContainText('Android APP')
   await expect(page.locator('.dsh-footer')).not.toContainText('智能体设置')
   await closeCompactSidebar(page)
-  await page.locator('.dsh-header-agent').click()
+  await agentEntry.click()
   await expect(page).toHaveURL(workspaceURL('/agent'))
   await expect(page).toHaveTitle(`智能体 · ${brand}`)
   const staticHeaderTitle = page.locator('.dsh-header-title')
@@ -54,9 +66,9 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await page.goto(workspacePath('/admin/agent'))
   await expect(page).toHaveTitle(`智能体设置 · Playwright 用户空间 · Marvo`)
   await expect(page.getByRole('heading', { name: '智能体设置' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '新增规则' })).toBeHidden()
+  await expect(page.getByRole('tablist')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '新增规则' })).toBeVisible()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
-  await page.getByRole('tab', { name: '模型' }).click()
   await expect(page.locator('.agent-model-selected')).toContainText('E2E Vision')
   await expect(page.locator('.agent-model-selected')).toContainText('支持图片')
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
@@ -79,23 +91,12 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(changedReasoning).toHaveAttribute('data-state', 'checked')
   await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
 
-  await page.getByRole('tab', { name: '进阶' }).click()
-  await expect(page.getByRole('heading', { name: '有未保存的设置' })).toBeVisible()
-  await page.getByRole('button', { name: '保存并切换' }).click()
-  await expect(page.getByRole('tab', { name: '进阶' })).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
   const personalizationRule = `称呼测试规则 ${suffix}`
   await page.getByRole('button', { name: '新增规则' }).click()
   const newPersonalizationRule = page.locator('.agent-personalization-rule').last()
   await expect(newPersonalizationRule).not.toHaveAttribute('data-invalid')
   await expect(newPersonalizationRule.locator('[data-part="error-text"]')).toBeHidden()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
-  await page.getByRole('tab', { name: '模型' }).click()
-  await expect(page.getByRole('heading', { name: '有未保存的设置' })).toBeVisible()
-  await expect(page.getByText('当前内容未通过校验')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '保存并切换' })).toBeEnabled()
-  await page.getByRole('button', { name: '继续编辑' }).click()
-  await expect(page.getByRole('tab', { name: '进阶' })).toHaveAttribute('aria-selected', 'true')
   await newPersonalizationRule.locator('.agent-personalization-input').fill(personalizationRule)
   const globalPrompt = `E2E global prompt ${suffix}`
   const expandedGlobalPrompt = `${globalPrompt}\n通过全屏编辑补充`
@@ -112,7 +113,6 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await page.getByRole('button', { name: '保存设置' }).click()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
   await page.reload()
-  await page.getByRole('tab', { name: '进阶' }).click()
   await expect(page.getByLabel('全局提示词', { exact: true })).toHaveValue(expandedGlobalPrompt)
   await expect(page.locator('.agent-personalization-input').last()).toHaveValue(personalizationRule)
   await page.goto(workspacePath('/agent'))
@@ -320,10 +320,12 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(floatingPanel.getByRole('button', { name: '发送', exact: true })).toBeVisible()
 
   await page.goto(workspacePath('/agent'))
+  const compactAgentSessions = await openAgentSessions(page)
   const sessionItems = page.locator('.x-conversations-item')
   await expect.poll(() => sessionItems.count()).toBeGreaterThan(0)
   const sessionCount = await sessionItems.count()
   await page.getByRole('button', { name: '新对话', exact: true }).click()
+  await openAgentSessions(page)
   await expect(sessionItems).toHaveCount(sessionCount + 1)
   const activeSession = sessionItems.first()
   await expect(activeSession).toHaveClass(/active/)
@@ -388,6 +390,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   expect(await page.locator('.x-conversations-loading').count()).toBe(0)
   await expect(otherSession).toHaveClass(/active/)
   await activeSession.click()
+  if (compactAgentSessions) await openAgentSessions(page)
   await expect(activeSession).toHaveClass(/active/)
   releaseHistory()
   await historyFinished
@@ -478,7 +481,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page.locator('.agent-message-thinking')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible()
 
-  const promptedSessionID = await page.locator('.x-conversations-item.active').getAttribute('data-key')
+  const promptedSessionID = await page.evaluate(() => localStorage.getItem('marvo.agent.currentSessionId'))
   expect(promptedSessionID).toBeTruthy()
   const upstreamMessages = await (
     await page.request.get(workspaceAPI(`/api/agent/session/${promptedSessionID}/message`))

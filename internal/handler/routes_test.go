@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"marvo/config"
@@ -36,8 +37,12 @@ func TestRoutesExposeOnlyPlatformControlAndUserScopedContent(t *testing.T) {
 
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, "/api/health"},
+		{http.MethodGet, "/api/app/android/release"},
+		{http.MethodGet, "/api/app/android/apk"},
 		{http.MethodPost, "/api/platform/auth"},
 		{http.MethodGet, "/api/admin/users"},
+		{http.MethodGet, "/api/admin/android/release"},
+		{http.MethodPut, "/api/admin/android/release"},
 		{http.MethodGet, "/api/user/" + user.User.ID + "/events"},
 		{http.MethodPost, "/api/user/" + user.User.ID + "/send"},
 		{http.MethodGet, "/api/user/" + user.User.ID + "/agent/settings"},
@@ -60,5 +65,16 @@ func TestRoutesExposeOnlyPlatformControlAndUserScopedContent(t *testing.T) {
 		if _, pattern := mux.Handler(request); pattern != "" {
 			t.Errorf("legacy route still registered for %s %s as %q", legacy.method, legacy.path, pattern)
 		}
+	}
+
+	publicRelease := httptest.NewRecorder()
+	mux.ServeHTTP(publicRelease, httptest.NewRequest(http.MethodGet, "/api/app/android/release", nil))
+	if publicRelease.Code != http.StatusNotFound {
+		t.Fatalf("public Android release status = %d", publicRelease.Code)
+	}
+	protectedRelease := httptest.NewRecorder()
+	mux.ServeHTTP(protectedRelease, httptest.NewRequest(http.MethodGet, "/api/admin/android/release", nil))
+	if protectedRelease.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated Android administration status = %d", protectedRelease.Code)
 	}
 }

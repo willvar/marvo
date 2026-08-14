@@ -29,6 +29,9 @@ func TestLayoutCreatesPrivateUserBoundaries(t *testing.T) {
 	if got := layout.ControlDatabase(); got != filepath.Join(root, "control", "platform.sqlite") {
 		t.Fatalf("control database = %q", got)
 	}
+	if got := layout.AndroidReleaseDirectory(); got != filepath.Join(root, "control", "android") {
+		t.Fatalf("Android release directory = %q", got)
+	}
 }
 
 func TestLayoutRejectsSymlinkedUserBoundary(t *testing.T) {

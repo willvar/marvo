@@ -3,6 +3,7 @@ import {
   approveDevice,
   createLongAgentSession,
   expectDialogTextRetainedDuringClose,
+  openAgentSessions,
   workspaceAPI,
   workspaceAPIRegex,
   workspacePath,
@@ -256,7 +257,7 @@ test('刷新页面时会补齐待响应请求所属的子会话', async ({ page 
 })
 
 test('子任务卡片可进入只读子会话并返回主对话', async ({ page }, testInfo) => {
-  await approveDevice(page, `Playwright Agent subtask navigation ${testInfo.project.name}`)
+  await approveDevice(page, `PW subtask ${testInfo.project.name}`)
   const created = await page.request.post(workspaceAPI('/api/agent/session'))
   expect(created.ok()).toBeTruthy()
   const session = (await created.json()) as { id: string }
@@ -374,7 +375,11 @@ test('子任务卡片可进入只读子会话并返回主对话', async ({ page 
   await expect(page.getByText('子任务查到两条相关资料。', { exact: true })).toBeVisible()
   await expect(page.locator('.agent-chat-subtask-readonly')).toContainText('子任务记录为只读')
   await expect(page.locator('.agent-chat-input .agent-composer')).toHaveCount(0)
+  const compactSessions = await openAgentSessions(page)
   await expect(page.locator(`.x-conversations-item[data-key="${session.id}"]`)).toHaveClass(/active/)
+  if (compactSessions) {
+    await page.getByRole('dialog', { name: '对话列表' }).getByRole('button', { name: '关闭', exact: true }).click()
+  }
 
   await page.getByRole('button', { name: '返回主对话' }).click()
   await expect(page.getByText('资料已经核对完成。', { exact: true })).toBeVisible()
@@ -382,7 +387,7 @@ test('子任务卡片可进入只读子会话并返回主对话', async ({ page 
 })
 
 test('浮动智能体可从子任务卡片进入只读记录', async ({ page }, testInfo) => {
-  await approveDevice(page, `Playwright floating Agent subtask navigation ${testInfo.project.name}`)
+  await approveDevice(page, `PW float subtask ${testInfo.project.name}`)
   const rootID = 'floating-subtask-root'
   const childID = 'floating-subtask-child'
   const now = Date.now()
