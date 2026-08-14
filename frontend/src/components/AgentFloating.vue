@@ -17,7 +17,9 @@ import {
   PushpinOutlined,
   ReloadOutlined,
   CloseOutlined,
+  LayoutOutlined,
   LeftOutlined,
+  MessageOutlined,
   RobotOutlined,
 } from '@ant-design/icons-vue'
 
@@ -36,6 +38,9 @@ const route = useRoute()
 const open = ref(false)
 const error = ref('')
 const assistantSurface = ref<{ clear: () => void } | null>(null)
+const parkedSurfaceHost = ref<HTMLElement | null>(null)
+const sidebarSurfaceHost = ref<HTMLElement | null>(null)
+const floatingSurfaceHost = ref<HTMLElement | null>(null)
 const pinned = ref(localStorage.getItem(PINNED_STORAGE_KEY) === 'true')
 const subtaskStack = ref<Array<{ id: string; title: string }>>([])
 const fabRef = ref<HTMLElement>()
@@ -43,13 +48,17 @@ const floatingDialogIDs = { content: 'agent-floating-panel' }
 const persistentElements = computed(() => [() => fabRef.value || null])
 const hidden = computed(() => route.name === 'user-agent')
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 0)
+const canUseSidebar = computed(() => viewportWidth.value >= SIDEBAR_MIN_VIEWPORT_WIDTH)
 const renderSidebar = computed(
-  () =>
-    !hidden.value &&
-    uiPreferences.agentAssistantDisplayMode === 'sidebar' &&
-    viewportWidth.value >= SIDEBAR_MIN_VIEWPORT_WIDTH,
+  () => !hidden.value && uiPreferences.agentAssistantDisplayMode === 'sidebar' && canUseSidebar.value,
 )
 const renderFloating = computed(() => !hidden.value && !renderSidebar.value)
+const shouldMountAssistantSurface = computed(() => renderSidebar.value || (renderFloating.value && open.value))
+const assistantSurfaceTarget = computed(() => {
+  if (renderSidebar.value && sidebarSurfaceHost.value) return sidebarSurfaceHost.value
+  if (renderFloating.value && open.value && floatingSurfaceHost.value) return floatingSurfaceHost.value
+  return parkedSurfaceHost.value
+})
 const floatingBlocked = computed(() => !!agent.floatingSessionId && agent.hasPendingRequest(agent.floatingSessionId))
 const floatingStatus = computed(() => agent.statusForSession(agent.floatingSessionId))
 const floatingSending = computed(
@@ -252,6 +261,24 @@ watch(
 watch(hidden, (value) => {
   if (value) open.value = false
 })
+watch(renderSidebar, (value, previous) => {
+  if (value) {
+    open.value = false
+  } else if (previous && !hidden.value) {
+    open.value = true
+  }
+})
+
+function moveToSidebar() {
+  if (!canUseSidebar.value) return
+  open.value = false
+  uiPreferences.setAgentAssistantDisplayMode('sidebar')
+}
+
+function moveToFloating() {
+  open.value = true
+  uiPreferences.setAgentAssistantDisplayMode('floating')
+}
 
 async function showPanel() {
   open.value = true
@@ -350,6 +377,8 @@ const panelStyle = computed(() => ({
 </script>
 
 <template>
+  <div ref="parkedSurfaceHost" class="agent-assistant-surface-parking" aria-hidden="true" />
+
   <aside v-if="renderSidebar" class="agent-side-panel" aria-label="智能体侧栏">
     <div class="agent-float-header agent-side-header">
       <div class="agent-float-heading">
@@ -359,40 +388,29 @@ const panelStyle = computed(() => ({
         </button>
         <h2 class="agent-float-title" :title="activeSubtask?.title">{{ activeSubtask?.title || '智能体' }}</h2>
       </div>
-      <button v-if="!activeSubtask" type="button" class="agent-side-action" title="新对话" @click="newChat">
-        <ReloadOutlined aria-hidden="true" />
-        <span>新对话</span>
-      </button>
+      <div class="agent-side-actions">
+        <button
+          type="button"
+          class="agent-side-layout-action"
+          title="切换为浮窗"
+          aria-label="切换为浮窗"
+          @click="moveToFloating"
+        >
+          <MessageOutlined aria-hidden="true" />
+        </button>
+        <button
+          v-if="!activeSubtask"
+          type="button"
+          class="agent-side-action"
+          title="新对话"
+          aria-label="新对话"
+          @click="newChat"
+        >
+          <ReloadOutlined aria-hidden="true" />
+        </button>
+      </div>
     </div>
-    <AgentAssistantSurface
-      ref="assistantSurface"
-      :error="floatingRuntimeNotice?.message"
-      :error-title="floatingRuntimeNotice?.title"
-      :error-detail="floatingRuntimeNotice?.detail"
-      :error-variant="floatingRuntimeNotice?.variant"
-      :error-retryable="floatingRuntimeNotice?.retryable"
-      :welcome-title="welcomeTitle"
-      :welcome-description="welcomeDescription"
-      :prompt-items="promptItems"
-      :messages="displayedMessages"
-      :parts="displayedParts"
-      :sending="displayedSending"
-      :stopping="activeSubtask ? false : agent.floatingStopping"
-      :loading="displayedLoading"
-      :readonly="!!activeSubtask"
-      :status="displayedStatus"
-      :blocked="displayedBlocked"
-      :session-id="displayedSessionId"
-      :sessions="agent.allSessions"
-      :session-statuses="agent.sessionStatuses"
-      :session-errors="agent.sessionErrors"
-      :submit-message="send"
-      :stop-message="() => agent.abortFloatingSession()"
-      @prompt="sendPrompt"
-      @error="error = $event"
-      @retry="recoverFloating"
-      @open-subtask="openSubtask"
-    />
+    <div ref="sidebarSurfaceHost" class="agent-assistant-surface-host" />
   </aside>
 
   <button
@@ -448,35 +466,7 @@ const panelStyle = computed(() => ({
                   </Dialog.CloseTrigger>
                 </div>
               </div>
-              <AgentAssistantSurface
-                ref="assistantSurface"
-                :error="floatingRuntimeNotice?.message"
-                :error-title="floatingRuntimeNotice?.title"
-                :error-detail="floatingRuntimeNotice?.detail"
-                :error-variant="floatingRuntimeNotice?.variant"
-                :error-retryable="floatingRuntimeNotice?.retryable"
-                :welcome-title="welcomeTitle"
-                :welcome-description="welcomeDescription"
-                :prompt-items="promptItems"
-                :messages="displayedMessages"
-                :parts="displayedParts"
-                :sending="displayedSending"
-                :stopping="activeSubtask ? false : agent.floatingStopping"
-                :loading="displayedLoading"
-                :readonly="!!activeSubtask"
-                :status="displayedStatus"
-                :blocked="displayedBlocked"
-                :session-id="displayedSessionId"
-                :sessions="agent.allSessions"
-                :session-statuses="agent.sessionStatuses"
-                :session-errors="agent.sessionErrors"
-                :submit-message="send"
-                :stop-message="() => agent.abortFloatingSession()"
-                @prompt="sendPrompt"
-                @error="error = $event"
-                @retry="recoverFloating"
-                @open-subtask="openSubtask"
-              />
+              <div ref="floatingSurfaceHost" class="agent-assistant-surface-host" />
             </Dialog.Content>
           </Dialog.Positioner>
         </Teleport>
@@ -503,6 +493,15 @@ const panelStyle = computed(() => ({
                 </div>
                 <div class="agent-float-actions">
                   <button
+                    v-if="canUseSidebar"
+                    type="button"
+                    title="移到右侧栏"
+                    aria-label="移到右侧栏"
+                    @click="moveToSidebar"
+                  >
+                    <LayoutOutlined />
+                  </button>
+                  <button
                     type="button"
                     :class="{ active: pinned }"
                     title="保持开启"
@@ -519,44 +518,61 @@ const panelStyle = computed(() => ({
                   </Dialog.CloseTrigger>
                 </div>
               </div>
-              <AgentAssistantSurface
-                ref="assistantSurface"
-                :error="floatingRuntimeNotice?.message"
-                :error-title="floatingRuntimeNotice?.title"
-                :error-detail="floatingRuntimeNotice?.detail"
-                :error-variant="floatingRuntimeNotice?.variant"
-                :error-retryable="floatingRuntimeNotice?.retryable"
-                :welcome-title="welcomeTitle"
-                :welcome-description="welcomeDescription"
-                :prompt-items="promptItems"
-                :messages="displayedMessages"
-                :parts="displayedParts"
-                :sending="displayedSending"
-                :stopping="activeSubtask ? false : agent.floatingStopping"
-                :loading="displayedLoading"
-                :readonly="!!activeSubtask"
-                :status="displayedStatus"
-                :blocked="displayedBlocked"
-                :session-id="displayedSessionId"
-                :sessions="agent.allSessions"
-                :session-statuses="agent.sessionStatuses"
-                :session-errors="agent.sessionErrors"
-                :submit-message="send"
-                :stop-message="() => agent.abortFloatingSession()"
-                @prompt="sendPrompt"
-                @error="error = $event"
-                @retry="recoverFloating"
-                @open-subtask="openSubtask"
-              />
+              <div ref="floatingSurfaceHost" class="agent-assistant-surface-host" />
             </Dialog.Content>
           </Dialog.Positioner>
         </Teleport>
       </template>
     </Dialog.Root>
   </template>
+
+  <Teleport v-if="shouldMountAssistantSurface && assistantSurfaceTarget" :to="assistantSurfaceTarget">
+    <AgentAssistantSurface
+      ref="assistantSurface"
+      :error="floatingRuntimeNotice?.message"
+      :error-title="floatingRuntimeNotice?.title"
+      :error-detail="floatingRuntimeNotice?.detail"
+      :error-variant="floatingRuntimeNotice?.variant"
+      :error-retryable="floatingRuntimeNotice?.retryable"
+      :welcome-title="welcomeTitle"
+      :welcome-description="welcomeDescription"
+      :prompt-items="promptItems"
+      :messages="displayedMessages"
+      :parts="displayedParts"
+      :sending="displayedSending"
+      :stopping="activeSubtask ? false : agent.floatingStopping"
+      :loading="displayedLoading"
+      :readonly="!!activeSubtask"
+      :status="displayedStatus"
+      :blocked="displayedBlocked"
+      :session-id="displayedSessionId"
+      :sessions="agent.allSessions"
+      :session-statuses="agent.sessionStatuses"
+      :session-errors="agent.sessionErrors"
+      :submit-message="send"
+      :stop-message="() => agent.abortFloatingSession()"
+      @prompt="sendPrompt"
+      @error="error = $event"
+      @retry="recoverFloating"
+      @open-subtask="openSubtask"
+    />
+  </Teleport>
 </template>
 
 <style lang="scss" scoped>
+.agent-assistant-surface-parking {
+  display: none;
+}
+
+.agent-assistant-surface-host {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .agent-fab {
   position: fixed;
   right: 24px;
@@ -689,6 +705,13 @@ const panelStyle = computed(() => ({
 .agent-side-header {
   border-bottom: 1px solid var(--border-primary);
 }
+.agent-side-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+.agent-side-layout-action,
 .agent-side-action {
   display: inline-flex;
   align-items: center;
@@ -707,9 +730,25 @@ const panelStyle = computed(() => ({
     background 0.15s,
     color 0.15s;
 }
+.agent-side-layout-action {
+  width: 32px;
+  padding: 0;
+  font-size: var(--marvo-type-16);
+}
+.agent-side-action {
+  width: 32px;
+  padding: 0;
+  font-size: var(--marvo-type-16);
+}
+.agent-side-layout-action:hover,
 .agent-side-action:hover {
   background: var(--bg-hover);
   color: var(--text-accent);
+}
+.agent-side-layout-action:focus-visible,
+.agent-side-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 42%, transparent);
+  outline-offset: 1px;
 }
 
 @keyframes agent-float-in {
@@ -866,6 +905,7 @@ const panelStyle = computed(() => ({
 @media (hover: none), (max-width: 768px) {
   .agent-float-actions button,
   .agent-float-back,
+  .agent-side-layout-action,
   .agent-side-action {
     min-width: 40px;
     min-height: 40px;

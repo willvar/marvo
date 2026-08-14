@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Combobox, useListCollection } from '@ark-ui/vue/combobox'
 import { Field } from '@ark-ui/vue/field'
-import { RadioGroup } from '@ark-ui/vue/radio-group'
 import { SegmentGroup } from '@ark-ui/vue/segment-group'
 import {
   CheckOutlined,
@@ -10,17 +9,13 @@ import {
   DeleteOutlined,
   DownOutlined,
   GlobalOutlined,
-  LayoutOutlined,
-  MessageOutlined,
   PlusOutlined,
-  RobotOutlined,
   SaveOutlined,
   UndoOutlined,
 } from '@ant-design/icons-vue'
 import { v4 as uuidv4 } from 'uuid'
 import { useAgentPersonalizationStore } from '../../stores/agentPersonalization'
 import { useAgentSettingsStore } from '../../stores/agentSettings'
-import { useUIPreferencesStore, type AgentAssistantDisplayMode } from '../../stores/uiPreferences'
 import type { AgentModelOption, AgentModelSelection, AgentPersonalizationRule, AgentSettingsUpdate } from '../../sdk'
 import AgentProviderSettings from '../../components/AgentProviderSettings.vue'
 import { XFullscreenTextarea } from '../../components/x'
@@ -32,9 +27,6 @@ const MAX_PERSONALIZATION_RULES = 256
 const DEFAULT_VARIANT = '__model_default__'
 const settingsStore = useAgentSettingsStore()
 const personalizationStore = useAgentPersonalizationStore()
-const uiPreferences = useUIPreferencesStore()
-const displayMode = ref<AgentAssistantDisplayMode>('floating')
-const styleSnapshot = ref<AgentAssistantDisplayMode>('floating')
 const loading = ref(false)
 const saving = ref(false)
 const settingsReady = ref(false)
@@ -58,8 +50,11 @@ const personalizationReady = ref(false)
 const personalizationLoading = ref(false)
 const personalizationError = ref('')
 const touchedPersonalizationRuleIDs = ref<Set<string>>(new Set())
+const pageHeading = ref<HTMLElement | null>(null)
+const pageHeadingVisible = ref(true)
 let loadSequence = 0
 let personalizationLoadSequence = 0
+let pageHeadingObserver: IntersectionObserver | null = null
 
 const { collection, filter, set } = useListCollection<AgentModelOption>({
   initialItems: [],
@@ -86,7 +81,6 @@ const promptBytes = computed(() => new TextEncoder().encode(globalPrompt.value).
 const promptTooLarge = computed(() => promptBytes.value > MAX_PROMPT_BYTES)
 const exaAPIKeyBytes = computed(() => new TextEncoder().encode(exaAPIKey.value.trim()).byteLength)
 const exaAPIKeyTooLarge = computed(() => exaAPIKeyBytes.value > MAX_EXA_API_KEY_BYTES)
-const styleDirty = computed(() => displayMode.value !== styleSnapshot.value)
 const modelDirty = computed(() => settingsReady.value && modelSnapshot.value !== modelDraftSnapshot())
 const promptDirty = computed(() => settingsReady.value && promptSnapshot.value !== globalPrompt.value)
 const exaDirty = computed(() => settingsReady.value && (exaAPIKey.value.trim().length > 0 || exaClearRequested.value))
@@ -94,7 +88,7 @@ const personalizationDirty = computed(
   () => personalizationReady.value && personalizationSnapshot.value !== personalizationDraftSnapshot(),
 )
 const settingsDirty = computed(
-  () => styleDirty.value || modelDirty.value || promptDirty.value || exaDirty.value || personalizationDirty.value,
+  () => modelDirty.value || promptDirty.value || exaDirty.value || personalizationDirty.value,
 )
 const exaStatus = computed(() => {
   if (!settingsReady.value) return loading.value ? '读取中' : '不可用'
@@ -113,6 +107,7 @@ const personalizationInvalid = computed(() => {
   return false
 })
 const canSave = computed(() => !saving.value && settingsDirty.value)
+const showFloatingActions = computed(() => settingsDirty.value && !pageHeadingVisible.value)
 
 watch(
   selectedModel,
@@ -130,13 +125,21 @@ watch([selectedVariant, () => variantOptions.value.length, variantScroller], () 
 })
 
 onMounted(() => {
-  uiPreferences.syncAgentAssistantDisplayMode()
-  displayMode.value = uiPreferences.agentAssistantDisplayMode
-  styleSnapshot.value = displayMode.value
   touchedPersonalizationRuleIDs.value = new Set()
+  if (typeof IntersectionObserver !== 'undefined' && pageHeading.value) {
+    pageHeadingObserver = new IntersectionObserver(
+      ([entry]) => {
+        pageHeadingVisible.value = entry?.isIntersecting ?? true
+      },
+      { threshold: 0.5 },
+    )
+    pageHeadingObserver.observe(pageHeading.value)
+  }
   void loadSettings()
   void loadPersonalization()
 })
+
+onBeforeUnmount(() => pageHeadingObserver?.disconnect())
 
 function modelKey(model: Pick<AgentModelOption, 'provider_id' | 'model_id'>) {
   return JSON.stringify([model.provider_id, model.model_id])
@@ -246,15 +249,11 @@ async function refreshModels() {
 async function saveSettings() {
   if (!canSave.value) return false
   if (!validateSettings()) return false
-  let savePhase: 'personalization' | 'settings' | 'style' = styleDirty.value ? 'style' : 'settings'
+  let savePhase: 'personalization' | 'settings' = 'settings'
   saving.value = true
   error.value = ''
   personalizationError.value = ''
   try {
-    if (styleDirty.value) {
-      uiPreferences.setAgentAssistantDisplayMode(displayMode.value)
-      styleSnapshot.value = displayMode.value
-    }
     if (personalizationDirty.value) {
       savePhase = 'personalization'
       const snapshot = await personalizationStore.save(
@@ -356,7 +355,6 @@ function modelDraftSnapshot() {
 }
 
 function restoreSettingsDraft() {
-  displayMode.value = styleSnapshot.value
   if (modelSnapshot.value) {
     const snapshot = JSON.parse(modelSnapshot.value) as { model: string; variant: string }
     selectedValues.value = snapshot.model ? [snapshot.model] : []
@@ -431,11 +429,14 @@ function formatLimit(limit?: number) {
 <template>
   <section class="agent-settings-page">
     <header class="agent-settings-page-heading">
-      <div class="agent-settings-page-heading-copy">
+      <div ref="pageHeading" class="agent-settings-page-heading-copy">
         <h1>智能体设置</h1>
-        <p>管理当前用户空间的智能体样式、提供商、模型与长期偏好。</p>
+        <p>管理当前用户空间的提供商、模型与长期偏好。</p>
       </div>
-      <div class="agent-settings-page-actions">
+      <div v-if="!showFloatingActions" class="agent-settings-page-actions">
+        <span v-if="settingsDirty" class="agent-settings-unsaved-state" role="status">
+          <span aria-hidden="true" />有未保存修改
+        </span>
         <button
           type="button"
           class="admin-btn agent-settings-action agent-settings-action-discard"
@@ -458,75 +459,6 @@ function formatLimit(limit?: number) {
     </header>
     <div class="agent-settings-body">
       <div class="agent-settings-form agent-settings-sections">
-        <section class="agent-settings-section agent-personalization-section">
-          <div class="agent-settings-section-heading">
-            <div>
-              <h2>当前设备的智能体布局</h2>
-              <p>仅保存在当前浏览器中，并应用于这个用户空间的笔记及其他内容页。</p>
-            </div>
-          </div>
-
-          <div class="agent-style-layout">
-            <RadioGroup.Root v-model="displayMode" class="agent-display-mode-group" aria-label="笔记内智能体布局">
-              <RadioGroup.Item class="agent-display-mode-item" value="floating">
-                <RadioGroup.ItemHiddenInput />
-                <span class="agent-display-mode-icon"><MessageOutlined aria-hidden="true" /></span>
-                <RadioGroup.ItemText class="agent-display-mode-copy">
-                  <strong>浮动按钮</strong>
-                  <span>在右下角显示入口，需要时打开浮动对话窗口。</span>
-                </RadioGroup.ItemText>
-                <RadioGroup.ItemControl class="agent-display-mode-control"><span /></RadioGroup.ItemControl>
-              </RadioGroup.Item>
-
-              <RadioGroup.Item class="agent-display-mode-item" value="sidebar">
-                <RadioGroup.ItemHiddenInput />
-                <span class="agent-display-mode-icon"><LayoutOutlined aria-hidden="true" /></span>
-                <RadioGroup.ItemText class="agent-display-mode-copy">
-                  <strong>内容右侧栏</strong>
-                  <span>宽屏时持续显示独立智能体列；空间不足时自动回退为浮动按钮。</span>
-                </RadioGroup.ItemText>
-                <RadioGroup.ItemControl class="agent-display-mode-control"><span /></RadioGroup.ItemControl>
-              </RadioGroup.Item>
-            </RadioGroup.Root>
-
-            <div class="agent-display-preview" aria-live="polite">
-              <div class="agent-display-preview-heading">
-                <div>
-                  <strong>布局预览</strong>
-                  <span>{{ displayMode === 'floating' ? '需要时再展开对话' : '宽屏下与内容并排' }}</span>
-                </div>
-                <span class="agent-display-preview-badge">
-                  {{ displayMode === 'floating' ? '浮动按钮' : '内容右侧栏' }}
-                </span>
-              </div>
-              <div class="agent-display-preview-stage" :data-mode="displayMode" aria-hidden="true">
-                <div class="agent-display-preview-list">
-                  <span class="wide" />
-                  <span />
-                  <span />
-                  <span class="short" />
-                </div>
-                <div class="agent-display-preview-document">
-                  <span class="title" />
-                  <span class="wide" />
-                  <span />
-                  <span />
-                  <span class="short" />
-                  <button v-if="displayMode === 'floating'" type="button" tabindex="-1">
-                    <RobotOutlined />
-                  </button>
-                </div>
-                <div v-if="displayMode === 'sidebar'" class="agent-display-preview-agent">
-                  <div><RobotOutlined /><span /></div>
-                  <span class="bubble" />
-                  <span class="bubble user" />
-                  <span class="composer" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <div class="agent-runtime-grid">
           <AgentProviderSettings :active="true" @changed="refreshModels" />
 
@@ -829,6 +761,34 @@ function formatLimit(limit?: number) {
       </div>
     </div>
   </section>
+
+  <Teleport to="body">
+    <Transition name="agent-settings-dirty-bar">
+      <div v-if="showFloatingActions" class="agent-settings-dirty-bar" aria-label="未保存的智能体设置">
+        <span class="agent-settings-unsaved-state" role="status"> <span aria-hidden="true" />有未保存修改 </span>
+        <div class="agent-settings-dirty-bar-actions">
+          <button
+            type="button"
+            class="admin-btn agent-settings-action agent-settings-action-discard"
+            :disabled="saving"
+            @click="restoreSettingsDraft"
+          >
+            <CloseOutlined aria-hidden="true" />
+            <span>放弃修改</span>
+          </button>
+          <button
+            type="button"
+            class="admin-btn agent-settings-action agent-settings-action-save"
+            :disabled="!canSave"
+            @click="saveSettings"
+          >
+            <SaveOutlined aria-hidden="true" />
+            <span>{{ saving ? '保存中...' : '保存设置' }}</span>
+          </button>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <style lang="scss">
@@ -1058,243 +1018,6 @@ function formatLimit(limit?: number) {
   color: var(--text-muted);
   font-size: var(--marvo-type-11);
   line-height: 1.55;
-}
-.agent-display-mode-group {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-}
-.agent-style-layout {
-  display: grid;
-  grid-template-columns: minmax(360px, 0.72fr) minmax(500px, 1.28fr);
-  align-items: stretch;
-  gap: 18px;
-}
-.agent-display-mode-item {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
-  min-height: 104px;
-  box-sizing: border-box;
-  padding: 16px;
-  border: 1px solid var(--border-primary);
-  border-radius: 12px;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  cursor: pointer;
-  outline: 0;
-  transition:
-    border-color 0.15s,
-    background 0.15s,
-    box-shadow 0.15s;
-}
-.agent-display-mode-item:hover {
-  border-color: var(--border-light);
-  background: var(--bg-hover);
-}
-.agent-display-mode-item[data-state='checked'] {
-  border-color: var(--text-accent);
-  background: color-mix(in srgb, var(--marvo-accent-color) 6%, var(--bg-primary));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--marvo-accent-color) 10%, transparent);
-}
-.agent-display-mode-item:focus-visible {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color) 22%, transparent);
-}
-.agent-display-mode-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 9px;
-  background: var(--bg-secondary);
-  color: var(--text-accent);
-  font-size: var(--marvo-type-17);
-}
-.agent-display-mode-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-}
-.agent-display-mode-copy strong {
-  font-size: var(--marvo-type-13);
-  line-height: 1.4;
-}
-.agent-display-mode-copy > span {
-  color: var(--text-muted);
-  font-size: var(--marvo-type-11);
-  line-height: 1.55;
-}
-.agent-display-mode-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  box-sizing: border-box;
-  border: 1px solid var(--border-light);
-  border-radius: 50%;
-  background: var(--bg-card);
-}
-.agent-display-mode-control[data-state='checked'] {
-  border: 5px solid var(--marvo-accent-color);
-}
-.agent-display-preview {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  padding: 14px;
-  border: 1px solid var(--border-primary);
-  border-radius: 12px;
-  background: var(--bg-secondary);
-}
-.agent-display-preview-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.agent-display-preview-heading > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-.agent-display-preview-heading strong {
-  color: var(--text-primary);
-  font-size: var(--marvo-type-12);
-}
-.agent-display-preview-heading span {
-  color: var(--text-muted);
-  font-size: var(--marvo-type-10);
-}
-.agent-display-preview-badge {
-  flex-shrink: 0;
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--marvo-accent-color) 10%, var(--bg-primary));
-  color: var(--text-accent) !important;
-}
-.agent-display-preview-stage {
-  display: grid;
-  min-height: 184px;
-  flex: 1;
-  grid-template-columns: minmax(82px, 0.22fr) minmax(0, 1fr);
-  overflow: hidden;
-  border: 1px solid var(--border-primary);
-  border-radius: 9px;
-  background: var(--bg-primary);
-  box-shadow: 0 5px 18px color-mix(in srgb, var(--text-primary) 5%, transparent);
-}
-.agent-display-preview-stage[data-mode='sidebar'] {
-  grid-template-columns: minmax(82px, 0.2fr) minmax(180px, 1fr) minmax(148px, 0.48fr);
-}
-.agent-display-preview-list,
-.agent-display-preview-document,
-.agent-display-preview-agent {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-.agent-display-preview-list {
-  gap: 10px;
-  padding: 18px 13px;
-  border-right: 1px solid var(--border-primary);
-  background: var(--bg-tertiary);
-}
-.agent-display-preview-list span,
-.agent-display-preview-document > span,
-.agent-display-preview-agent span {
-  display: block;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--border-primary);
-}
-.agent-display-preview-list span {
-  width: 74%;
-}
-.agent-display-preview-list .wide {
-  width: 100%;
-  height: 9px;
-  background: color-mix(in srgb, var(--marvo-accent-color) 25%, var(--border-primary));
-}
-.agent-display-preview-list .short {
-  width: 52%;
-}
-.agent-display-preview-document {
-  gap: 12px;
-  padding: 28px clamp(20px, 4vw, 54px);
-}
-.agent-display-preview-document > span {
-  width: 82%;
-  background: var(--border-light);
-}
-.agent-display-preview-document > .title {
-  width: 42%;
-  height: 13px;
-  margin-bottom: 5px;
-  background: color-mix(in srgb, var(--text-primary) 24%, var(--border-primary));
-}
-.agent-display-preview-document > .wide {
-  width: 100%;
-}
-.agent-display-preview-document > .short {
-  width: 58%;
-}
-.agent-display-preview-document button {
-  position: absolute;
-  right: 16px;
-  bottom: 14px;
-  display: inline-flex;
-  width: 34px;
-  height: 34px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 50%;
-  background: var(--marvo-accent-color);
-  color: #fff;
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--marvo-accent-color) 28%, transparent);
-  font-size: var(--marvo-type-13);
-}
-.agent-display-preview-agent {
-  gap: 12px;
-  padding: 14px;
-  border-left: 1px solid var(--border-primary);
-  background: var(--bg-card);
-}
-.agent-display-preview-agent > div {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--text-accent);
-}
-.agent-display-preview-agent > div span {
-  width: 54px;
-}
-.agent-display-preview-agent .bubble {
-  width: 84%;
-  height: 34px;
-  border-radius: 8px;
-  background: var(--bg-secondary);
-}
-.agent-display-preview-agent .bubble.user {
-  width: 62%;
-  height: 24px;
-  align-self: flex-end;
-  background: color-mix(in srgb, var(--marvo-accent-color) 13%, var(--bg-secondary));
-}
-.agent-display-preview-agent .composer {
-  width: 100%;
-  height: 30px;
-  margin-top: auto;
-  border: 1px solid var(--border-primary);
-  background: var(--bg-primary);
 }
 .agent-personalization-loading {
   display: flex;
@@ -1712,8 +1435,27 @@ function formatLimit(limit?: number) {
 .agent-settings-page-actions {
   display: flex;
   flex-shrink: 0;
+  align-items: center;
   gap: 8px;
   padding-top: 2px;
+}
+.agent-settings-unsaved-state {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 7px;
+  color: color-mix(in srgb, #d97706 86%, var(--text-primary));
+  font-size: var(--marvo-type-12);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.agent-settings-unsaved-state > span {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 16%, transparent);
 }
 .agent-settings-action {
   width: 112px;
@@ -1771,9 +1513,40 @@ function formatLimit(limit?: number) {
   color: var(--text-muted);
 }
 .agent-settings-action-save:disabled {
-  border-color: color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 34%, var(--bg-primary));
-  background: color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 34%, var(--bg-primary));
-  color: color-mix(in srgb, #fff 78%, var(--marvo-accent-color, #4f46e5));
+  border-color: var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+}
+.agent-settings-dirty-bar {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 11px 10px 15px;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-card) 96%, transparent);
+  box-shadow: 0 12px 36px color-mix(in srgb, var(--text-primary) 16%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.agent-settings-dirty-bar-actions {
+  display: flex;
+  gap: 8px;
+}
+.agent-settings-dirty-bar-enter-active,
+.agent-settings-dirty-bar-leave-active {
+  transition:
+    opacity 0.16s,
+    transform 0.16s;
+}
+.agent-settings-dirty-bar-enter-from,
+.agent-settings-dirty-bar-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 .agent-settings-visually-hidden {
   position: absolute;
@@ -1792,19 +1565,26 @@ function formatLimit(limit?: number) {
     align-self: stretch;
     justify-content: flex-end;
   }
+  .agent-settings-page-actions .agent-settings-unsaved-state {
+    margin-right: auto;
+  }
+  .agent-settings-dirty-bar {
+    right: max(10px, env(safe-area-inset-right));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    left: max(10px, env(safe-area-inset-left));
+    justify-content: space-between;
+    gap: 10px;
+    padding-left: 12px;
+  }
+  .agent-settings-dirty-bar-actions {
+    min-width: 0;
+  }
+  .agent-settings-dirty-bar .agent-settings-action {
+    width: auto;
+    min-width: 96px;
+  }
   .agent-settings-section {
     padding-inline: 16px;
-  }
-  .agent-display-mode-group {
-    grid-template-columns: 1fr;
-  }
-  .agent-display-preview-stage,
-  .agent-display-preview-stage[data-mode='sidebar'] {
-    min-height: 170px;
-    grid-template-columns: 64px minmax(0, 1fr);
-  }
-  .agent-display-preview-stage[data-mode='sidebar'] .agent-display-preview-document {
-    display: none;
   }
   .agent-settings-prompt-meta {
     align-items: flex-end;
@@ -1850,7 +1630,6 @@ function formatLimit(limit?: number) {
 }
 
 @media (max-width: 1200px) {
-  .agent-style-layout,
   .agent-model-layout,
   .agent-exa-layout,
   .agent-advanced-grid {
