@@ -89,6 +89,28 @@ func (f *multiuserFixture) approveDevice(t *testing.T, userID, localID string) *
 	}
 }
 
+func TestPublicUserIdentityOnlyExposesTheSpaceName(t *testing.T) {
+	fixture := newMultiuserFixture(t)
+	user := fixture.createUser(t, "User A")
+
+	identity := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+user.User.ID+"/identity", nil)
+	if identity.Code != http.StatusOK {
+		t.Fatalf("public identity status = %d, body = %s", identity.Code, identity.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(identity.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) != 1 || payload["name"] != "User A" {
+		t.Fatalf("public identity exposed unexpected data: %#v", payload)
+	}
+
+	missing := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/00000000000000000000/identity", nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing public identity status = %d, body = %s", missing.Code, missing.Body.String())
+	}
+}
+
 func serveJSON(t *testing.T, handler http.Handler, method, path string, body any, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	var payload bytes.Buffer

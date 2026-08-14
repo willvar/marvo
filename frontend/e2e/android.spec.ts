@@ -192,7 +192,8 @@ test('Android WebView 首次进入会自动申请设备并在审批后进入工�
       localStorage.setItem('marvo_android_device_name', 'Marvo · Playwright Tablet')
     })
     await page.goto(`/user/${user.id}/login`)
-    await expect(page.getByRole('heading', { name: '等待审批' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '您正在访问 Android 自动绑定 的空间' })).toBeVisible()
+    await expect(page.getByText('用户管理员正在审核您的设备')).toBeVisible()
 
     const pending = await platform.get(`/api/user/${user.id}/admin/requests`)
     expect(pending.ok()).toBeTruthy()

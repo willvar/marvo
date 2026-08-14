@@ -224,8 +224,9 @@ export async function approveDevice(page: Page, deviceName: string) {
   }
 
   await page.getByPlaceholder('设备名称').fill(deviceName)
-  await page.getByRole('button', { name: '申请访问' }).click()
-  await expect(page.getByRole('heading', { name: '等待审批' })).toBeVisible()
+  await page.getByRole('button', { name: '申请权限' }).click()
+  await expect(page.getByRole('heading', { name: `您正在访问 ${user.name} 的空间` })).toBeVisible()
+  await expect(page.getByText('用户管理员正在审核您的设备')).toBeVisible()
 
   try {
     await loginUserAdministrator(admin, user.id)

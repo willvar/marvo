@@ -41,7 +41,18 @@ test('用户可在后台管理密码与可选身份验证器', async ({ page }, 
     const user = (await created.json()).user as { id: string }
 
     await page.goto(`/user/${user.id}/login?mode=admin`)
-    await expect(page).toHaveTitle('用户后台登录 · Marvo')
+    const loginHeading = page.getByRole('heading', { name: `您正在访问 ${userName} 的空间` })
+    await expect(loginHeading).toBeVisible()
+    await expect(loginHeading).toHaveCSS('white-space', 'nowrap')
+    const [loginCardBounds, loginHeadingBounds] = await Promise.all([
+      page.locator('.user-space-login-card').boundingBox(),
+      loginHeading.boundingBox(),
+    ])
+    expect(loginCardBounds).not.toBeNull()
+    expect(loginHeadingBounds).not.toBeNull()
+    expect(loginCardBounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width - 20)
+    expect(loginHeadingBounds!.height).toBeLessThanOrEqual(40)
+    await expect(page).toHaveTitle(`用户后台登录 · ${userName} · Marvo`)
     await page.getByPlaceholder('用户密码').fill(password)
     await page.getByRole('button', { name: '登录', exact: true }).click()
     await expect(page).toHaveURL(`/user/${user.id}/admin`)

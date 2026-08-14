@@ -43,6 +43,7 @@ func TestRoutesExposeOnlyPlatformControlAndUserScopedContent(t *testing.T) {
 		{http.MethodGet, "/api/admin/users"},
 		{http.MethodGet, "/api/admin/android/release"},
 		{http.MethodPut, "/api/admin/android/release"},
+		{http.MethodGet, "/api/user/" + user.User.ID + "/identity"},
 		{http.MethodGet, "/api/user/" + user.User.ID + "/events"},
 		{http.MethodPost, "/api/user/" + user.User.ID + "/send"},
 		{http.MethodGet, "/api/user/" + user.User.ID + "/agent/settings"},
