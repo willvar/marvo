@@ -288,6 +288,16 @@ function toggle(item: XThoughtItem) {
   }
 }
 
+@media (hover: none) and (pointer: coarse), (max-width: 768px) {
+  .x-thought-node-trigger {
+    min-height: 40px;
+  }
+
+  .x-thought-chain-compact .x-thought-node {
+    min-height: 40px;
+  }
+}
+
 @keyframes x-thought-spin {
   to {
     transform: rotate(360deg);

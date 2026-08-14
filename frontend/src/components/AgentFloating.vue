@@ -420,7 +420,7 @@ const panelStyle = computed(() => ({
       :trap-focus="isMobile"
       :prevent-scroll="isMobile"
       :restore-focus="true"
-      :close-on-interact-outside="!pinned && !isMobile"
+      :close-on-interact-outside="!pinned"
       :persistent-elements="persistentElements"
       @update:open="open = $event"
     >
@@ -664,6 +664,8 @@ const panelStyle = computed(() => ({
 .agent-float-mobile {
   width: 100% !important;
   height: 90vh !important;
+  height: 90dvh !important;
+  max-height: 100dvh;
   border-radius: 16px 16px 0 0;
   animation: agent-drawer-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
   &[data-state='closed'] {
@@ -676,8 +678,7 @@ const panelStyle = computed(() => ({
   display: flex;
   width: clamp(340px, 27vw, 400px);
   min-width: clamp(340px, 27vw, 400px);
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   box-sizing: border-box;
   flex-direction: column;
   overflow: hidden;
@@ -859,6 +860,15 @@ const panelStyle = computed(() => ({
       background: var(--bg-hover);
       color: var(--text-accent);
     }
+  }
+}
+
+@media (hover: none), (max-width: 768px) {
+  .agent-float-actions button,
+  .agent-float-back,
+  .agent-side-action {
+    min-width: 40px;
+    min-height: 40px;
   }
 }
 </style>

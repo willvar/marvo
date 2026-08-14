@@ -392,5 +392,18 @@ onBeforeUnmount(destroyView)
     flex-direction: column;
     padding-inline: 10px;
   }
+  .merge-close,
+  .merge-actions-inline button {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .merge-close,
+  .merge-actions-inline button {
+    min-width: 40px;
+    min-height: 40px;
+  }
 }
 </style>

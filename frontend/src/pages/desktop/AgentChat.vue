@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { Toast, Toaster, createToaster } from '@ark-ui/vue/toast'
 import {
@@ -8,6 +8,7 @@ import {
   EditOutlined,
   LeftOutlined,
   LockOutlined,
+  MenuOutlined,
   RobotOutlined,
 } from '@ant-design/icons-vue'
 import { useAgentStore } from '../../stores/agent'
@@ -34,6 +35,9 @@ const renameTargetId = ref('')
 const renameTitle = ref('')
 const renamingSession = ref(false)
 const subtaskStack = ref<Array<{ id: string; title: string }>>([])
+const compactSessions = ref(false)
+const sessionsOpen = ref(false)
+let sessionsMediaQuery: MediaQueryList | null = null
 
 const activeSubtask = computed(() => subtaskStack.value[subtaskStack.value.length - 1])
 const activeSessionId = computed(() => activeSubtask.value?.id || agent.currentSessionId)
@@ -65,6 +69,9 @@ const conversationItems = computed<XConversationItem[]>(() =>
     status: agent.sessionIndicator(session.id),
     statusLabel: sessionIndicatorLabel(agent.sessionIndicator(session.id)),
   })),
+)
+const currentSessionTitle = computed(() =>
+  sessionTitle(agent.sessions.find((session) => session.id === agent.currentSessionId)),
 )
 const timelineHasError = computed(() =>
   visibleMessages.value.some((message) => message.error && !isAbortedAgentError(message.error)),
@@ -165,7 +172,15 @@ function displayError(cause: unknown, fallback: string) {
   return message && message !== '智能体服务暂时不可用' ? message : fallback
 }
 
+function syncSessionLayout(event?: MediaQueryListEvent) {
+  compactSessions.value = event?.matches ?? sessionsMediaQuery?.matches ?? false
+  if (!compactSessions.value) sessionsOpen.value = false
+}
+
 onMounted(async () => {
+  sessionsMediaQuery = window.matchMedia('(max-width: 768px)')
+  syncSessionLayout()
+  sessionsMediaQuery.addEventListener('change', syncSessionLayout)
   agent.connect()
   try {
     await agent.loadSessions()
@@ -178,6 +193,8 @@ onMounted(async () => {
     await agent.selectSession(agent.sessions[0].id)
   }
 })
+
+onBeforeUnmount(() => sessionsMediaQuery?.removeEventListener('change', syncSessionLayout))
 
 watch(
   () => agent.currentSessionId,
@@ -196,6 +213,7 @@ async function newSession() {
   try {
     subtaskStack.value = []
     await agent.createSession()
+    if (compactSessions.value) sessionsOpen.value = false
   } catch (cause) {
     initError.value = displayError(cause, '暂时无法创建对话')
   }
@@ -206,6 +224,7 @@ async function selectSession(id: string) {
     subtaskStack.value = []
     if (renameTargetId.value && renameTargetId.value !== id) await confirmRenameSession()
     await agent.selectSession(id)
+    if (compactSessions.value) sessionsOpen.value = false
   } catch (cause) {
     initError.value = displayError(cause, '暂时无法加载对话')
   }
@@ -317,7 +336,7 @@ function cancelRenameSession() {
 
 <template>
   <div class="agent-chat">
-    <aside class="agent-chat-sessions">
+    <aside v-if="!compactSessions" class="agent-chat-sessions">
       <XConversations
         :items="conversationItems"
         :active-key="agent.currentSessionId"
@@ -348,6 +367,72 @@ function cancelRenameSession() {
     </aside>
 
     <main class="agent-chat-main">
+      <Dialog.Root
+        v-if="compactSessions"
+        :open="sessionsOpen"
+        lazy-mount
+        unmount-on-exit
+        :close-on-escape="!renameTargetId"
+        @update:open="sessionsOpen = $event"
+      >
+        <header class="agent-chat-mobile-toolbar">
+          <Dialog.Trigger as-child>
+            <XButton variant="ghost" size="small">
+              <MenuOutlined aria-hidden="true" />
+              <span>对话列表</span>
+            </XButton>
+          </Dialog.Trigger>
+          <span class="agent-chat-mobile-title" :title="currentSessionTitle">{{ currentSessionTitle }}</span>
+        </header>
+
+        <Teleport to="body">
+          <Dialog.Backdrop class="dialog-backdrop agent-chat-sessions-backdrop" />
+          <Dialog.Positioner class="dialog-positioner agent-chat-sessions-positioner">
+            <Dialog.Content class="agent-chat-sessions-drawer">
+              <div class="agent-chat-sessions-drawer-header">
+                <Dialog.Title>对话列表</Dialog.Title>
+                <Dialog.CloseTrigger as-child>
+                  <XButton variant="ghost" size="small"><CloseOutlined aria-hidden="true" /><span>关闭</span></XButton>
+                </Dialog.CloseTrigger>
+              </div>
+              <XConversations
+                :items="conversationItems"
+                :active-key="agent.currentSessionId"
+                :actions="conversationActions"
+                :creation-disabled="agent.sessionsLoading"
+                :loading="agent.sessionsLoading"
+                :teleport-menus="false"
+                @create="newSession"
+                @active-change="selectSession"
+                @action="handleConversationAction"
+              >
+                <template #label="{ item }">
+                  <input
+                    v-if="renameTargetId === item.key"
+                    v-model="renameTitle"
+                    class="agent-chat-session-title-input"
+                    aria-label="会话名称"
+                    maxlength="80"
+                    :disabled="renamingSession"
+                    @click.stop
+                    @keydown.enter.stop.prevent
+                    @keyup.enter.stop.prevent="confirmRenameSession"
+                    @keydown.escape.stop.prevent="cancelRenameSession"
+                    @blur="confirmRenameSession"
+                  />
+                  <span v-else class="agent-chat-session-title">{{ item.label }}</span>
+                </template>
+              </XConversations>
+              <Toaster v-if="sessionsOpen" v-slot="toast" :toaster="toaster">
+                <Toast.Root>
+                  <Toast.Title>{{ toast.title }}</Toast.Title>
+                </Toast.Root>
+              </Toaster>
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Teleport>
+      </Dialog.Root>
+
       <XErrorCard
         v-if="runtimeNotice"
         class="agent-chat-runtime-notice"
@@ -416,7 +501,7 @@ function cancelRenameSession() {
       </template>
     </main>
 
-    <Toaster v-slot="toast" :toaster="toaster">
+    <Toaster v-if="!compactSessions || !sessionsOpen" v-slot="toast" :toaster="toaster">
       <Toast.Root>
         <Toast.Title>{{ toast.title }}</Toast.Title>
       </Toast.Root>
@@ -463,6 +548,7 @@ function cancelRenameSession() {
 .agent-chat {
   display: flex;
   height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -515,9 +601,57 @@ function cancelRenameSession() {
 .agent-chat-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
+}
+
+.agent-chat-mobile-toolbar {
+  display: none;
+}
+
+.agent-chat-sessions-positioner {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  overflow: hidden;
+}
+
+.agent-chat-sessions-drawer {
+  width: min(88vw, 360px);
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border-primary);
+  border-radius: 0 14px 14px 0;
+  outline: none;
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-card);
+
+  :deep(.x-conversations) {
+    min-height: 0;
+    flex: 1;
+  }
+}
+
+.agent-chat-sessions-drawer-header {
+  min-height: 52px;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: max(8px, env(safe-area-inset-top)) 10px 8px 16px;
+  border-bottom: 1px solid var(--border-primary);
+  color: var(--text-primary);
+
+  [data-part='title'] {
+    font-size: var(--marvo-type-16);
+    font-weight: 600;
+  }
 }
 
 .agent-chat-runtime-notice {
@@ -632,15 +766,27 @@ function cancelRenameSession() {
 }
 
 @media (max-width: 768px) {
-  .agent-chat {
-    flex-direction: column;
+  .agent-chat-session-title-input {
+    height: 40px;
   }
-  .agent-chat-sessions {
-    width: 100%;
-    min-width: 0;
-    max-height: 210px;
-    border-right: none;
+
+  .agent-chat-mobile-toolbar {
+    min-height: 44px;
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 10px;
     border-bottom: 1px solid var(--border-primary);
+    background: var(--bg-secondary);
+  }
+  .agent-chat-mobile-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: var(--marvo-type-12);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .agent-chat-input {
     padding: 6px 12px max(12px, env(safe-area-inset-bottom));
@@ -651,6 +797,16 @@ function cancelRenameSession() {
   }
   .agent-chat-subtask-heading {
     gap: 6px;
+  }
+}
+
+@media (max-width: 768px) and (max-height: 520px) {
+  .agent-chat-mobile-toolbar {
+    min-height: 40px;
+  }
+  .agent-chat-input {
+    padding-top: 4px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
   }
 }
 </style>

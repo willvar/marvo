@@ -336,11 +336,11 @@ function fmt(t: string) {
         </thead>
         <tbody>
           <tr v-for="r in requests" :key="r.id">
-            <td>
+            <td data-label="设备名称">
               <a @click="showInfo(r.device_info)">{{ r.device_name || '未命名设备' }}</a>
             </td>
-            <td>{{ fmt(r.created_at) }}</td>
-            <td>
+            <td data-label="提交时间">{{ fmt(r.created_at) }}</td>
+            <td data-label="操作">
               <div class="btn-group">
                 <button class="admin-btn admin-btn-primary" @click="approve(r.id)">
                   <CheckOutlined aria-hidden="true" />批准
@@ -370,7 +370,7 @@ function fmt(t: string) {
         </thead>
         <tbody>
           <tr v-for="d in devices" :key="d.id" :data-device-id="d.local_device_id">
-            <td>
+            <td data-label="设备名称">
               <div v-if="editingDeviceID === d.local_device_id" class="device-name-editor">
                 <input
                   v-model="editingDeviceName"
@@ -385,8 +385,8 @@ function fmt(t: string) {
               </div>
               <a v-else @click="showInfo(d.device_info)">{{ d.device_name || '未命名设备' }}</a>
             </td>
-            <td>{{ fmt(d.approved_at) }}</td>
-            <td>
+            <td data-label="批准时间">{{ fmt(d.approved_at) }}</td>
+            <td data-label="操作">
               <div class="btn-group">
                 <template v-if="editingDeviceID === d.local_device_id">
                   <button class="admin-btn admin-btn-primary" :disabled="renamingDevice" @click="saveDeviceName(d)">
@@ -648,6 +648,15 @@ function fmt(t: string) {
 @media (max-width: 900px) {
   .device-auth-explainer-grid {
     grid-template-columns: 1fr;
+  }
+  .device-name-input {
+    height: 40px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .device-name-input {
+    min-height: 40px;
   }
 }
 </style>

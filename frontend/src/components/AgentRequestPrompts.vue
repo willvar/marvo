@@ -540,11 +540,19 @@ function permissionDescription(permissionName: string) {
 .agent-question-progress {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
+  max-width: min(40vw, 240px);
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 
   button {
-    width: 16px;
-    height: 16px;
+    width: 32px;
+    height: 32px;
+    flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -580,7 +588,7 @@ function permissionDescription(permissionName: string) {
 }
 
 .agent-request-minimize {
-  width: 30px;
+  width: 36px;
   padding: 0;
 
   svg {
@@ -845,11 +853,24 @@ function permissionDescription(permissionName: string) {
   }
 
   .agent-question-progress button {
-    width: 16px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .agent-request-minimize {
+    width: 40px;
   }
 
   .agent-request-actions {
     flex-wrap: wrap;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .agent-question-progress button,
+  .agent-request-minimize {
+    width: 40px;
+    height: 40px;
   }
 }
 </style>

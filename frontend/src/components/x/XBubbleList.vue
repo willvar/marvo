@@ -367,7 +367,7 @@ defineExpose({
 @media (hover: none) and (pointer: coarse) {
   .x-bubble-list-jump {
     width: 40px;
-    height: 36px;
+    height: 40px;
     bottom: 8px;
   }
 }

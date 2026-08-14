@@ -769,5 +769,16 @@ function upload() {
   .ecore-bar {
     padding-inline: 8px;
   }
+  .fb {
+    min-width: 40px;
+    height: 40px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .fb {
+    min-width: 40px;
+    height: 40px;
+  }
 }
 </style>

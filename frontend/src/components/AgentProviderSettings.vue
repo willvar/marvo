@@ -811,6 +811,7 @@ onBeforeUnmount(stopPolling)
 }
 .provider-refresh {
   display: inline-flex;
+  flex: none;
   min-height: 32px;
   align-items: center;
   gap: 6px;
@@ -822,6 +823,7 @@ onBeforeUnmount(stopPolling)
   cursor: pointer;
   font: inherit;
   font-size: var(--marvo-type-12);
+  white-space: nowrap;
 }
 .provider-refresh:hover {
   background: var(--bg-hover);
@@ -1302,6 +1304,13 @@ onBeforeUnmount(stopPolling)
 }
 
 @media (max-width: 600px) {
+  .provider-refresh {
+    min-height: 40px;
+  }
+  .provider-picker-item,
+  .provider-select-item {
+    min-height: 44px;
+  }
   .provider-list-section {
     padding-inline: 16px;
   }

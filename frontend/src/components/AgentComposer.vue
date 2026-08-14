@@ -356,4 +356,18 @@ defineExpose({ clear })
     display: none;
   }
 }
+
+@media (hover: none), (max-width: 768px) {
+  .agent-composer-upload-trigger,
+  .agent-composer-compact .agent-composer-upload-trigger {
+    width: auto;
+    min-width: 40px;
+    height: 40px;
+    padding-inline: 8px;
+  }
+
+  .agent-composer-compact .agent-composer-upload-trigger {
+    padding-inline: 0;
+  }
+}
 </style>

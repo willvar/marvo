@@ -866,5 +866,24 @@ onBeforeUnmount(() => {
     flex: 1;
     max-width: none;
   }
+  .toolbar-btn {
+    min-height: 40px;
+    padding-inline: 10px;
+  }
+  .editor-tag {
+    min-height: 36px;
+    padding-inline: 9px 4px;
+
+    button {
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
+  .editor-tag-input {
+    min-height: 36px;
+  }
 }
 </style>

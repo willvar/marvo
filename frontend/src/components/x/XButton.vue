@@ -105,4 +105,15 @@ withDefaults(
     background: color-mix(in srgb, var(--text-danger) 8%, transparent);
   }
 }
+
+@media (hover: none), (max-width: 768px) {
+  .x-button-normal {
+    min-height: 44px;
+  }
+
+  .x-button-small {
+    min-height: 40px;
+    padding-inline: 11px;
+  }
+}
 </style>

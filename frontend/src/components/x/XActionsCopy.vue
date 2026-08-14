@@ -172,7 +172,7 @@ onBeforeUnmount(clearResetTimer)
 
 @media (hover: none) and (pointer: coarse) {
   .x-actions-copy {
-    min-height: 36px;
+    min-height: 40px;
     padding-inline: 10px;
   }
 }

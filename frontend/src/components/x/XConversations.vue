@@ -18,6 +18,7 @@ const props = withDefaults(
     creationLabel?: string
     creationDisabled?: boolean
     loading?: boolean
+    teleportMenus?: boolean
   }>(),
   {
     activeKey: null,
@@ -25,6 +26,7 @@ const props = withDefaults(
     creationLabel: '新对话',
     creationDisabled: false,
     loading: false,
+    teleportMenus: true,
   },
 )
 
@@ -109,7 +111,7 @@ function selectAction(item: XConversationItem, details: MenuSelectionDetails) {
               <EllipsisOutlined />
             </button>
           </Menu.Trigger>
-          <Teleport to="body">
+          <Teleport to="body" :disabled="!teleportMenus">
             <Menu.Positioner class="x-conversations-menu-positioner">
               <Menu.Content class="x-conversations-menu">
                 <Menu.Item
@@ -285,8 +287,18 @@ function selectAction(item: XConversationItem, details: MenuSelectionDetails) {
 }
 
 @media (hover: none), (max-width: 768px) {
+  .x-conversations-creation,
+  .x-conversations-item {
+    min-height: 44px;
+  }
   .x-conversations-more {
+    width: 40px;
+    height: 40px;
     opacity: 0.7;
+  }
+
+  :global(.x-conversations-menu-item) {
+    min-height: 44px;
   }
 }
 

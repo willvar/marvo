@@ -361,5 +361,14 @@ function formatTime(value: string) {
   .trash-actions {
     justify-content: flex-start;
   }
+  .trash-restore-input {
+    height: 40px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .trash-restore-input {
+    min-height: 40px;
+  }
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Combobox, useListCollection } from '@ark-ui/vue/combobox'
 import { Field } from '@ark-ui/vue/field'
 import { RadioGroup } from '@ark-ui/vue/radio-group'
@@ -44,6 +44,7 @@ const error = ref('')
 const models = ref<AgentModelOption[]>([])
 const selectedValues = ref<string[]>([])
 const selectedVariant = ref(DEFAULT_VARIANT)
+const variantScroller = ref<HTMLElement>()
 const globalPrompt = ref('')
 const exaConfigured = ref(false)
 const exaAPIKey = ref('')
@@ -124,6 +125,10 @@ watch(
   { flush: 'sync' },
 )
 
+watch([selectedVariant, () => variantOptions.value.length, variantScroller], () => revealSelectedVariant(), {
+  flush: 'post',
+})
+
 onMounted(() => {
   uiPreferences.syncAgentAssistantDisplayMode()
   displayMode.value = uiPreferences.agentAssistantDisplayMode
@@ -135,6 +140,21 @@ onMounted(() => {
 
 function modelKey(model: Pick<AgentModelOption, 'provider_id' | 'model_id'>) {
   return JSON.stringify([model.provider_id, model.model_id])
+}
+
+function revealSelectedVariant() {
+  void nextTick(() => {
+    const scroller = variantScroller.value
+    const selected = scroller?.querySelector<HTMLElement>('.agent-variant-item[data-state="checked"]')
+    if (!scroller || !selected || scroller.scrollWidth <= scroller.clientWidth) return
+
+    const scrollerBounds = scroller.getBoundingClientRect()
+    const selectedBounds = selected.getBoundingClientRect()
+    if (selectedBounds.left >= scrollerBounds.left && selectedBounds.right <= scrollerBounds.right) return
+
+    const selectedCenter = selectedBounds.left - scrollerBounds.left + scroller.scrollLeft + selectedBounds.width / 2
+    scroller.scrollLeft = Math.max(0, selectedCenter - scroller.clientWidth / 2)
+  })
 }
 
 async function loadPersonalization() {
@@ -389,6 +409,7 @@ function statusLabel(status: string) {
 
 function variantLabel(variant: string) {
   const labels: Record<string, string> = {
+    none: '关闭',
     minimal: '最小',
     low: '低',
     medium: '中',
@@ -625,24 +646,23 @@ function formatLimit(limit?: number) {
                       <div v-if="unavailableVariant" class="agent-settings-warning" role="status">
                         原推理强度 {{ unavailableVariant }} 已不受当前模型支持，已切换为模型默认。
                       </div>
-                      <SegmentGroup.Root
-                        v-if="selectedModel.variants.length"
-                        v-model="selectedVariant"
-                        class="agent-variant-group"
-                        aria-label="推理强度"
-                      >
-                        <SegmentGroup.Indicator class="agent-variant-indicator" />
-                        <SegmentGroup.Item
-                          v-for="option in variantOptions"
-                          :key="option.value"
-                          :value="option.value"
-                          class="agent-variant-item"
-                          :title="option.value === DEFAULT_VARIANT ? '不指定 variant，使用模型默认行为' : option.value"
-                        >
-                          <SegmentGroup.ItemText>{{ option.label }}</SegmentGroup.ItemText>
-                          <SegmentGroup.ItemHiddenInput />
-                        </SegmentGroup.Item>
-                      </SegmentGroup.Root>
+                      <div v-if="selectedModel.variants.length" ref="variantScroller" class="agent-variant-scroll">
+                        <SegmentGroup.Root v-model="selectedVariant" class="agent-variant-group" aria-label="推理强度">
+                          <SegmentGroup.Indicator class="agent-variant-indicator" />
+                          <SegmentGroup.Item
+                            v-for="option in variantOptions"
+                            :key="option.value"
+                            :value="option.value"
+                            class="agent-variant-item"
+                            :title="
+                              option.value === DEFAULT_VARIANT ? '不指定 variant，使用模型默认行为' : option.value
+                            "
+                          >
+                            <SegmentGroup.ItemText>{{ option.label }}</SegmentGroup.ItemText>
+                            <SegmentGroup.ItemHiddenInput />
+                          </SegmentGroup.Item>
+                        </SegmentGroup.Root>
+                      </div>
                       <p v-else class="agent-variant-unavailable">该模型未提供可调档位，将使用模型默认行为。</p>
                     </div>
                   </div>
@@ -1589,6 +1609,9 @@ function formatLimit(limit?: number) {
   color: var(--text-muted);
   font-size: var(--marvo-type-11);
 }
+.agent-variant-scroll {
+  max-width: 100%;
+}
 .agent-variant-group {
   position: relative;
   display: flex;
@@ -1760,7 +1783,7 @@ function formatLimit(limit?: number) {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-@media (max-width: 600px) {
+@media (max-width: 600px), (max-width: 900px) and (orientation: portrait) {
   .agent-settings-page-heading {
     flex-direction: column;
     gap: 14px;
@@ -1792,8 +1815,37 @@ function formatLimit(limit?: number) {
     align-items: stretch;
     flex-direction: column;
   }
+  .agent-exa-input {
+    width: 100%;
+    min-height: 40px;
+    flex: 0 0 40px;
+  }
   .agent-exa-remove {
     align-self: flex-end;
+  }
+  .agent-personalization-delete {
+    min-height: 40px;
+  }
+  .agent-variant-scroll {
+    overflow-x: auto;
+    padding-bottom: 4px;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x;
+  }
+  .agent-variant-group {
+    width: max-content;
+    max-width: none;
+    flex-wrap: nowrap;
+  }
+  .agent-variant-item {
+    display: inline-flex;
+    min-width: 64px;
+    min-height: 40px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 12px;
+    white-space: nowrap;
   }
 }
 

@@ -392,4 +392,17 @@ defineExpose({ focus, clear, insert, inputElement: inputRef })
     transform: rotate(360deg);
   }
 }
+
+@media (hover: none), (max-width: 768px) {
+  .x-sender-action,
+  .x-sender-compact .x-sender-action {
+    width: 40px;
+    height: 40px;
+  }
+
+  .x-sender-toolbar,
+  .x-sender-compact .x-sender-toolbar {
+    min-height: 40px;
+  }
+}
 </style>

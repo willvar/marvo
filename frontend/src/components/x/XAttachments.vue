@@ -251,8 +251,18 @@ function formatSize(size?: number) {
 }
 
 @media (hover: none), (max-width: 768px) {
+  .x-attachment-card,
+  .x-attachments-compact .x-attachment-card {
+    padding-right: 48px;
+  }
+
   .x-attachment-remove {
+    top: 50%;
+    right: 4px;
+    width: 40px;
+    height: 40px;
     opacity: 1;
+    transform: translateY(-50%);
   }
 }
 </style>

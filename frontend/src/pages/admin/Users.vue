@@ -244,15 +244,15 @@ function fmt(value: string) {
       </thead>
       <tbody>
         <tr v-for="user in users" :key="user.id">
-          <td>
+          <td data-label="用户">
             <div class="platform-user-name"><UserOutlined aria-hidden="true" />{{ user.name }}</div>
             <code class="platform-user-id">{{ user.id }}</code>
           </td>
-          <td>
+          <td data-label="状态">
             <span :class="['platform-user-status', user.status]">{{ statusLabel(user.status) }}</span>
           </td>
-          <td>{{ fmt(user.created_at) }}</td>
-          <td>
+          <td data-label="创建时间">{{ fmt(user.created_at) }}</td>
+          <td data-label="操作">
             <div class="btn-group platform-user-actions">
               <a class="admin-btn" :href="workspaceURL(user)" target="_blank" rel="noopener noreferrer">
                 <LinkOutlined aria-hidden="true" />打开
