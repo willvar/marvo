@@ -11,7 +11,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, ApiError, userLoginRoute } from '../../sdk'
+import { api, ApiError, useAppBackHandler, userLoginRoute } from '../../sdk'
 
 const route = useRoute()
 const router = useRouter()
@@ -179,6 +179,12 @@ async function removeTOTP() {
 }
 
 onMounted(loadSecurity)
+
+useAppBackHandler(() => {
+  if (!setup.value) return false
+  if (!setupBusy.value) cancelTOTPSetup()
+  return true
+}, 50)
 </script>
 
 <template>

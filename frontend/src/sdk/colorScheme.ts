@@ -1,14 +1,12 @@
 import { currentUserID } from './workspace'
+import { isMarvoAndroidApp } from './appEnvironment'
+import { callMarvo } from './nativeApp'
 
 export type ColorSchemePreference = boolean | 'system'
 
 const COLOR_SCHEME_STORAGE_PREFIX = 'marvo.ui.colorScheme'
 let systemColorScheme: MediaQueryList | null = null
 let preference: ColorSchemePreference = 'system'
-
-type AndroidThemeBridge = {
-  postMessage(value: 'dark' | 'light'): void
-}
 
 function resolveSystemColorScheme() {
   if (typeof window === 'undefined') return null
@@ -26,12 +24,7 @@ function applyColorScheme() {
   document.documentElement.dataset.colorScheme = scheme
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#1a1b1e' : '#ffffff')
 
-  const bridge = (window as typeof window & { marvoAndroidTheme?: AndroidThemeBridge }).marvoAndroidTheme
-  try {
-    bridge?.postMessage(scheme)
-  } catch {
-    // The same frontend also runs in ordinary browsers, where no native bridge exists.
-  }
+  if (isMarvoAndroidApp()) void callMarvo('statusBar', { style: scheme }).catch(() => undefined)
 }
 
 function storageKey() {

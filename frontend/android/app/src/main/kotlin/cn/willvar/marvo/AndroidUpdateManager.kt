@@ -59,7 +59,19 @@ internal class AndroidUpdateManager(
         }
 
     fun checkAtStartup() {
-        if (BuildConfig.DEBUG || destroyed || !checking.compareAndSet(false, true)) return
+        if (BuildConfig.DEBUG) return
+        check(null)
+    }
+
+    fun checkNow(callback: (String) -> Unit) {
+        check(callback)
+    }
+
+    private fun check(callback: ((String) -> Unit)?) {
+        if (destroyed || !checking.compareAndSet(false, true)) {
+            callback?.invoke("failed")
+            return
+        }
         val request =
             Request.Builder()
                 .url(BuildConfig.SERVER_ORIGIN + "/api/app/android/release")
@@ -73,17 +85,35 @@ internal class AndroidUpdateManager(
                         override fun onFailure(call: Call, error: IOException) {
                             checking.set(false)
                             checkCall = null
+                            activity.runOnUiThread { callback?.invoke("failed") }
                         }
 
                         override fun onResponse(call: Call, response: Response) {
                             response.use {
                                 checking.set(false)
                                 checkCall = null
-                                if (response.code == 404 || !response.isSuccessful) return
+                                if (response.code == 404) {
+                                    activity.runOnUiThread { callback?.invoke("noUpdate") }
+                                    return
+                                }
+                                if (!response.isSuccessful) {
+                                    activity.runOnUiThread { callback?.invoke("failed") }
+                                    return
+                                }
                                 val raw = response.body.string()
-                                val release = parseRelease(raw) ?: return
-                                if (release.versionCode <= BuildConfig.VERSION_CODE) return
-                                activity.runOnUiThread { showPrompt(release) }
+                                val release = parseRelease(raw)
+                                if (release == null) {
+                                    activity.runOnUiThread { callback?.invoke("failed") }
+                                    return
+                                }
+                                if (release.versionCode <= BuildConfig.VERSION_CODE) {
+                                    activity.runOnUiThread { callback?.invoke("noUpdate") }
+                                    return
+                                }
+                                activity.runOnUiThread {
+                                    showPrompt(release)
+                                    callback?.invoke("available")
+                                }
                             }
                         }
                     },

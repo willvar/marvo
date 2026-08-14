@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons-vue'
 import {
   api,
+  useAppBackHandler,
   type AgentProvider,
   type AgentProviderMethod,
   type AgentProviderOAuthAttempt,
@@ -395,6 +396,12 @@ function methodTypeLabel(method: AgentProviderMethod) {
 }
 
 onBeforeUnmount(stopPolling)
+
+useAppBackHandler(() => {
+  if (!props.active || !disconnectOpen.value) return false
+  if (!operating.value) disconnectDialog.close()
+  return true
+}, 90)
 </script>
 
 <template>

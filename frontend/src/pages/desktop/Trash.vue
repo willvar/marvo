@@ -3,7 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { Field } from '@ark-ui/vue/field'
-import { ApiError, workspaceRoute, type TrashEntry } from '../../sdk'
+import { ApiError, useAppBackHandler, workspaceRoute, type TrashEntry } from '../../sdk'
 import { useNoteStore } from '../../stores/note'
 import { CheckOutlined, CloseOutlined, DeleteOutlined, RollbackOutlined } from '@ant-design/icons-vue'
 import { useRetainedDialog } from '../../composables/useRetainedDialog'
@@ -95,6 +95,18 @@ async function confirmPermanentAction() {
 function formatTime(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }
+
+useAppBackHandler(() => {
+  if (confirmationOpen.value) {
+    if (!deletingID.value && !emptying.value) confirmationDialog.close()
+    return true
+  }
+  if (restoringID.value) {
+    restoringID.value = ''
+    return true
+  }
+  return false
+}, 70)
 </script>
 
 <template>

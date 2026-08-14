@@ -2,21 +2,31 @@ package cn.willvar.marvo
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.view.View
 import android.widget.FrameLayout
-import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatDialog
 import androidx.core.content.edit
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.updatePadding
+import androidx.core.widget.doOnTextChanged
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.color.MaterialColors
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import cn.willvar.marvo.databinding.ActivityBindingBinding
+import cn.willvar.marvo.databinding.DialogUserIdBinding
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -28,15 +38,20 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executors
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     private val preferences by lazy { getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
     private val network = OkHttpClient()
     private val decoderExecutor = Executors.newSingleThreadExecutor()
     private var bindingCall: Call? = null
     private var bindingView: ActivityBindingBinding? = null
     private var webHost: MarvoWebHost? = null
+    private var clipboardCheckPending = false
+    private var manualUserID = ""
+    private var manualUserIDDialog: AppCompatDialog? = null
     private lateinit var filePicker: AndroidFilePicker
     private lateinit var updateManager: AndroidUpdateManager
+    private lateinit var permissionManager: AndroidPermissionManager
+    private lateinit var downloadManager: AndroidDownloadManager
 
     private val scanLauncher =
         registerForActivityResult(ScanContract()) { result ->
@@ -58,10 +73,21 @@ class MainActivity : ComponentActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val storedPreferences = getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        if (storedPreferences.contains(KEY_DARK_MODE)) {
+            delegate.localNightMode =
+                if (storedPreferences.getBoolean(KEY_DARK_MODE, false)) {
+                    AppCompatDelegate.MODE_NIGHT_YES
+                } else {
+                    AppCompatDelegate.MODE_NIGHT_NO
+                }
+        }
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         filePicker = AndroidFilePicker(this)
+        permissionManager = AndroidPermissionManager(this)
         updateManager = AndroidUpdateManager(this, network)
+        downloadManager = AndroidDownloadManager(this, network, permissionManager)
         val userID = preferences.getString(KEY_USER_ID, null)
         if (userID != null && USER_ID_PATTERN.matches(userID)) {
             showWorkspace(userID)
@@ -75,10 +101,12 @@ class MainActivity : ComponentActivity() {
                 override fun handleOnBackPressed() {
                     val host = webHost
                     if (host == null) {
-                        moveTaskToBack(false)
+                        moveTaskToBack(true)
                         return
                     }
-                    host.handleBack { moveTaskToBack(false) }
+                    host.handleBack { handled ->
+                        if (!handled) moveTaskToBack(true)
+                    }
                 }
             },
         )
@@ -86,8 +114,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        scheduleClipboardBindingCheck()
         webHost?.onResume()
         updateManager.onResume()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) consumeClipboardBindingCheck()
     }
 
     override fun onPause() {
@@ -95,12 +129,21 @@ class MainActivity : ComponentActivity() {
         super.onPause()
     }
 
+    override fun onStop() {
+        webHost?.onStop()
+        super.onStop()
+    }
+
     override fun onDestroy() {
         bindingCall?.cancel()
         bindingCall = null
+        manualUserIDDialog?.dismiss()
+        manualUserIDDialog = null
         webHost?.destroy()
         webHost = null
         filePicker.dispose()
+        permissionManager.cancel()
+        downloadManager.destroy()
         updateManager.destroy()
         decoderExecutor.shutdownNow()
         network.dispatcher.executorService.shutdown()
@@ -127,12 +170,15 @@ class MainActivity : ComponentActivity() {
             scanLauncher.launch(options)
         }
         view.galleryButton.setOnClickListener { galleryLauncher.launch("image/*") }
-        view.pasteButton.setOnClickListener { pasteBindingValue() }
+        view.manualUserIdButton.setOnClickListener { showManualUserIDDialog() }
     }
 
     private fun showWorkspace(userID: String) {
         bindingCall?.cancel()
         bindingCall = null
+        clipboardCheckPending = false
+        manualUserIDDialog?.dismiss()
+        manualUserIDDialog = null
         bindingView = null
         webHost?.destroy()
         val container = FrameLayout(this)
@@ -146,27 +192,108 @@ class MainActivity : ComponentActivity() {
                 localDeviceID = localDeviceID(),
                 deviceName = deviceName(),
                 picker = filePicker,
+                permissionManager = permissionManager,
+                updateManager = updateManager,
+                downloads = downloadManager,
             ).also { it.start() }
     }
 
     private fun acceptBindingValue(raw: String) {
         val userID = raw.trim().lowercase(Locale.ROOT)
         if (!USER_ID_PATTERN.matches(userID)) {
-            showBindingError("二维码或剪贴板中没有有效的用户 ID")
+            showBindingError("请输入有效的 20 位用户 ID")
             return
         }
+        manualUserID = userID
         verifyUserSpace(userID)
     }
 
-    private fun pasteBindingValue() {
-        val clipboard = getSystemService(ClipboardManager::class.java)
-        val text = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()
-        if (text.isNullOrBlank()) {
-            showBindingError("剪贴板中没有可用内容")
+    private fun showManualUserIDDialog() {
+        if (bindingCall != null || manualUserIDDialog != null) return
+        val content = DialogUserIdBinding.inflate(layoutInflater)
+        content.userIdInput.setText(manualUserID)
+        content.userIdInput.setSelection(manualUserID.length)
+        val dialog =
+            AppCompatDialog(
+                this,
+                com.google.android.material.R.style.ThemeOverlay_Material3_MaterialAlertDialog,
+            )
+        dialog.setContentView(content.root)
+        manualUserIDDialog = dialog
+        dialog.setOnShowListener {
+            content.connectButton.isEnabled = !content.userIdInput.text.isNullOrBlank()
+            content.userIdInput.doOnTextChanged { text, _, _, _ ->
+                manualUserID = text?.toString().orEmpty()
+                content.userIdInputLayout.error = null
+                content.connectButton.isEnabled = !text.isNullOrBlank()
+            }
+            content.cancelButton.setOnClickListener { dialog.dismiss() }
+            content.connectButton.setOnClickListener { submitManualUserID(dialog, content) }
+            content.userIdInput.setOnEditorActionListener { _, actionID, event ->
+                val shouldSubmit =
+                    actionID == EditorInfo.IME_ACTION_DONE ||
+                        (event?.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ENTER)
+                if (!shouldSubmit) return@setOnEditorActionListener false
+                submitManualUserID(dialog, content)
+                true
+            }
+            dialog.window?.let { window ->
+                val dialogWidth = minOf(resources.displayMetrics.widthPixels - dp(32), dp(480))
+                window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+                window.setDimAmount(0.32f)
+                window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                window.attributes =
+                    window.attributes.apply {
+                        gravity = Gravity.CENTER
+                        y = 0
+                    }
+                window.setLayout(dialogWidth, WindowManager.LayoutParams.WRAP_CONTENT)
+            }
+            content.userIdInput.requestFocus()
+        }
+        dialog.setOnDismissListener {
+            if (manualUserIDDialog === dialog) manualUserIDDialog = null
+        }
+        dialog.show()
+    }
+
+    private fun submitManualUserID(dialog: AppCompatDialog, content: DialogUserIdBinding) {
+        val userID = content.userIdInput.text?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        if (!USER_ID_PATTERN.matches(userID)) {
+            content.userIdInputLayout.error = getString(R.string.invalid_user_id)
             return
         }
-        acceptBindingValue(text)
+        manualUserID = userID
+        dialog.dismiss()
+        verifyUserSpace(userID)
     }
+
+    private fun scheduleClipboardBindingCheck() {
+        val view = bindingView ?: return
+        clipboardCheckPending = true
+        view.root.post {
+            if (hasWindowFocus()) consumeClipboardBindingCheck()
+        }
+    }
+
+    private fun consumeClipboardBindingCheck() {
+        if (!clipboardCheckPending) return
+        clipboardCheckPending = false
+        if (bindingView == null) return
+        if (bindingCall != null) return
+        val userID = clipboardUserID() ?: return
+        manualUserID = userID
+        verifyUserSpace(userID)
+    }
+
+    private fun clipboardUserID(): String? =
+        runCatching {
+            val clipboard = getSystemService(ClipboardManager::class.java)
+            val clip = clipboard?.primaryClip ?: return@runCatching null
+            if (clip.itemCount == 0) return@runCatching null
+            clip.getItemAt(0).text?.toString()?.trim()?.lowercase(Locale.ROOT)
+        }.getOrNull()?.takeIf(USER_ID_PATTERN::matches)
 
     private fun verifyUserSpace(userID: String) {
         setBindingBusy(true, "正在连接用户空间…")
@@ -219,7 +346,7 @@ class MainActivity : ComponentActivity() {
         val view = bindingView ?: return
         view.scanButton.isEnabled = !busy
         view.galleryButton.isEnabled = !busy
-        view.pasteButton.isEnabled = !busy
+        view.manualUserIdButton.isEnabled = !busy
         view.bindingProgress.visibility = if (busy) View.VISIBLE else View.GONE
         view.bindingStatus.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
         view.bindingStatus.text = message
@@ -263,6 +390,12 @@ class MainActivity : ComponentActivity() {
 
     private fun safeHardwareName(value: String) = value.filterNot(Char::isISOControl).trim()
 
+    internal fun syncNativeColorScheme(dark: Boolean) {
+        if (preferences.contains(KEY_DARK_MODE) && preferences.getBoolean(KEY_DARK_MODE, false) == dark) return
+        preferences.edit { putBoolean(KEY_DARK_MODE, dark) }
+        delegate.localNightMode = if (dark) AppCompatDelegate.MODE_NIGHT_YES else AppCompatDelegate.MODE_NIGHT_NO
+    }
+
     private fun appUserAgent() = "MarvoAndroid/${BuildConfig.VERSION_NAME}"
 
     private fun applySystemInsets(view: View) {
@@ -305,6 +438,7 @@ class MainActivity : ComponentActivity() {
         const val PREFERENCES = "marvo_android"
         const val KEY_USER_ID = "bound_user_id"
         const val KEY_DEVICE_ID = "local_device_id"
+        const val KEY_DARK_MODE = "dark_mode"
         val USER_ID_PATTERN = Regex("[0-9a-f]{20}")
     }
 }

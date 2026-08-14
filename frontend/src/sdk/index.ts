@@ -9,6 +9,7 @@ export {
 export { setUnauthorizedHandler } from './api/unauthorized'
 export { currentUserID, workspaceRoute, userLoginRoute } from './workspace'
 export { isMarvoAndroidApp } from './appEnvironment'
+export { useAppBackHandler } from './appBack'
 export { setColorSchemePreference } from './colorScheme'
 export { connect, disconnect, on, subscribe, unsubscribe } from './collab'
 export { type NoteInfo, type NoteDetail, type SearchResult, type MediaAsset, type TrashEntry } from './types'

@@ -1,9 +1,13 @@
 <resources>
     <string name="app_name">Marvo</string>
     <string name="binding_title">绑定用户空间</string>
-    <string name="binding_description">扫描用户前台生成的二维码，或从相册、剪贴板读取用户 ID。</string>
+    <string name="binding_description">扫描用户前台生成的二维码，或从相册识别。</string>
     <string name="binding_privacy">绑定后仍需用户管理员批准当前设备。</string>
     <string name="scan_qr">扫描二维码</string>
-    <string name="choose_qr">从相册识别</string>
-    <string name="paste_user_id">从剪贴板粘贴</string>
+    <string name="choose_qr">相册识别</string>
+    <string name="user_id_hint">用户 ID</string>
+    <string name="manual_user_id">输入用户 ID</string>
+    <string name="invalid_user_id">请输入有效的 20 位用户 ID</string>
+    <string name="connect">连接</string>
+    <string name="cancel">取消</string>
 </resources>

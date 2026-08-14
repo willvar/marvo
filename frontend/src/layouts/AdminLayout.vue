@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Dialog } from '@ark-ui/vue/dialog'
-import { api, userLoginRoute, workspaceRoute } from '../sdk'
+import { api, useAppBackHandler, userLoginRoute, workspaceRoute } from '../sdk'
 import { useAuthStore } from '../stores/auth'
 import { useRouter, useRoute } from 'vue-router'
 import { setUserRouteTitleName } from '../router'
@@ -180,6 +180,22 @@ function onDocClick(e: MouseEvent) {
     menuOpen.value = false
   }
 }
+
+useAppBackHandler(() => {
+  if (workspaceAuthorizationOpen.value) {
+    if (!workspaceEntryBusy.value) workspaceAuthorizationOpen.value = false
+    return true
+  }
+  if (mobileNavigationOpen.value) {
+    mobileNavigationOpen.value = false
+    return true
+  }
+  if (menuOpen.value) {
+    menuOpen.value = false
+    return true
+  }
+  return false
+}, 70)
 
 watch(
   () => route.fullPath,

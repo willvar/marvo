@@ -1,0 +1,4 @@
+<resources>
+    <color name="marvo_loading_indicator">#818CF8</color>
+    <color name="marvo_loading_track">#373A40</color>
+</resources>

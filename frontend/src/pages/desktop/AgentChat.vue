@@ -12,7 +12,7 @@ import {
   RobotOutlined,
 } from '@ant-design/icons-vue'
 import { useAgentStore } from '../../stores/agent'
-import { formatAgentError, isAbortedAgentError, type AgentFilePartInput } from '../../sdk'
+import { formatAgentError, isAbortedAgentError, useAppBackHandler, type AgentFilePartInput } from '../../sdk'
 import AgentComposer from '../../components/AgentComposer.vue'
 import AgentMessageList from '../../components/AgentMessageList.vue'
 import AgentRequestPrompts from '../../components/AgentRequestPrompts.vue'
@@ -332,6 +332,26 @@ function cancelRenameSession() {
   renameTargetId.value = ''
   renameTitle.value = ''
 }
+
+useAppBackHandler(() => {
+  if (deleteDialogOpen.value) {
+    if (!deletingSession.value) deleteDialog.close()
+    return true
+  }
+  if (renameTargetId.value) {
+    if (!renamingSession.value) cancelRenameSession()
+    return true
+  }
+  if (sessionsOpen.value) {
+    sessionsOpen.value = false
+    return true
+  }
+  if (activeSubtask.value) {
+    backFromSubtask()
+    return true
+  }
+  return false
+}, 80)
 </script>
 
 <template>

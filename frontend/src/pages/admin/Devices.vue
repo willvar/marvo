@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, onBeforeUnmount, onMounted } from 'vue'
-import { api, ApiError, userLoginRoute } from '../../sdk'
+import { api, ApiError, useAppBackHandler, userLoginRoute } from '../../sdk'
 import { useRouter } from 'vue-router'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { useRetainedDialog } from '../../composables/useRetainedDialog'
@@ -277,6 +277,22 @@ function fmt(t: string) {
   const time = [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join(':')
   return `${day} ${time}`
 }
+
+useAppBackHandler(() => {
+  if (revokeOpen.value) {
+    if (!revoking.value) revokeDialog.close()
+    return true
+  }
+  if (detailOpen.value) {
+    detailDialog.close()
+    return true
+  }
+  if (editingDeviceID.value) {
+    if (!renamingDevice.value) cancelRename()
+    return true
+  }
+  return false
+}, 80)
 </script>
 
 <template>

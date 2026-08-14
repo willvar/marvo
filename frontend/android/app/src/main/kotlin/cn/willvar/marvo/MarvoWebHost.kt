@@ -3,7 +3,9 @@
 package cn.willvar.marvo
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
 import android.net.http.SslError
@@ -11,8 +13,10 @@ import android.os.Message
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -29,14 +33,10 @@ import androidx.activity.ComponentActivity
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.isVisible
-import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebSettingsCompat
-import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewAssetLoader
-import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.progressindicator.CircularProgressIndicator
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.net.URI
@@ -50,18 +50,52 @@ internal class MarvoWebHost(
     private val localDeviceID: String,
     private val deviceName: String,
     private val picker: AndroidFilePicker,
+    private val permissionManager: AndroidPermissionManager,
+    private val updateManager: AndroidUpdateManager,
+    private val downloads: AndroidDownloadManager,
 ) {
     private val origin = URI(BuildConfig.SERVER_ORIGIN)
     private var webView: WebView? = null
-    private var loading: CircularProgressIndicator? = null
+    private var loading: MarvoLoadingIndicator? = null
     private var errorView: View? = null
     private var mainLoadFailed = false
     private var fullscreenView: View? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var backPending = false
+    private var queuedBackResult: ((Boolean) -> Unit)? = null
+    private var backRequestSequence = 0
+    private var rendererRecoveryAttempted = false
+    private var bridge: MarvoMessageBridge? = null
+    private var startPending = false
+    private var startOnPreDraw: ViewTreeObserver.OnPreDrawListener? = null
+    private val systemServices = MarvoSystemServices(activity, updateManager, ::applyWindowColorScheme)
+    private val startWebView =
+        Runnable {
+            startPending = false
+            if (webView != null || activity.isFinishing || activity.isDestroyed) return@Runnable
+            createWebView().loadUrl("${BuildConfig.SERVER_ORIGIN}/user/$userID")
+        }
 
     fun start() {
-        createWebView().loadUrl("${BuildConfig.SERVER_ORIGIN}/.marvo-app/start")
+        applyInitialColorScheme()
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            showError("Android System WebView 版本过旧，无法建立安全连接。请更新 WebView 后重试。")
+            return
+        }
+        showLoading()
+        if (webView != null || startPending) return
+        startPending = true
+        startOnPreDraw =
+            object : ViewTreeObserver.OnPreDrawListener {
+                override fun onPreDraw(): Boolean {
+                    container.viewTreeObserver.takeIf(ViewTreeObserver::isAlive)?.removeOnPreDrawListener(this)
+                    startOnPreDraw = null
+                    // Finish this frame first so WebView initialization cannot hide the native loading state.
+                    container.post(startWebView)
+                    return true
+                }
+            }.also(container.viewTreeObserver::addOnPreDrawListener)
+        container.invalidate()
     }
 
     fun onResume() {
@@ -69,27 +103,61 @@ internal class MarvoWebHost(
     }
 
     fun onPause() {
+        CookieManager.getInstance().flush()
         webView?.onPause()
     }
 
-    fun handleBack(onUnhandled: () -> Unit) {
-        if (exitFullscreen() || backPending) return
+    fun onStop() {
+        webView?.evaluateJavascript(
+            "document.querySelectorAll('video,audio').forEach(e=>{e.pause();if(e.srcObject)e.srcObject.getTracks().forEach(t=>t.stop())})",
+            null,
+        )
+        exitFullscreen()
+    }
+
+    fun handleBack(onResult: (Boolean) -> Unit) {
+        if (exitFullscreen()) {
+            onResult(true)
+            return
+        }
+        if (backPending) {
+            queuedBackResult = onResult
+            return
+        }
         val view = webView
         if (view == null) {
-            onUnhandled()
+            onResult(false)
             return
         }
         backPending = true
-        view.evaluateJavascript(BACK_LAYER_SCRIPT) { handled ->
-            backPending = false
-            if (webView !== view || handled == "true") return@evaluateJavascript
-            if (view.canGoBack()) view.goBack() else onUnhandled()
+        val requestSequence = ++backRequestSequence
+        val fallback =
+            Runnable {
+                if (!backPending || requestSequence != backRequestSequence) return@Runnable
+                completeBack(webView !== view, onResult)
+            }
+        container.postDelayed(fallback, APP_BACK_TIMEOUT_MS)
+        view.evaluateJavascript(APP_BACK_SCRIPT) { handled ->
+            if (!backPending || requestSequence != backRequestSequence) return@evaluateJavascript
+            container.removeCallbacks(fallback)
+            completeBack(webView !== view || handled == "true", onResult)
         }
+    }
+
+    private fun completeBack(handled: Boolean, onResult: (Boolean) -> Unit) {
+        backPending = false
+        onResult(handled)
+        val queued = queuedBackResult ?: return
+        queuedBackResult = null
+        container.post { handleBack(queued) }
     }
 
     fun destroy() {
         exitFullscreen()
         picker.cancel()
+        permissionManager.cancel()
+        bridge?.detach()
+        bridge = null
         webView?.let { view ->
             container.removeView(view)
             view.stopLoading()
@@ -99,18 +167,26 @@ internal class MarvoWebHost(
         }
         webView = null
         backPending = false
+        queuedBackResult = null
+        backRequestSequence += 1
+        startOnPreDraw?.let { listener ->
+            container.viewTreeObserver.takeIf(ViewTreeObserver::isAlive)?.removeOnPreDrawListener(listener)
+        }
+        startOnPreDraw = null
+        container.removeCallbacks(startWebView)
+        startPending = false
         loading = null
         errorView = null
         container.removeAllViews()
+        systemServices.destroy()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
         val loader =
             WebViewAssetLoader.Builder()
-                .setDomain(origin.host)
-                .setHttpAllowed(false)
-                .addPathHandler("/.marvo-app/", WebViewAssetLoader.PathHandler(::bootstrapResponse))
+                .setDomain(origin.rawAuthority)
+                .setHttpAllowed(origin.scheme.equals("http", true))
                 .addPathHandler("/user/", WebViewAssetLoader.PathHandler(::userRouteResponse))
                 .addPathHandler("/assets/", WebViewAssetLoader.PathHandler(::assetResponse))
                 .build()
@@ -141,7 +217,15 @@ internal class MarvoWebHost(
                 webViewClient = client
                 webChromeClient = chrome
             }
-        installThemeBridge(view)
+        bridge =
+            MarvoMessageBridge(
+                webView = view,
+                origin = BuildConfig.SERVER_ORIGIN,
+                sameOrigin = ::sameOrigin,
+                allowedTopLevel = { allowedInternalPath(it.path.orEmpty()) },
+                services = systemServices,
+                downloads = downloads,
+            ).also(MarvoMessageBridge::attach)
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(view, false)
@@ -150,43 +234,22 @@ internal class MarvoWebHost(
             WebSettingsCompat.setSafeBrowsingEnabled(view.settings, true)
         }
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-        view.setDownloadListener { url, _, _, _, _ -> openExternal(url) }
-        container.removeAllViews()
-        container.addView(view)
-        loading =
-            CircularProgressIndicator(activity).also { indicator ->
-                indicator.isIndeterminate = true
-                container.addView(
-                    indicator,
-                    FrameLayout.LayoutParams(dp(42), dp(42), Gravity.CENTER),
-                )
-            }
+        view.setDownloadListener { url, userAgent, disposition, mimeType, _ ->
+            downloads.download(view, url, userAgent, disposition, mimeType, BuildConfig.SERVER_ORIGIN)
+        }
+        container.addView(view, 0)
         webView = view
         return view
     }
 
-    private fun installThemeBridge(view: WebView) {
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
-        WebViewCompat.addWebMessageListener(
-            view,
-            THEME_BRIDGE_NAME,
-            setOf(BuildConfig.SERVER_ORIGIN),
-            object : WebViewCompat.WebMessageListener {
-                override fun onPostMessage(
-                    view: WebView,
-                    message: WebMessageCompat,
-                    sourceOrigin: Uri,
-                    isMainFrame: Boolean,
-                    replyProxy: JavaScriptReplyProxy,
-                ) {
-                    if (!isMainFrame || !sameOrigin(sourceOrigin)) return
-                    when (message.data) {
-                        "dark" -> applyWindowColorScheme(true)
-                        "light" -> applyWindowColorScheme(false)
-                    }
-                }
-            },
-        )
+    private fun applyInitialColorScheme() {
+        val dark =
+            activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                Configuration.UI_MODE_NIGHT_YES
+        val background = Color.parseColor(if (dark) DARK_BACKGROUND else LIGHT_BACKGROUND)
+        container.setBackgroundColor(background)
+        activity.window.statusBarColor = background
+        activity.window.navigationBarColor = background
     }
 
     private fun applyWindowColorScheme(dark: Boolean) {
@@ -198,33 +261,12 @@ internal class MarvoWebHost(
             isAppearanceLightStatusBars = !dark
             isAppearanceLightNavigationBars = !dark
         }
-    }
-
-    private fun bootstrapResponse(path: String): WebResourceResponse? {
-        if (path != "start") return null
-        val script =
-            """
-            <!doctype html>
-            <html><head><meta charset="utf-8"></head><body>
-            <script>
-            try {
-              localStorage.setItem('marvo_local_device_id', ${JSONObject.quote(localDeviceID)});
-              localStorage.setItem('marvo_android_device_name', ${JSONObject.quote(deviceName)});
-            } catch (_) {}
-            location.replace(${JSONObject.quote("/user/$userID")});
-            </script>
-            </body></html>
-            """.trimIndent()
-        return response(
-            mime = "text/html",
-            body = script.toByteArray(StandardCharsets.UTF_8),
-            cache = "no-store",
-        )
+        (activity as? MainActivity)?.syncNativeColorScheme(dark)
     }
 
     private fun userRouteResponse(path: String): WebResourceResponse? {
         if (path != userID && !path.startsWith("$userID/")) return null
-        val input = runCatching { activity.assets.open("index.html") }.getOrNull() ?: return null
+        val input = appDocument?.let(::ByteArrayInputStream) ?: return null
         return WebResourceResponse(
             "text/html",
             "UTF-8",
@@ -234,6 +276,48 @@ internal class MarvoWebHost(
             input,
         )
     }
+
+    private val appDocument: ByteArray? by lazy {
+        runCatching {
+            val source = activity.assets.open("index.html").bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+            val marker = "<head>"
+            require(source.contains(marker)) { "Embedded index.html is missing its head element" }
+            source
+                .replaceFirst(marker, marker + startupScript())
+                .toByteArray(StandardCharsets.UTF_8)
+        }.getOrNull()
+    }
+
+    private fun startupScript(): String {
+        val root = "/user/$userID"
+        val routeKey = "marvo.android.lastRoute.$userID"
+        return """
+            <script>
+            (() => {
+              try {
+                localStorage.setItem('marvo_local_device_id', ${scriptString(localDeviceID)});
+                localStorage.setItem('marvo_android_device_name', ${scriptString(deviceName)});
+                const root = ${scriptString(root)};
+                if (location.pathname !== root) return;
+                const saved = localStorage.getItem(${scriptString(routeKey)});
+                const url = saved ? new URL(saved, location.origin) : null;
+                const suffix = url && url.origin === location.origin && url.pathname.startsWith(root + '/')
+                  ? url.pathname.slice(root.length)
+                  : '';
+                if (suffix === '/agent' || suffix === '/trash' || suffix.startsWith('/note/')) {
+                  history.replaceState(null, '', url.pathname + url.search + url.hash);
+                }
+              } catch (_) {}
+            })();
+            </script>
+        """.trimIndent()
+    }
+
+    private fun scriptString(value: String) =
+        JSONObject.quote(value)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
 
     private fun assetResponse(path: String): WebResourceResponse? {
         if (path.isBlank() || path.split('/').any { it == "." || it == ".." }) return null
@@ -258,24 +342,16 @@ internal class MarvoWebHost(
         )
     }
 
-    private fun response(mime: String, body: ByteArray, cache: String) =
-        WebResourceResponse(
-            mime,
-            "UTF-8",
-            200,
-            "OK",
-            mapOf("Cache-Control" to cache, "X-Content-Type-Options" to "nosniff"),
-            ByteArrayInputStream(body),
-        )
-
     private fun sameOrigin(uri: Uri): Boolean {
-        val port = if (uri.port == -1) 443 else uri.port
-        val expectedPort = if (origin.port == -1) 443 else origin.port
-        return uri.scheme.equals("https", true) && uri.host.equals(origin.host, true) && port == expectedPort
+        val port = if (uri.port == -1) defaultPort(uri.scheme) else uri.port
+        val expectedPort = if (origin.port == -1) defaultPort(origin.scheme) else origin.port
+        return uri.scheme.equals(origin.scheme, true) && uri.host.equals(origin.host, true) && port == expectedPort
     }
 
+    private fun defaultPort(scheme: String?) = if (scheme.equals("http", true)) 80 else 443
+
     private fun allowedInternalPath(path: String): Boolean =
-        path == "/user/$userID" || path.startsWith("/user/$userID/") || path.startsWith("/.marvo-app/")
+        path == "/user/$userID" || path.startsWith("/user/$userID/")
 
     private fun navigate(uri: Uri, mainFrame: Boolean): Boolean {
         if (!mainFrame) return !sameOrigin(uri) || !allowedInternalPath(uri.path.orEmpty())
@@ -295,7 +371,16 @@ internal class MarvoWebHost(
 
     private fun showLoading() {
         errorView?.isVisible = false
-        loading?.isVisible = true
+        val indicator =
+            loading ?: MarvoLoadingIndicator(activity).also { created ->
+                container.addView(
+                    created,
+                    FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER),
+                )
+                loading = created
+            }
+        indicator.isVisible = true
+        indicator.bringToFront()
     }
 
     private fun reveal(view: WebView) {
@@ -415,11 +500,19 @@ internal class MarvoWebHost(
         }
 
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            bridge?.detach()
+            bridge = null
             container.removeView(view)
             view.destroy()
             webView = null
             mainLoadFailed = true
-            showError("Android WebView 已停止运行，请重新加载")
+            if (!rendererRecoveryAttempted) {
+                rendererRecoveryAttempted = true
+                showLoading()
+                start()
+            } else {
+                showError("Android WebView 已停止运行，请重新加载")
+            }
             return true
         }
     }
@@ -431,7 +524,10 @@ internal class MarvoWebHost(
         override fun shouldOverrideUrlLoading(child: WebView?, request: WebResourceRequest?): Boolean {
             val uri = request?.url ?: return true
             if (sameOrigin(uri) && allowedInternalPath(uri.path.orEmpty())) {
-                parent.loadUrl(uri.toString())
+                parent.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('marvo:navigate',{detail:${JSONObject.quote(uri.toString())}}))",
+                    null,
+                )
             } else {
                 openExternal(uri.toString())
             }
@@ -456,6 +552,35 @@ internal class MarvoWebHost(
                 return true
             }
             return picker.show(fileChooserParams, filePathCallback)
+        }
+
+        override fun onPermissionRequest(request: PermissionRequest) {
+            val source = request.origin
+            val top = webView?.url?.let(Uri::parse)
+            if (!sameOrigin(source) || top == null || !sameOrigin(top) || !allowedInternalPath(top.path.orEmpty())) {
+                request.deny()
+                return
+            }
+            val resources = request.resources.toSet()
+            val known =
+                setOf(
+                    PermissionRequest.RESOURCE_VIDEO_CAPTURE,
+                    PermissionRequest.RESOURCE_AUDIO_CAPTURE,
+                )
+            if (resources.isEmpty() || resources.any { it !in known }) {
+                request.deny()
+                return
+            }
+            val permissions =
+                buildList {
+                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE in resources) add(Manifest.permission.CAMERA)
+                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE in resources) add(Manifest.permission.RECORD_AUDIO)
+                }
+            permissionManager.request(permissions) { granted ->
+                runCatching {
+                    if (granted) request.grant(resources.toTypedArray()) else request.deny()
+                }
+            }
         }
 
         override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
@@ -483,34 +608,18 @@ internal class MarvoWebHost(
     }
 
     private companion object {
-        val BACK_LAYER_SCRIPT =
+        val APP_BACK_SCRIPT =
             """
             (() => {
-              const openLayer = document.querySelector([
-                '[data-scope="dialog"][data-part="content"][data-state="open"]',
-                '[data-scope="menu"][data-part="positioner"][data-state="open"]',
-                '[data-scope="select"][data-part="positioner"][data-state="open"]',
-                '[data-scope="popover"][data-part="positioner"][data-state="open"]'
-              ].join(','));
-              if (openLayer) {
-                const target = document.activeElement instanceof HTMLElement ? document.activeElement : document;
-                target.dispatchEvent(new KeyboardEvent('keydown', {
-                  key: 'Escape', code: 'Escape', bubbles: true, cancelable: true
-                }));
-                return true;
-              }
-              const sidebarOverlay = document.querySelector('.dsh-overlay');
-              if (sidebarOverlay && getComputedStyle(sidebarOverlay).display !== 'none') {
-                sidebarOverlay.click();
-                return true;
-              }
-              return false;
+              try {
+                return typeof window.marvo?.back === 'function' && window.marvo.back() === true;
+              } catch (_) { return false; }
             })()
             """.trimIndent()
 
         const val ERROR_TEXT_TAG = "marvo-error-detail"
-        const val THEME_BRIDGE_NAME = "marvoAndroidTheme"
         const val DARK_BACKGROUND = "#1a1b1e"
         const val LIGHT_BACKGROUND = "#ffffff"
+        const val APP_BACK_TIMEOUT_MS = 750L
     }
 }

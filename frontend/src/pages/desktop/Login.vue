@@ -52,8 +52,11 @@ function startPolling() {
     if (polling || auth.applyStatus !== 'pending') return
     polling = true
     try {
-      await auth.check()
+      await auth.check({ throwOnError: true })
+      error.value = ''
       if (auth.isAuthenticated) await router.replace(workspaceRoute())
+    } catch {
+      error.value = '暂时无法连接 Marvo，将继续重试'
     } finally {
       polling = false
     }
@@ -67,9 +70,16 @@ onMounted(async () => {
     loading.value = false
     return
   }
-  await Promise.all([identityRequest, auth.check()])
+  try {
+    await Promise.all([identityRequest, auth.check({ throwOnError: true })])
+  } catch {
+    await identityRequest
+    error.value = '暂时无法连接 Marvo，请检查网络后重试'
+    loading.value = false
+    return
+  }
   if (auth.isAuthenticated) {
-    router.push(workspaceRoute())
+    await router.replace(workspaceRoute())
     return
   }
   if (auth.applyStatus === 'pending') {
@@ -79,7 +89,7 @@ onMounted(async () => {
     try {
       await auth.apply(deviceName.value)
       if (auth.isAuthenticated) {
-        await router.push(workspaceRoute())
+        await router.replace(workspaceRoute())
         return
       }
       startPolling()
@@ -99,7 +109,7 @@ async function apply() {
   error.value = ''
   try {
     await auth.apply(deviceName.value)
-    if (auth.isAuthenticated) router.push(workspaceRoute())
+    if (auth.isAuthenticated) await router.replace(workspaceRoute())
     else if (auth.applyStatus === 'pending') startPolling()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '申请提交失败'

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteLocationNormalizedLoaded } from 'vue-router'
 import { USER_ROUTE_BASE } from './sdk/workspace'
+import { androidRouteStorageKey, isMarvoAndroidApp } from './sdk/appEnvironment'
 
 const staleAssetReloadKey = 'marvo.staleAssetReload'
 const userTitleNames = new Map<string, string>()
@@ -162,7 +163,17 @@ export function setUserRouteBrand(userID: string, brand: string) {
   }
 }
 
-router.afterEach((to) => applyRouteTitle(to))
+router.afterEach((to) => {
+  applyRouteTitle(to)
+  if (!isMarvoAndroidApp()) return
+  const userID = routeParameter(to.params.userId)
+  if (!userID || !['user-home', 'user-note', 'user-agent', 'user-trash'].includes(String(to.name))) return
+  try {
+    localStorage.setItem(androidRouteStorageKey(userID), to.fullPath)
+  } catch {
+    // Route restoration is an enhancement; navigation must not depend on storage.
+  }
+})
 
 router.onError((error, to) => {
   if (!isStaleDynamicImportError(error)) return

@@ -4,6 +4,7 @@ import { Dialog } from '@ark-ui/vue/dialog'
 import { Field } from '@ark-ui/vue/field'
 import { FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons-vue'
 import XButton from './XButton.vue'
+import { useAppBackHandler } from '../../sdk/appBack'
 
 defineOptions({ inheritAttrs: false })
 
@@ -46,6 +47,12 @@ function closeExpandedFromEscape(event: KeyboardEvent) {
 }
 
 onBeforeUnmount(() => window.removeEventListener('keydown', closeExpandedFromEscape, { capture: true }))
+
+useAppBackHandler(() => {
+  if (!expanded.value) return false
+  updateExpanded(false)
+  return true
+}, 120)
 </script>
 
 <template>

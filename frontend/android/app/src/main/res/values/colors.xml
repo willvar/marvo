@@ -1,4 +1,6 @@
 <resources>
     <color name="marvo_accent">#4F46E5</color>
     <color name="marvo_icon_background">#F7F6FF</color>
+    <color name="marvo_loading_indicator">#4F46E5</color>
+    <color name="marvo_loading_track">#E5E7EB</color>
 </resources>

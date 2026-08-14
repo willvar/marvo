@@ -19,15 +19,31 @@ require(versionNamePattern.matches(marvoVersionName)) { "VERSION_NAME is invalid
 val configuredServerOrigin = providers.gradleProperty("marvo.serverOrigin").orNull?.trim()?.trimEnd('/')
 val serverOrigin = configuredServerOrigin ?: "https://marvo.invalid"
 val parsedOrigin = URI(serverOrigin)
-require(
-    parsedOrigin.scheme == "https" &&
-        parsedOrigin.host != null &&
+
+fun isPrivateDebugHost(host: String?): Boolean {
+    val normalized = host?.lowercase()?.trim('[', ']') ?: return false
+    if (normalized == "localhost" || normalized == "::1") return true
+    val parts = normalized.split('.')
+    if (parts.size != 4) return false
+    val octets = parts.map { it.toIntOrNull() ?: return false }
+    if (octets.any { it !in 0..255 }) return false
+    return octets[0] == 10 ||
+        octets[0] == 127 ||
+        (octets[0] == 192 && octets[1] == 168) ||
+        (octets[0] == 172 && octets[1] in 16..31)
+}
+
+val isOriginShapeValid =
+    parsedOrigin.host != null &&
         parsedOrigin.userInfo == null &&
         parsedOrigin.path.orEmpty().isEmpty() &&
         parsedOrigin.rawQuery == null &&
         parsedOrigin.rawFragment == null
+val isPrivateDebugHTTP = parsedOrigin.scheme == "http" && isPrivateDebugHost(parsedOrigin.host)
+require(
+    isOriginShapeValid && (parsedOrigin.scheme == "https" || isPrivateDebugHTTP)
 ) {
-    "marvo.serverOrigin must be an HTTPS origin without a path"
+    "marvo.serverOrigin must be an HTTPS origin, or a private/loopback HTTP origin for debug builds"
 }
 
 fun quoted(value: String): String =
@@ -145,6 +161,13 @@ val validateServerOrigin by tasks.registering {
         }
     }
 }
+val validateReleaseServerOrigin by tasks.registering {
+    doLast {
+        require(parsedOrigin.scheme == "https") {
+            "Release builds require an HTTPS marvo.serverOrigin"
+        }
+    }
+}
 val validateReleaseSigning by tasks.registering {
     doLast {
         require(hasReleaseSigning) {
@@ -162,12 +185,19 @@ android.sourceSets.getByName("release").assets.srcDir(layout.buildDirectory.dir(
 tasks.configureEach {
     when (name) {
         "preDebugBuild" -> dependsOn(prepareDebugWebAssets, validateServerOrigin)
-        "preReleaseBuild" -> dependsOn(prepareReleaseWebAssets, validateServerOrigin, validateReleaseSigning)
+        "preReleaseBuild" ->
+            dependsOn(
+                prepareReleaseWebAssets,
+                validateServerOrigin,
+                validateReleaseServerOrigin,
+                validateReleaseSigning,
+            )
     }
 }
 
 dependencies {
     implementation("androidx.activity:activity-ktx:1.13.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
     // 1.19 requires compileSdk 37 and AGP 9.1; this project intentionally remains on the API 36 toolchain.
     //noinspection GradleDependency
     implementation("androidx.core:core-ktx:1.18.0")
@@ -175,4 +205,6 @@ dependencies {
     implementation("com.google.android.material:material:1.14.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
 }

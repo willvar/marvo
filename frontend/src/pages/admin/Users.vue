@@ -13,7 +13,7 @@ import {
   StopOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue'
-import { api, ApiError } from '../../sdk'
+import { api, ApiError, useAppBackHandler } from '../../sdk'
 import { useRouter } from 'vue-router'
 import { useRetainedDialog } from '../../composables/useRetainedDialog'
 
@@ -192,6 +192,18 @@ function statusLabel(status: PlatformUser['status']) {
   if (status === 'disabled') return '已停用'
   return '可用'
 }
+
+useAppBackHandler(() => {
+  if (actionOpen.value) {
+    if (!actionBusy.value) actionDialog.close()
+    return true
+  }
+  if (createOpen.value) {
+    if (!creating.value) createOpen.value = false
+    return true
+  }
+  return false
+}, 80)
 
 function fmt(value: string) {
   const date = new Date(value)

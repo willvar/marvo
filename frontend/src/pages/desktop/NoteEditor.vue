@@ -22,6 +22,7 @@ import {
   registerEditorPreparation,
   removeDraft,
   saveDraft,
+  useAppBackHandler,
   workspaceRoute,
   type NoteDetail,
   type NoteDraft,
@@ -75,6 +76,7 @@ const addTagInput = ref('')
 const saveState = ref<NoteSaveState>('saved')
 const saveError = ref('')
 const showDeleteConfirm = ref(false)
+const deletingNote = ref(false)
 const subscribedTitle = ref('')
 const toolbarTarget = ref<HTMLElement>()
 const orphanDialog = useRetainedDialog<{ draft: NoteDraft; remote: NoteDetail | null }>()
@@ -103,6 +105,19 @@ const saveLabel = computed(
       error: '保存失败',
     })[saveState.value],
 )
+
+useAppBackHandler(() => {
+  if (orphanDraftOpen.value) return true
+  if (showDeleteConfirm.value) {
+    if (!deletingNote.value) showDeleteConfirm.value = false
+    return true
+  }
+  if (mergeState.value.open) {
+    cancelMerge()
+    return true
+  }
+  return false
+}, 70)
 
 watch(title, loadNote, { immediate: true })
 watch(editorLocked, (blocked) => emit('noteMutationBlocked', blocked), { immediate: true })
@@ -526,7 +541,8 @@ async function removeTag(tag: string) {
 }
 
 async function deleteNote() {
-  if (!serverBase.value || editorLocked.value) return
+  if (!serverBase.value || editorLocked.value || deletingNote.value) return
+  deletingNote.value = true
   try {
     await noteStore.deleteNote(serverBase.value.note.title, serverBase.value.instance_token)
     await removeDraft(serverBase.value.instance_token, branchId).catch(() => {})
@@ -535,7 +551,13 @@ async function deleteNote() {
   } catch (error) {
     saveError.value = error instanceof Error ? error.message : '移到回收站失败'
     showDeleteConfirm.value = false
+  } finally {
+    deletingNote.value = false
   }
+}
+
+function updateDeleteConfirm(open: boolean) {
+  if (!deletingNote.value) showDeleteConfirm.value = open
 }
 
 function handleSaveShortcut(event: KeyboardEvent) {
@@ -646,22 +668,31 @@ onBeforeUnmount(() => {
       <NotePreview v-else :content="localContent" :title="serverBase.note.title" />
     </div>
 
-    <Dialog.Root :open="showDeleteConfirm" lazy-mount unmount-on-exit @update:open="showDeleteConfirm = $event">
+    <Dialog.Root
+      :open="showDeleteConfirm"
+      :close-on-escape="!deletingNote"
+      :close-on-interact-outside="!deletingNote"
+      lazy-mount
+      unmount-on-exit
+      @update:open="updateDeleteConfirm"
+    >
       <Teleport to="body">
         <Dialog.Backdrop class="dialog-backdrop" />
         <Dialog.Positioner class="dialog-positioner">
           <Dialog.Content class="dialog-panel" style="max-width: 380px">
             <div class="dialog-header">
               <Dialog.Title>移到回收站</Dialog.Title
-              ><Dialog.CloseTrigger class="dialog-close"><CloseOutlined /></Dialog.CloseTrigger>
+              ><Dialog.CloseTrigger class="dialog-close" :disabled="deletingNote"
+                ><CloseOutlined
+              /></Dialog.CloseTrigger>
             </div>
             <div class="dialog-body">
               <p class="delete-copy">「{{ serverBase.note.title }}」会保留在回收站中，不会自动过期。</p>
               <div class="btn-group delete-buttons">
-                <button class="admin-btn" @click="showDeleteConfirm = false">
+                <button class="admin-btn" :disabled="deletingNote" @click="showDeleteConfirm = false">
                   <CloseOutlined aria-hidden="true" />取消</button
-                ><button class="admin-btn admin-btn-danger" @click="deleteNote">
-                  <DeleteOutlined aria-hidden="true" />移到回收站
+                ><button class="admin-btn admin-btn-danger" :disabled="deletingNote" @click="deleteNote">
+                  <DeleteOutlined aria-hidden="true" />{{ deletingNote ? '正在处理…' : '移到回收站' }}
                 </button>
               </div>
             </div>

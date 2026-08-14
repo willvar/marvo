@@ -4,7 +4,13 @@ import { useRoute } from 'vue-router'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { useAgentStore } from '../stores/agent'
 import { AGENT_DISPLAY_MODE_STORAGE_KEY, useUIPreferencesStore } from '../stores/uiPreferences'
-import { formatAgentError, isAbortedAgentError, prepareNoteForAgent, type AgentFilePartInput } from '../sdk'
+import {
+  formatAgentError,
+  isAbortedAgentError,
+  prepareNoteForAgent,
+  useAppBackHandler,
+  type AgentFilePartInput,
+} from '../sdk'
 import AgentAssistantSurface from './AgentAssistantSurface.vue'
 import type { XPromptItem } from './x'
 import {
@@ -358,6 +364,13 @@ function backFromSubtask() {
   subtaskStack.value = subtaskStack.value.slice(0, -1)
   error.value = ''
 }
+
+useAppBackHandler(() => {
+  if (!renderFloating.value || !open.value) return false
+  if (activeSubtask.value) backFromSubtask()
+  else open.value = false
+  return true
+}, 90)
 
 async function recoverFloating() {
   error.value = ''

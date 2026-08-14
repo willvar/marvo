@@ -774,3 +774,21 @@
     min-height: 40px;
   }
 }
+/* Keep transient connectivity feedback above application content but below dialogs. */
+.app-offline-banner {
+  position: fixed;
+  z-index: 180;
+  top: max(8px, env(safe-area-inset-top));
+  left: 50%;
+  max-width: calc(100vw - 24px);
+  padding: 7px 12px;
+  transform: translateX(-50%);
+  border: 1px solid color-mix(in srgb, var(--text-warning) 36%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--text-warning));
+  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  font-size: var(--marvo-type-12);
+  line-height: 1.4;
+  white-space: nowrap;
+}

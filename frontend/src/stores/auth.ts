@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { v4 as uuidv4 } from 'uuid'
-import { api, currentUserID, setUnauthorizedHandler, userLoginRoute } from '../sdk'
+import { api, ApiError, currentUserID, setUnauthorizedHandler, userLoginRoute } from '../sdk'
 
 const LOCAL_DEVICE_KEY = 'marvo_local_device_id'
 
@@ -100,24 +100,28 @@ export const useAuthStore = defineStore('auth', {
         if (data.status === 'approved') {
           this.isAuthenticated = true
           this.applyStatus = 'approved'
-          return
+          return 'approved' as const
         }
         if (data.status === 'pending') {
           this.isAuthenticated = false
           this.applyStatus = 'pending'
           this.requestId = data.request_id
-          return
+          return 'pending' as const
         }
       } catch (cause) {
-        this.isAuthenticated = false
-        this.applyStatus = 'idle'
-        this.requestId = ''
+        const definitiveAuthFailure = cause instanceof ApiError && [400, 401, 403, 404].includes(cause.status)
+        if (definitiveAuthFailure) {
+          this.isAuthenticated = false
+          this.applyStatus = 'idle'
+          this.requestId = ''
+        }
         if (options?.throwOnError) throw cause
-        return
+        return definitiveAuthFailure ? ('unauthenticated' as const) : ('unreachable' as const)
       }
       this.isAuthenticated = false
       this.applyStatus = 'idle'
       this.requestId = ''
+      return 'unauthenticated' as const
     },
 
     async apply(deviceName: string) {

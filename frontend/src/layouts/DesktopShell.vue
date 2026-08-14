@@ -21,6 +21,7 @@ import {
   isMarvoAndroidApp,
   type ThemeFile,
   currentUserID,
+  useAppBackHandler,
   userLoginRoute,
   workspaceRoute,
 } from '../sdk'
@@ -35,6 +36,8 @@ import {
   LeftOutlined,
   MenuOutlined,
   MobileOutlined,
+  DisconnectOutlined,
+  ReloadOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons-vue'
@@ -45,6 +48,9 @@ const router = useRouter()
 const route = useRoute()
 const androidApp = isMarvoAndroidApp()
 const loading = ref(true)
+const connectionUnavailable = ref(false)
+const retryingConnection = ref(false)
+let workspaceInitialized = false
 const creating = ref(false)
 const searchQuery = ref('')
 const searchResults = ref<any[]>([])
@@ -208,22 +214,61 @@ function completeAndroidClose() {
   androidReleaseError.value = ''
 }
 
-onMounted(async () => {
-  await auth.check()
-  if (!auth.isAuthenticated) {
-    router.replace(userLoginRoute())
-    return
+useAppBackHandler(() => {
+  if (editingTitleActive.value) {
+    cancelRename()
+    return true
   }
-  loadTheme()
-  connect()
-  await Promise.all([loadBrand(), noteStore.fetchNotes()])
-  loading.value = false
+  if (androidOpen.value) {
+    if (androidMode.value !== 'choice') androidMode.value = 'choice'
+    else androidOpen.value = false
+    return true
+  }
+  if (isCompact.value && !siderCollapsed.value) {
+    setSiderCollapsed(true)
+    return true
+  }
+  return false
+}, 60)
+
+async function initializeWorkspace() {
+  if (retryingConnection.value) return
+  retryingConnection.value = true
+  try {
+    await auth.check({ throwOnError: true })
+    if (!auth.isAuthenticated) {
+      await router.replace(userLoginRoute())
+      return
+    }
+    if (!workspaceInitialized) {
+      loadTheme()
+      connect()
+      await Promise.all([loadBrand(), noteStore.fetchNotes()])
+      workspaceInitialized = true
+    }
+    connectionUnavailable.value = false
+  } catch {
+    connectionUnavailable.value = true
+  } finally {
+    loading.value = false
+    retryingConnection.value = false
+  }
+}
+
+function retryWorkspaceWhenOnline() {
+  if (connectionUnavailable.value) void initializeWorkspace()
+}
+
+onMounted(() => {
   onResize()
   window.addEventListener('resize', onResize)
+  window.addEventListener('online', retryWorkspaceWhenOnline)
+  void initializeWorkspace()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
+  window.removeEventListener('online', retryWorkspaceWhenOnline)
   disconnect()
 })
 
@@ -365,6 +410,19 @@ async function confirmTitle() {
 
 <template>
   <div v-if="loading" class="page-loading"><span class="page-loading-spinner" /></div>
+  <section v-else-if="connectionUnavailable" class="dsh-connection-state" role="status">
+    <span class="dsh-connection-icon"><DisconnectOutlined aria-hidden="true" /></span>
+    <h1>暂时无法连接 Marvo</h1>
+    <p>设备授权状态没有改变。请检查网络后重试，恢复连接后会继续进入当前空间。</p>
+    <button
+      class="admin-btn admin-btn-primary"
+      type="button"
+      :disabled="retryingConnection"
+      @click="initializeWorkspace"
+    >
+      <ReloadOutlined aria-hidden="true" />{{ retryingConnection ? '正在重试…' : '重新连接' }}
+    </button>
+  </section>
   <div v-else class="dsh" :class="{ 'sider-collapsed': siderCollapsed }">
     <aside class="dsh-sider" :class="{ collapsed: siderCollapsed }">
       <div class="dsh-brand">
@@ -624,6 +682,43 @@ async function confirmTitle() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dsh-connection-state {
+  box-sizing: border-box;
+  width: min(520px, calc(100% - 32px));
+  min-height: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  color: var(--text-primary);
+  text-align: center;
+
+  h1 {
+    margin: 18px 0 8px;
+    font-size: var(--marvo-type-20);
+  }
+
+  p {
+    margin: 0 0 22px;
+    color: var(--text-tertiary);
+    font-size: var(--marvo-type-13);
+    line-height: 1.7;
+  }
+}
+
+.dsh-connection-icon {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--text-accent) 10%, transparent);
+  color: var(--text-accent);
+  font-size: var(--marvo-type-24);
 }
 
 .dsh {
