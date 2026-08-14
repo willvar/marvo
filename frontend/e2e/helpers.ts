@@ -215,11 +215,24 @@ export async function approveDevice(page: Page, deviceName: string) {
   )
   await page.goto(workspacePath('/login'))
   const tokenResponse = await tokenResponsePromise
-  const token = (await tokenResponse.json()) as { status?: string }
+  const token = (await tokenResponse.json()) as { status?: string; request_id?: string }
   if (token.status === 'approved') {
     await expect(page).toHaveURL(workspaceURL())
     await stopActiveAgentRuns(page)
     await admin.dispose()
+    return
+  }
+
+  if (token.status === 'pending' && token.request_id) {
+    try {
+      await loginUserAdministrator(admin, user.id)
+      const approval = await admin.post(`/api/user/${user.id}/admin/requests/${token.request_id}/approve`)
+      expect(approval.ok()).toBeTruthy()
+    } finally {
+      await admin.dispose()
+    }
+    await expect(page).toHaveURL(workspaceURL(), { timeout: 12_000 })
+    await stopActiveAgentRuns(page)
     return
   }
 
