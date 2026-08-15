@@ -10,18 +10,18 @@ import android.view.animation.LinearInterpolator
 import androidx.core.content.ContextCompat
 
 /** Native counterpart of frontend/src/styles/_loading.scss .page-loading-spinner. */
-internal class MarvoLoadingIndicator(context: Context) : View(context) {
+internal class MarvoLoadingIndicator(
+    context: Context,
+) : View(context) {
     private val strokeWidth = 2f * resources.displayMetrics.density
     private val bounds = RectF()
     private val track =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = ContextCompat.getColor(context, R.color.marvo_loading_track)
             style = Paint.Style.STROKE
             this.strokeWidth = this@MarvoLoadingIndicator.strokeWidth
         }
     private val indicator =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = ContextCompat.getColor(context, R.color.marvo_loading_indicator)
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.BUTT
             this.strokeWidth = this@MarvoLoadingIndicator.strokeWidth
@@ -32,6 +32,16 @@ internal class MarvoLoadingIndicator(context: Context) : View(context) {
             interpolator = LinearInterpolator()
             repeatCount = ObjectAnimator.INFINITE
         }
+
+    init {
+        refreshColors()
+    }
+
+    fun refreshColors() {
+        track.color = ContextCompat.getColor(context, R.color.marvo_loading_track)
+        indicator.color = ContextCompat.getColor(context, R.color.marvo_loading_indicator)
+        invalidate()
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -51,7 +61,10 @@ internal class MarvoLoadingIndicator(context: Context) : View(context) {
         super.onDetachedFromWindow()
     }
 
-    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+    override fun onVisibilityChanged(
+        changedView: View,
+        visibility: Int,
+    ) {
         super.onVisibilityChanged(changedView, visibility)
         updateAnimation()
     }

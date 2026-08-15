@@ -24,7 +24,12 @@ function applyColorScheme() {
   document.documentElement.dataset.colorScheme = scheme
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#1a1b1e' : '#ffffff')
 
-  if (isMarvoAndroidApp()) void callMarvo('statusBar', { style: scheme }).catch(() => undefined)
+  if (isMarvoAndroidApp()) {
+    void callMarvo('colorScheme', {
+      preference: serializedPreference(preference),
+      resolved: scheme,
+    }).catch(() => undefined)
+  }
 }
 
 function storageKey() {

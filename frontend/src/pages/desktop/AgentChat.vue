@@ -774,14 +774,14 @@ useAppBackHandler(() => {
     height 0.2s ease;
 
   &[data-type='success'] {
-    background: #f6ffed;
-    border: 1px solid #b7eb8f;
-    color: #389e0d;
+    background: color-mix(in srgb, var(--text-success) 10%, var(--bg-card));
+    border: 1px solid color-mix(in srgb, var(--text-success) 35%, var(--border-primary));
+    color: var(--text-success);
   }
   &[data-type='error'] {
-    background: #fff2f0;
-    border: 1px solid #ffccc7;
-    color: #cf1322;
+    background: color-mix(in srgb, var(--text-danger) 10%, var(--bg-card));
+    border: 1px solid color-mix(in srgb, var(--text-danger) 35%, var(--border-primary));
+    color: var(--text-danger);
   }
 }
 

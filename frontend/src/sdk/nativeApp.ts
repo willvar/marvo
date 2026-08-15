@@ -27,6 +27,7 @@ interface MarvoEnvironment {
 
 interface MarvoCapabilities {
   toast: boolean
+  colorScheme: boolean
   statusBar: boolean
   haptic: boolean
   saveImage: boolean
@@ -48,6 +49,7 @@ interface MarvoCapabilities {
 
 export interface MarvoMethodMap {
   toast: [{ message: string; duration?: 'short' | 'long' }, null]
+  colorScheme: [{ preference: 'system' | 'light' | 'dark'; resolved: 'light' | 'dark' }, null]
   statusBar: [{ style: 'dark' | 'light' }, null]
   env: [undefined, MarvoEnvironment]
   capabilities: [undefined, MarvoCapabilities]

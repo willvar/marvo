@@ -22,12 +22,15 @@ import java.util.concurrent.Executors
 internal class MarvoSystemServices(
     private val activity: ComponentActivity,
     private val updateManager: AndroidUpdateManager,
-    private val applyColorScheme: (Boolean) -> Unit,
+    private val applyColorScheme: (NativeColorSchemePreference, Boolean) -> Unit,
 ) {
     private val worker: ExecutorService = Executors.newSingleThreadExecutor()
     private var destroyed = false
 
-    fun execute(call: MarvoBridgeCall, reply: (String) -> Unit) {
+    fun execute(
+        call: MarvoBridgeCall,
+        reply: (String) -> Unit,
+    ) {
         if (destroyed) {
             reply(
                 MarvoBridgeContract.failure(
@@ -46,12 +49,31 @@ internal class MarvoSystemServices(
                     Toast.makeText(activity, body.getString("message"), duration).show()
                     reply(MarvoBridgeContract.success(call.id))
                 }
-                "statusBar" -> {
-                    applyColorScheme(call.payload!!.getString("style") == "dark")
+
+                "colorScheme" -> {
+                    val body = call.payload!!
+                    val preference = NativeColorSchemePreference.fromWire(body.getString("preference"))!!
+                    applyColorScheme(preference, body.getString("resolved") == "dark")
                     reply(MarvoBridgeContract.success(call.id))
                 }
-                "env" -> reply(MarvoBridgeContract.success(call.id, environment()))
-                "capabilities" -> reply(MarvoBridgeContract.success(call.id, capabilities()))
+
+                "statusBar" -> {
+                    val dark = call.payload!!.getString("style") == "dark"
+                    applyColorScheme(
+                        if (dark) NativeColorSchemePreference.DARK else NativeColorSchemePreference.LIGHT,
+                        dark,
+                    )
+                    reply(MarvoBridgeContract.success(call.id))
+                }
+
+                "env" -> {
+                    reply(MarvoBridgeContract.success(call.id, environment()))
+                }
+
+                "capabilities" -> {
+                    reply(MarvoBridgeContract.success(call.id, capabilities()))
+                }
+
                 "haptic" -> {
                     val vibrator = activity.getSystemService(Vibrator::class.java)
                     if (vibrator?.hasVibrator() != true) {
@@ -60,26 +82,39 @@ internal class MarvoSystemServices(
                     activity.window.decorView.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
                     reply(MarvoBridgeContract.success(call.id))
                 }
-                "share" -> share(call, reply)
-                "saveImage" -> saveImage(call, reply)
+
+                "share" -> {
+                    share(call, reply)
+                }
+
+                "saveImage" -> {
+                    saveImage(call, reply)
+                }
+
                 "backToHome" -> {
                     activity.moveTaskToBack(true)
                     reply(MarvoBridgeContract.success(call.id))
                 }
+
                 "exitApp" -> {
                     reply(MarvoBridgeContract.success(call.id))
                     activity.finishAndRemoveTask()
                 }
-                "checkUpdate" ->
+
+                "checkUpdate" -> {
                     updateManager.checkNow { result ->
                         reply(MarvoBridgeContract.success(call.id, result))
                     }
-                else -> throw MarvoBridgeException(
-                    MarvoBridgeErrorCode.INVALID_ARGUMENT,
-                    "Unknown bridge method: ${call.method}",
-                )
+                }
+
+                else -> {
+                    throw MarvoBridgeException(
+                        MarvoBridgeErrorCode.INVALID_ARGUMENT,
+                        "Unknown bridge method: ${call.method}",
+                    )
+                }
             }
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             reply(MarvoBridgeContract.failure(call.id, error))
         }
     }
@@ -104,11 +139,13 @@ internal class MarvoSystemServices(
 
     private fun capabilities(): Map<String, Any> {
         val manager = activity.packageManager
+
         fun resolves(intent: Intent) = intent.resolveActivity(manager) != null
         val camera = manager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
         val microphone = manager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
         return mapOf(
             "toast" to true,
+            "colorScheme" to true,
             "statusBar" to true,
             "haptic" to (activity.getSystemService(Vibrator::class.java)?.hasVibrator() == true),
             "saveImage" to (Build.VERSION.SDK_INT >= 29),
@@ -130,7 +167,10 @@ internal class MarvoSystemServices(
         )
     }
 
-    private fun share(call: MarvoBridgeCall, reply: (String) -> Unit) {
+    private fun share(
+        call: MarvoBridgeCall,
+        reply: (String) -> Unit,
+    ) {
         val body = call.payload!!
         val text = body.optString("text").takeIf(String::isNotBlank)
         val file = body.optJSONObject("file")
@@ -162,17 +202,20 @@ internal class MarvoSystemServices(
                         text?.let { intent.putExtra(Intent.EXTRA_TEXT, it) }
                         launchChooser(intent, "分享")
                         reply(MarvoBridgeContract.success(call.id))
-                    } catch (error: Throwable) {
+                    } catch (error: Exception) {
                         reply(MarvoBridgeContract.failure(call.id, error))
                     }
                 }
-            } catch (error: Throwable) {
+            } catch (error: Exception) {
                 activity.runOnUiThread { reply(MarvoBridgeContract.failure(call.id, error)) }
             }
         }
     }
 
-    private fun saveImage(call: MarvoBridgeCall, reply: (String) -> Unit) {
+    private fun saveImage(
+        call: MarvoBridgeCall,
+        reply: (String) -> Unit,
+    ) {
         if (Build.VERSION.SDK_INT < 29) {
             throw MarvoBridgeException(
                 MarvoBridgeErrorCode.UNSUPPORTED,
@@ -194,8 +237,9 @@ internal class MarvoSystemServices(
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
                 val resolver = activity.contentResolver
-                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                    ?: throw MarvoBridgeException(MarvoBridgeErrorCode.IO_ERROR, "Cannot create image")
+                val uri =
+                    resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw MarvoBridgeException(MarvoBridgeErrorCode.IO_ERROR, "Cannot create image")
                 try {
                     resolver.openOutputStream(uri)?.use { it.write(parsed.bytes) }
                         ?: throw MarvoBridgeException(MarvoBridgeErrorCode.IO_ERROR, "Cannot write image")
@@ -205,7 +249,7 @@ internal class MarvoSystemServices(
                         null,
                         null,
                     )
-                } catch (error: Throwable) {
+                } catch (error: Exception) {
                     resolver.delete(uri, null, null)
                     throw error
                 }
@@ -213,22 +257,31 @@ internal class MarvoSystemServices(
                     Toast.makeText(activity, "图片已保存", Toast.LENGTH_SHORT).show()
                     reply(MarvoBridgeContract.success(call.id))
                 }
-            } catch (error: Throwable) {
+            } catch (error: Exception) {
                 activity.runOnUiThread { reply(MarvoBridgeContract.failure(call.id, error)) }
             }
         }
     }
 
-    private fun launchChooser(intent: Intent, title: String) {
+    private fun launchChooser(
+        intent: Intent,
+        title: String,
+    ) {
         if (intent.resolveActivity(activity.packageManager) == null) {
             throw MarvoBridgeException(MarvoBridgeErrorCode.UNSUPPORTED, "No compatible application is installed")
         }
         activity.startActivity(Intent.createChooser(intent, title))
     }
 
-    private fun decodeFileData(raw: String, maxBytes: Int): ByteArray = parseData(raw, maxBytes).bytes
+    private fun decodeFileData(
+        raw: String,
+        maxBytes: Int,
+    ): ByteArray = parseData(raw, maxBytes).bytes
 
-    private fun parseData(raw: String, maxBytes: Int): ParsedData {
+    private fun parseData(
+        raw: String,
+        maxBytes: Int,
+    ): ParsedData {
         val comma = raw.indexOf(',')
         val dataURL = raw.startsWith("data:", ignoreCase = true) && comma > 5
         val metadata = if (dataURL) raw.substring(5, comma) else "application/octet-stream;base64"
@@ -249,9 +302,14 @@ internal class MarvoSystemServices(
     }
 
     private fun safeFilename(raw: String): String =
-        raw.substringAfterLast('/').substringAfterLast('\\')
+        raw
+            .substringAfterLast('/')
+            .substringAfterLast('\\')
             .replace(Regex("[\\u0000-\\u001F<>:\"|?*]"), "_")
-            .trim().trim('.').take(160).ifBlank { "marvo-file" }
+            .trim()
+            .trim('.')
+            .take(160)
+            .ifBlank { "marvo-file" }
 
     private data class ParsedData(
         val mimeType: String,

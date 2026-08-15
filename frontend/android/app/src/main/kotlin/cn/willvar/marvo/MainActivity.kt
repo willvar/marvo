@@ -2,31 +2,32 @@ package cn.willvar.marvo
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
-import android.view.View
 import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDialog
 import androidx.core.content.edit
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.updatePadding
 import androidx.core.widget.doOnTextChanged
-import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AppCompatDelegate
+import cn.willvar.marvo.databinding.ActivityBindingBinding
+import cn.willvar.marvo.databinding.DialogUserIdBinding
 import com.google.android.material.color.MaterialColors
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
-import cn.willvar.marvo.databinding.ActivityBindingBinding
-import cn.willvar.marvo.databinding.DialogUserIdBinding
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -48,6 +49,9 @@ class MainActivity : AppCompatActivity() {
     private var clipboardCheckPending = false
     private var manualUserID = ""
     private var manualUserIDDialog: AppCompatDialog? = null
+    private var bindingBusy = false
+    private var bindingStatusMessage = ""
+    private var bindingStatusError = false
     private lateinit var filePicker: AndroidFilePicker
     private lateinit var updateManager: AndroidUpdateManager
     private lateinit var permissionManager: AndroidPermissionManager
@@ -74,23 +78,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val storedPreferences = getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        if (storedPreferences.contains(KEY_DARK_MODE)) {
-            delegate.localNightMode =
-                if (storedPreferences.getBoolean(KEY_DARK_MODE, false)) {
-                    AppCompatDelegate.MODE_NIGHT_YES
-                } else {
-                    AppCompatDelegate.MODE_NIGHT_NO
-                }
-        }
+        val storedUserID = storedPreferences.getString(KEY_USER_ID, null)?.takeIf(USER_ID_PATTERN::matches)
+        delegate.localNightMode = storedColorSchemePreference(storedPreferences, storedUserID).nightMode
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         filePicker = AndroidFilePicker(this)
         permissionManager = AndroidPermissionManager(this)
         updateManager = AndroidUpdateManager(this, network)
         downloadManager = AndroidDownloadManager(this, network, permissionManager)
-        val userID = preferences.getString(KEY_USER_ID, null)
-        if (userID != null && USER_ID_PATTERN.matches(userID)) {
-            showWorkspace(userID)
+        if (storedUserID != null) {
+            showWorkspace(storedUserID)
         } else {
             showBinding()
         }
@@ -122,6 +119,19 @@ class MainActivity : AppCompatActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) consumeClipboardBindingCheck()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (bindingView != null) {
+            val reopenManualEntry = manualUserIDDialog != null
+            manualUserIDDialog?.dismiss()
+            manualUserIDDialog = null
+            showBinding()
+            if (reopenManualEntry) bindingView?.root?.post { showManualUserIDDialog() }
+            return
+        }
+        webHost?.onColorConfigurationChanged()
     }
 
     override fun onPause() {
@@ -159,6 +169,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(view.root)
         applySystemInsets(view.root)
         constrainBindingWidth(view)
+        NativeColorScheme.applySystemBars(this, NativeColorScheme.isDark(resources.configuration))
         view.scanButton.setOnClickListener {
             val options =
                 ScanOptions()
@@ -171,6 +182,7 @@ class MainActivity : AppCompatActivity() {
         }
         view.galleryButton.setOnClickListener { galleryLauncher.launch("image/*") }
         view.manualUserIdButton.setOnClickListener { showManualUserIDDialog() }
+        renderBindingState()
     }
 
     private fun showWorkspace(userID: String) {
@@ -180,6 +192,9 @@ class MainActivity : AppCompatActivity() {
         manualUserIDDialog?.dismiss()
         manualUserIDDialog = null
         bindingView = null
+        bindingBusy = false
+        bindingStatusMessage = ""
+        bindingStatusError = false
         webHost?.destroy()
         val container = FrameLayout(this)
         setContentView(container)
@@ -258,8 +273,16 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun submitManualUserID(dialog: AppCompatDialog, content: DialogUserIdBinding) {
-        val userID = content.userIdInput.text?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    private fun submitManualUserID(
+        dialog: AppCompatDialog,
+        content: DialogUserIdBinding,
+    ) {
+        val userID =
+            content.userIdInput.text
+                ?.toString()
+                ?.trim()
+                ?.lowercase(Locale.ROOT)
+                .orEmpty()
         if (!USER_ID_PATTERN.matches(userID)) {
             content.userIdInputLayout.error = getString(R.string.invalid_user_id)
             return
@@ -292,19 +315,27 @@ class MainActivity : AppCompatActivity() {
             val clipboard = getSystemService(ClipboardManager::class.java)
             val clip = clipboard?.primaryClip ?: return@runCatching null
             if (clip.itemCount == 0) return@runCatching null
-            clip.getItemAt(0).text?.toString()?.trim()?.lowercase(Locale.ROOT)
+            clip
+                .getItemAt(0)
+                .text
+                ?.toString()
+                ?.trim()
+                ?.lowercase(Locale.ROOT)
         }.getOrNull()?.takeIf(USER_ID_PATTERN::matches)
 
     private fun verifyUserSpace(userID: String) {
         setBindingBusy(true, "正在连接用户空间…")
         bindingCall?.cancel()
         val url =
-            BuildConfig.SERVER_ORIGIN.toHttpUrl().newBuilder()
+            BuildConfig.SERVER_ORIGIN
+                .toHttpUrl()
+                .newBuilder()
                 .addPathSegments("api/user/$userID/auth/token")
                 .addQueryParameter("local_device_id", localDeviceID())
                 .build()
         val request =
-            Request.Builder()
+            Request
+                .Builder()
                 .url(url)
                 .header("User-Agent", appUserAgent())
                 .get()
@@ -313,7 +344,10 @@ class MainActivity : AppCompatActivity() {
             network.newCall(request).also { call ->
                 call.enqueue(
                     object : Callback {
-                        override fun onFailure(call: Call, error: IOException) {
+                        override fun onFailure(
+                            call: Call,
+                            error: IOException,
+                        ) {
                             if (call.isCanceled()) return
                             runOnUiThread {
                                 bindingCall = null
@@ -321,7 +355,10 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        override fun onResponse(call: Call, response: Response) {
+                        override fun onResponse(
+                            call: Call,
+                            response: Response,
+                        ) {
                             response.use {
                                 runOnUiThread {
                                     bindingCall = null
@@ -330,9 +367,18 @@ class MainActivity : AppCompatActivity() {
                                             preferences.edit { putString(KEY_USER_ID, userID) }
                                             showWorkspace(userID)
                                         }
-                                        403 -> showBindingError("该用户空间当前不可用")
-                                        404 -> showBindingError("没有找到这个用户空间")
-                                        else -> showBindingError("用户空间验证失败，请稍后重试")
+
+                                        403 -> {
+                                            showBindingError("该用户空间当前不可用")
+                                        }
+
+                                        404 -> {
+                                            showBindingError("没有找到这个用户空间")
+                                        }
+
+                                        else -> {
+                                            showBindingError("用户空间验证失败，请稍后重试")
+                                        }
                                     }
                                 }
                             }
@@ -342,30 +388,38 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    private fun setBindingBusy(busy: Boolean, message: String = "") {
+    private fun setBindingBusy(
+        busy: Boolean,
+        message: String = "",
+    ) {
+        bindingBusy = busy
+        bindingStatusMessage = message
+        bindingStatusError = false
+        renderBindingState()
+    }
+
+    private fun renderBindingState() {
         val view = bindingView ?: return
-        view.scanButton.isEnabled = !busy
-        view.galleryButton.isEnabled = !busy
-        view.manualUserIdButton.isEnabled = !busy
-        view.bindingProgress.visibility = if (busy) View.VISIBLE else View.GONE
-        view.bindingStatus.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
-        view.bindingStatus.text = message
-        if (message.isNotBlank()) {
-            view.bindingStatus.setTextColor(
-                MaterialColors.getColor(view.bindingStatus, com.google.android.material.R.attr.colorOnSurfaceVariant),
-            )
-        }
+        view.scanButton.isEnabled = !bindingBusy
+        view.galleryButton.isEnabled = !bindingBusy
+        view.manualUserIdButton.isEnabled = !bindingBusy
+        view.bindingProgress.visibility = if (bindingBusy) View.VISIBLE else View.GONE
+        view.bindingStatus.visibility = if (bindingStatusMessage.isBlank()) View.GONE else View.VISIBLE
+        view.bindingStatus.text = bindingStatusMessage
+        if (bindingStatusMessage.isBlank()) return
+        view.bindingStatus.setTextColor(
+            MaterialColors.getColor(
+                view.bindingStatus,
+                if (bindingStatusError) android.R.attr.colorError else com.google.android.material.R.attr.colorOnSurfaceVariant,
+            ),
+        )
     }
 
     private fun showBindingError(message: String) {
-        setBindingBusy(false, message)
-        val status = bindingView?.bindingStatus ?: return
-        status.setTextColor(
-            MaterialColors.getColor(
-                status,
-                android.R.attr.colorError,
-            ),
-        )
+        bindingBusy = false
+        bindingStatusMessage = message
+        bindingStatusError = true
+        renderBindingState()
     }
 
     private fun localDeviceID(): String {
@@ -390,11 +444,50 @@ class MainActivity : AppCompatActivity() {
 
     private fun safeHardwareName(value: String) = value.filterNot(Char::isISOControl).trim()
 
-    internal fun syncNativeColorScheme(dark: Boolean) {
-        if (preferences.contains(KEY_DARK_MODE) && preferences.getBoolean(KEY_DARK_MODE, false) == dark) return
-        preferences.edit { putBoolean(KEY_DARK_MODE, dark) }
-        delegate.localNightMode = if (dark) AppCompatDelegate.MODE_NIGHT_YES else AppCompatDelegate.MODE_NIGHT_NO
+    internal fun syncNativeColorScheme(preference: NativeColorSchemePreference) {
+        val userID = preferences.getString(KEY_USER_ID, null)?.takeIf(USER_ID_PATTERN::matches)
+        val key = colorSchemeStorageKey(userID)
+        if (key.isNotEmpty() && preferences.getString(key, null) != preference.wireValue) {
+            preferences.edit {
+                putString(key, preference.wireValue)
+                remove(KEY_LEGACY_DARK_MODE)
+            }
+        }
+        if (delegate.localNightMode != preference.nightMode) {
+            delegate.localNightMode = preference.nightMode
+        }
     }
+
+    private fun storedColorSchemePreference(
+        storedPreferences: SharedPreferences,
+        userID: String?,
+    ): NativeColorSchemePreference {
+        val key = colorSchemeStorageKey(userID)
+        val stored = key.takeIf(String::isNotEmpty)?.let { storedPreferences.getString(it, null) }
+        NativeColorSchemePreference.fromWire(stored)?.let {
+            return it
+        }
+        val migrated =
+            if (key.isNotEmpty() && storedPreferences.contains(KEY_LEGACY_DARK_MODE)) {
+                if (storedPreferences.getBoolean(KEY_LEGACY_DARK_MODE, false)) {
+                    NativeColorSchemePreference.DARK
+                } else {
+                    NativeColorSchemePreference.LIGHT
+                }
+            } else {
+                NativeColorSchemePreference.SYSTEM
+            }
+        if (key.isNotEmpty()) {
+            storedPreferences.edit {
+                putString(key, migrated.wireValue)
+                remove(KEY_LEGACY_DARK_MODE)
+            }
+        }
+        return migrated
+    }
+
+    private fun colorSchemeStorageKey(userID: String?) =
+        userID?.takeIf(USER_ID_PATTERN::matches)?.let { "$KEY_COLOR_SCHEME_PREFIX.$it" }.orEmpty()
 
     private fun appUserAgent() = "MarvoAndroid/${BuildConfig.VERSION_NAME}"
 
@@ -406,8 +499,10 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(view) { target, insets ->
             val bars =
                 insets.getInsets(
-                    androidx.core.view.WindowInsetsCompat.Type.systemBars() or
-                        androidx.core.view.WindowInsetsCompat.Type.ime(),
+                    androidx.core.view.WindowInsetsCompat.Type
+                        .systemBars() or
+                        androidx.core.view.WindowInsetsCompat.Type
+                            .ime(),
                 )
             target.updatePadding(
                 left = start + bars.left,
@@ -438,7 +533,8 @@ class MainActivity : AppCompatActivity() {
         const val PREFERENCES = "marvo_android"
         const val KEY_USER_ID = "bound_user_id"
         const val KEY_DEVICE_ID = "local_device_id"
-        const val KEY_DARK_MODE = "dark_mode"
+        const val KEY_COLOR_SCHEME_PREFIX = "color_scheme"
+        const val KEY_LEGACY_DARK_MODE = "dark_mode"
         val USER_ID_PATTERN = Regex("[0-9a-f]{20}")
     }
 }

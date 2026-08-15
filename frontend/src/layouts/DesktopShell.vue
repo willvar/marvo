@@ -116,8 +116,7 @@ function loadTheme() {
       applyTheme(tf)
     })
     .catch(() => {
-      themeFile.value = {}
-      applyTheme({})
+      // Keep the locally restored theme while the server is temporarily unavailable.
     })
 }
 
@@ -180,6 +179,8 @@ const headerTitle = computed(() => {
   if (route.name === 'user-trash') return '回收站'
   return ''
 })
+const showHeaderAgentEntry = computed(() => route.name !== 'user-agent')
+
 function openAgentPage() {
   void router.push(workspaceRoute('/agent'))
 }
@@ -550,7 +551,7 @@ async function confirmTitle() {
         </div>
         <div class="dsh-header-actions">
           <button
-            v-if="route.name === 'user-home' && !androidApp"
+            v-if="showHeaderAgentEntry && !androidApp"
             class="dsh-header-action dsh-header-app"
             type="button"
             title="APP"
@@ -561,7 +562,7 @@ async function confirmTitle() {
             <span>APP</span>
           </button>
           <button
-            v-if="route.name !== 'user-agent'"
+            v-if="showHeaderAgentEntry"
             class="dsh-header-action dsh-header-agent"
             type="button"
             title="智能体"

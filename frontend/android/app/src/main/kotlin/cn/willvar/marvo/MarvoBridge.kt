@@ -40,7 +40,7 @@ internal object MarvoBridgeContract {
         val request =
             try {
                 JSONObject(raw)
-            } catch (_: Throwable) {
+            } catch (_: Exception) {
                 throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "Malformed bridge request")
             }
         val id = request.nonEmptyString("id", 128)
@@ -52,10 +52,17 @@ internal object MarvoBridgeContract {
         }
         when (method) {
             in noPayloadMethods -> requireNoPayload(payload, method)
+
             "toast" -> validateToast(payload)
+
+            "colorScheme" -> validateColorScheme(payload)
+
             "statusBar" -> validateStatusBar(payload)
+
             "saveImage" -> validateSaveImage(payload)
+
             "share" -> validateShare(payload)
+
             else -> throw MarvoBridgeException(
                 MarvoBridgeErrorCode.INVALID_ARGUMENT,
                 "Unknown bridge method: $method",
@@ -68,14 +75,20 @@ internal object MarvoBridgeContract {
         runCatching { JSONObject(raw).optString("id").takeIf(String::isNotBlank) ?: "invalid" }
             .getOrDefault("invalid")
 
-    fun success(id: String, result: Any? = null): String =
+    fun success(
+        id: String,
+        result: Any? = null,
+    ): String =
         JSONObject()
             .put("id", id)
             .put("ok", true)
             .put("result", JSONObject.wrap(result))
             .toString()
 
-    fun failure(id: String, error: Throwable): String {
+    fun failure(
+        id: String,
+        error: Throwable,
+    ): String {
         val bridge = error as? MarvoBridgeException
         return failure(
             id,
@@ -100,10 +113,12 @@ internal object MarvoBridgeContract {
                     .put("code", code.name)
                     .put("message", message)
                     .put("details", JSONObject.wrap(details)),
-            )
-            .toString()
+            ).toString()
 
-    private fun requireNoPayload(payload: JSONObject?, method: String) {
+    private fun requireNoPayload(
+        payload: JSONObject?,
+        method: String,
+    ) {
         if (payload != null) {
             throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "$method does not accept parameters")
         }
@@ -122,6 +137,27 @@ internal object MarvoBridgeContract {
         val style = payload.required().nonEmptyString("style", 16)
         if (style !in setOf("dark", "light")) {
             throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "style must be dark or light")
+        }
+    }
+
+    private fun validateColorScheme(payload: JSONObject?) {
+        val body = payload.required()
+        val preference = body.nonEmptyString("preference", 16)
+        val resolved = body.nonEmptyString("resolved", 16)
+        if (NativeColorSchemePreference.fromWire(preference) == null) {
+            throw MarvoBridgeException(
+                MarvoBridgeErrorCode.INVALID_ARGUMENT,
+                "preference must be system, light, or dark",
+            )
+        }
+        if (resolved !in setOf("light", "dark")) {
+            throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "resolved must be light or dark")
+        }
+        if (preference != "system" && preference != resolved) {
+            throw MarvoBridgeException(
+                MarvoBridgeErrorCode.INVALID_ARGUMENT,
+                "explicit color scheme preference must match its resolved value",
+            )
         }
     }
 
@@ -158,7 +194,10 @@ internal object MarvoBridgeContract {
     private fun JSONObject?.required() =
         this ?: throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "payload must be an object")
 
-    private fun JSONObject.nonEmptyString(name: String, maxLength: Int): String {
+    private fun JSONObject.nonEmptyString(
+        name: String,
+        maxLength: Int,
+    ): String {
         val value = opt(name) as? String
         if (value.isNullOrBlank() || value.length > maxLength) {
             throw MarvoBridgeException(
@@ -177,4 +216,3 @@ internal object MarvoBridgeContract {
 
     private const val MAX_ENCODED_FILE_LENGTH = 48 * 1024 * 1024
 }
-

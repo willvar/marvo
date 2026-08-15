@@ -1,11 +1,8 @@
-@file:Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-
 package cn.willvar.marvo
 
-import android.annotation.SuppressLint
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
-import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
 import android.net.http.SslError
@@ -15,8 +12,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.webkit.CookieManager
-import android.webkit.RenderProcessGoneDetail
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -31,7 +28,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.core.net.toUri
-import androidx.core.view.WindowCompat
 import androidx.core.view.isVisible
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewAssetLoader
@@ -58,6 +54,7 @@ internal class MarvoWebHost(
     private var webView: WebView? = null
     private var loading: MarvoLoadingIndicator? = null
     private var errorView: View? = null
+    private var errorDetail: String? = null
     private var mainLoadFailed = false
     private var fullscreenView: View? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
@@ -115,6 +112,16 @@ internal class MarvoWebHost(
         exitFullscreen()
     }
 
+    fun onColorConfigurationChanged() {
+        applyWindowVisuals(NativeColorScheme.isDark(activity.resources.configuration))
+        val detail = errorDetail
+        if (detail != null && errorView?.isVisible == true) {
+            errorView?.let(container::removeView)
+            errorView = null
+            showError(detail)
+        }
+    }
+
     fun handleBack(onResult: (Boolean) -> Unit) {
         if (exitFullscreen()) {
             onResult(true)
@@ -144,7 +151,10 @@ internal class MarvoWebHost(
         }
     }
 
-    private fun completeBack(handled: Boolean, onResult: (Boolean) -> Unit) {
+    private fun completeBack(
+        handled: Boolean,
+        onResult: (Boolean) -> Unit,
+    ) {
         backPending = false
         onResult(handled)
         val queued = queuedBackResult ?: return
@@ -177,6 +187,7 @@ internal class MarvoWebHost(
         startPending = false
         loading = null
         errorView = null
+        errorDetail = null
         container.removeAllViews()
         systemServices.destroy()
     }
@@ -184,7 +195,8 @@ internal class MarvoWebHost(
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
         val loader =
-            WebViewAssetLoader.Builder()
+            WebViewAssetLoader
+                .Builder()
                 .setDomain(origin.rawAuthority)
                 .setHttpAllowed(origin.scheme.equals("http", true))
                 .addPathHandler("/user/", WebViewAssetLoader.PathHandler(::userRouteResponse))
@@ -200,11 +212,8 @@ internal class MarvoWebHost(
                 settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
-                    databaseEnabled = true
                     allowFileAccess = false
                     allowContentAccess = true
-                    allowFileAccessFromFileURLs = false
-                    allowUniversalAccessFromFileURLs = false
                     mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     mediaPlaybackRequiresUserGesture = true
                     builtInZoomControls = false
@@ -243,25 +252,21 @@ internal class MarvoWebHost(
     }
 
     private fun applyInitialColorScheme() {
-        val dark =
-            activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-                Configuration.UI_MODE_NIGHT_YES
-        val background = Color.parseColor(if (dark) DARK_BACKGROUND else LIGHT_BACKGROUND)
-        container.setBackgroundColor(background)
-        activity.window.statusBarColor = background
-        activity.window.navigationBarColor = background
+        applyWindowVisuals(NativeColorScheme.isDark(activity.resources.configuration))
     }
 
-    private fun applyWindowColorScheme(dark: Boolean) {
-        val background = Color.parseColor(if (dark) DARK_BACKGROUND else LIGHT_BACKGROUND)
-        container.setBackgroundColor(background)
-        activity.window.statusBarColor = background
-        activity.window.navigationBarColor = background
-        WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
-            isAppearanceLightStatusBars = !dark
-            isAppearanceLightNavigationBars = !dark
-        }
-        (activity as? MainActivity)?.syncNativeColorScheme(dark)
+    private fun applyWindowColorScheme(
+        preference: NativeColorSchemePreference,
+        resolvedDark: Boolean,
+    ) {
+        (activity as? MainActivity)?.syncNativeColorScheme(preference)
+        applyWindowVisuals(resolvedDark)
+    }
+
+    private fun applyWindowVisuals(dark: Boolean) {
+        container.setBackgroundColor(NativeColorScheme.background(dark))
+        NativeColorScheme.applySystemBars(activity, dark)
+        loading?.refreshColors()
     }
 
     private fun userRouteResponse(path: String): WebResourceResponse? {
@@ -279,7 +284,11 @@ internal class MarvoWebHost(
 
     private val appDocument: ByteArray? by lazy {
         runCatching {
-            val source = activity.assets.open("index.html").bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+            val source =
+                activity.assets
+                    .open("index.html")
+                    .bufferedReader(StandardCharsets.UTF_8)
+                    .use { it.readText() }
             val marker = "<head>"
             require(source.contains(marker)) { "Embedded index.html is missing its head element" }
             source
@@ -310,11 +319,12 @@ internal class MarvoWebHost(
               } catch (_) {}
             })();
             </script>
-        """.trimIndent()
+            """.trimIndent()
     }
 
     private fun scriptString(value: String) =
-        JSONObject.quote(value)
+        JSONObject
+            .quote(value)
             .replace("<", "\\u003c")
             .replace(">", "\\u003e")
             .replace("&", "\\u0026")
@@ -350,10 +360,12 @@ internal class MarvoWebHost(
 
     private fun defaultPort(scheme: String?) = if (scheme.equals("http", true)) 80 else 443
 
-    private fun allowedInternalPath(path: String): Boolean =
-        path == "/user/$userID" || path.startsWith("/user/$userID/")
+    private fun allowedInternalPath(path: String): Boolean = path == "/user/$userID" || path.startsWith("/user/$userID/")
 
-    private fun navigate(uri: Uri, mainFrame: Boolean): Boolean {
+    private fun navigate(
+        uri: Uri,
+        mainFrame: Boolean,
+    ): Boolean {
         if (!mainFrame) return !sameOrigin(uri) || !allowedInternalPath(uri.path.orEmpty())
         if (sameOrigin(uri) && allowedInternalPath(uri.path.orEmpty())) return false
         if (uri.scheme.equals("https", true)) openExternal(uri.toString())
@@ -386,11 +398,13 @@ internal class MarvoWebHost(
     private fun reveal(view: WebView) {
         loading?.isVisible = false
         errorView?.isVisible = false
+        errorDetail = null
         view.visibility = View.VISIBLE
         CookieManager.getInstance().flush()
     }
 
     private fun showError(detail: String) {
+        errorDetail = detail
         loading?.isVisible = false
         webView?.visibility = View.INVISIBLE
         val existing = errorView
@@ -434,7 +448,10 @@ internal class MarvoWebHost(
         errorView = layout
     }
 
-    private fun enterFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) {
+    private fun enterFullscreen(
+        view: View,
+        callback: WebChromeClient.CustomViewCallback,
+    ) {
         if (fullscreenView != null) {
             callback.onCustomViewHidden()
             return
@@ -461,45 +478,74 @@ internal class MarvoWebHost(
     private inner class MarvoWebViewClient(
         private val loader: WebViewAssetLoader,
     ) : WebViewClient() {
-        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? =
-            request?.url?.let(loader::shouldInterceptRequest)
+        override fun shouldInterceptRequest(
+            view: WebView?,
+            request: WebResourceRequest?,
+        ): WebResourceResponse? = request?.url?.let(loader::shouldInterceptRequest)
 
-        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean =
-            request == null || navigate(request.url, request.isForMainFrame)
+        override fun shouldOverrideUrlLoading(
+            view: WebView?,
+            request: WebResourceRequest?,
+        ): Boolean = request == null || navigate(request.url, request.isForMainFrame)
 
-        override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean =
-            url == null || navigate(url.toUri(), true)
+        @Suppress("OVERRIDE_DEPRECATION")
+        override fun shouldOverrideUrlLoading(
+            view: WebView?,
+            url: String?,
+        ): Boolean = url == null || navigate(url.toUri(), true)
 
-        override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+        override fun onPageStarted(
+            view: WebView,
+            url: String?,
+            favicon: android.graphics.Bitmap?,
+        ) {
             mainLoadFailed = false
             showLoading()
         }
 
-        override fun onPageFinished(view: WebView, url: String?) {
+        override fun onPageFinished(
+            view: WebView,
+            url: String?,
+        ) {
             if (!mainLoadFailed) reveal(view)
         }
 
-        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+        override fun onReceivedError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            error: WebResourceError?,
+        ) {
             if (request?.isForMainFrame == true) {
                 mainLoadFailed = true
                 showError(error?.description?.toString() ?: "请检查网络后重试")
             }
         }
 
-        override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, response: WebResourceResponse?) {
+        override fun onReceivedHttpError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            response: WebResourceResponse?,
+        ) {
             if (request?.isForMainFrame == true && response != null) {
                 mainLoadFailed = true
                 showError("HTTP ${response.statusCode}")
             }
         }
 
-        override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+        override fun onReceivedSslError(
+            view: WebView?,
+            handler: SslErrorHandler?,
+            error: SslError?,
+        ) {
             handler?.cancel()
             mainLoadFailed = true
             showError("无法验证服务器安全证书")
         }
 
-        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+        override fun onRenderProcessGone(
+            view: WebView,
+            detail: RenderProcessGoneDetail,
+        ): Boolean {
             bridge?.detach()
             bridge = null
             container.removeView(view)
@@ -517,11 +563,14 @@ internal class MarvoWebHost(
         }
     }
 
-    @SuppressLint("MissingOnRenderProcessGone")
+    @SuppressLint("MissingOnRenderProcessGone") // Both clients implement the callback; Android Lint misses inner clients.
     private inner class ExternalWindowClient(
         private val parent: WebView,
     ) : WebViewClient() {
-        override fun shouldOverrideUrlLoading(child: WebView?, request: WebResourceRequest?): Boolean {
+        override fun shouldOverrideUrlLoading(
+            child: WebView?,
+            request: WebResourceRequest?,
+        ): Boolean {
             val uri = request?.url ?: return true
             if (sameOrigin(uri) && allowedInternalPath(uri.path.orEmpty())) {
                 parent.evaluateJavascript(
@@ -535,7 +584,10 @@ internal class MarvoWebHost(
             return true
         }
 
-        override fun onRenderProcessGone(child: WebView, detail: RenderProcessGoneDetail): Boolean {
+        override fun onRenderProcessGone(
+            child: WebView,
+            detail: RenderProcessGoneDetail,
+        ): Boolean {
             child.destroy()
             return true
         }
@@ -583,7 +635,10 @@ internal class MarvoWebHost(
             }
         }
 
-        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+        override fun onShowCustomView(
+            view: View?,
+            callback: CustomViewCallback?,
+        ) {
             if (view == null || callback == null) return
             enterFullscreen(view, callback)
         }
@@ -618,8 +673,6 @@ internal class MarvoWebHost(
             """.trimIndent()
 
         const val ERROR_TEXT_TAG = "marvo-error-detail"
-        const val DARK_BACKGROUND = "#1a1b1e"
-        const val LIGHT_BACKGROUND = "#ffffff"
         const val APP_BACK_TIMEOUT_MS = 750L
     }
 }
