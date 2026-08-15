@@ -1,8 +1,8 @@
 # Marvo Android
 
-这个目录包含通用 Android APP 壳。APK 内置当前 Vue 生产产物，但 API、媒体和 SSE 仍连接构建时指定的 Marvo 服务。首次启动只绑定一个用户 ID；如需绑定其他空间，需要清除 APP 数据或重新安装。
+这个目录包含通用 Android APP 壳。APK 内置当前 Vue 生产产物，但 API、媒体和 SSE 请求仍会发送到构建时指定的 Marvo 服务。首次启动只绑定一个用户 ID；如需绑定其他空间，需要清除 APP 数据或重新安装。
 
-应用 ID 固定为 `cn.willvar.marvo`。服务器 Origin 不写入源码，构建时必须显式提供；域名发生变化时发布新版 APK 即可，用户前台生成的二维码始终只包含 20 位用户 ID。
+应用 ID 固定为 `cn.willvar.marvo`。服务地址（Origin）不写入源码，构建时必须显式提供；域名发生变化时，需要发布使用新地址构建的 APK。用户前台生成的二维码始终只包含 20 位用户 ID。
 
 ## 构建调试包
 
@@ -12,12 +12,11 @@
 make android-debug SERVER_ORIGIN=https://marvo.example.com
 ```
 
-输出为 `dist/android/Marvo-debug.apk`。调试包使用 `cn.willvar.marvo.debug`，不能上传到平台发布页。
-本机联调时也可传入 `http://localhost` 或 `10.x`、`172.16-31.x`、`192.168.x`、`127.x` 私网地址；只有调试包允许这类明文连接，正式包仍强制使用 HTTPS。
+输出为 `dist/android/Marvo-debug.apk`。调试包使用 `cn.willvar.marvo.debug`，不能上传到平台发布页。本机联调时也可传入 `http://localhost` 或 `10.x`、`172.16-31.x`、`192.168.x`、`127.x` 私网地址；只有调试包允许这类明文连接，正式包仍强制使用 HTTPS。
 
 ## 构建正式包
 
-1. 修改 `version.properties`。每次发布都必须增加 `VERSION_CODE`；`VERSION_NAME` 是展示给用户的版本号。
+1. 修改 `version.properties`。每次发布都必须增加 `VERSION_CODE`；`VERSION_NAME` 是向用户展示的版本号。
 2. 将 `signing.example.properties` 复制为被 Git 忽略的 `signing.properties`，填写固定发布密钥。密码也可通过 `storePasswordFile` 和 `keyPasswordFile` 从仓库外的文件读取；密钥和密码不得进入仓库或构建日志。
 3. 构建：
 
@@ -31,14 +30,14 @@ make android-apk SERVER_ORIGIN=https://marvo.example.com
 
 ## 代码质量检查
 
-项目根目录的统一门禁会运行 Android Lint、Detekt、ktlint、Kotlin 编译器严格警告和 JVM 单测：
+项目根目录的统一质量检查会运行 Android Lint、Detekt、ktlint、Kotlin 编译器严格警告和 JVM 单测：
 
 ```bash
 make lint
 make test
 ```
 
-只检查 Android 可分别运行 `make lint-android` 与 `make test-android`；自动整理 Kotlin 格式使用 `make format-android`。检查构建固定使用回环地址，不依赖真实部署域名。
+如只需检查 Android，可分别运行 `make lint-android` 与 `make test-android`；运行 `make format-android` 可自动整理 Kotlin 代码格式。检查过程中使用固定的回环地址，不依赖真实部署域名。
 
 ## 网页与原生能力
 
@@ -52,4 +51,4 @@ const capabilities = await window.marvo.call('capabilities')
 
 当前白名单包含 `toast`、`colorScheme`、`statusBar`、`haptic`、`saveImage`、`share`、`backToHome`、`exitApp` 和 `checkUpdate`。`colorScheme` 会同步用户的“跟随系统 / 浅色 / 深色”选择及当前实际颜色，`statusBar` 仅作为旧前端兼容入口保留。参数结构以 `frontend/src/sdk/nativeApp.ts` 为准；Android 会再次校验方法、来源和参数，不提供任意原生命令入口。
 
-硬件返回键会同步调用 `window.marvo.back()`。网页关闭最上层浮层或返回业务父页时返回 `true`；已经位于工作区根页时返回 `false`，Android 随即把任务移到后台。不要使用 WebView 历史栈实现业务返回。
+硬件返回键会同步调用 `window.marvo.back()`。如果网页关闭了最上层浮层或返回了上一级业务页面，该方法返回 `true`；如果已经位于工作区根页，则返回 `false`，Android 随即把任务移到后台。不要使用 WebView 历史栈实现业务返回。
