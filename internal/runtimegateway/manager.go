@@ -306,7 +306,6 @@ func (m *RuntimeManager) validateUserDirectories(userID string) error {
 	root := filepath.Join(m.config.StateDir, "users", userID)
 	for _, path := range []string{
 		root,
-		filepath.Join(root, "app"),
 		filepath.Join(root, "workspace"),
 		filepath.Join(root, "agent"),
 		filepath.Join(root, "agent", "home"),

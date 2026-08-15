@@ -107,13 +107,16 @@ All persistent state lives under the configured `server.state_dir`. Containers a
     .runtime-token
     android/
   users/<userId>/
-    app/
     workspace/
+      .devices.json
+      .brand.json
+      .agent-settings.json
+      .agent-personalization.json
       <note title>/
         index.md
         meta.json
         assets/
-    agent/home/
+    agent/home/              # OpenCode sessions, configuration, and credentials
 ```
 
 Back up the complete `state_dir` as one unit. Databases, OpenCode conversations, user credentials, media, and notes must remain consistent.

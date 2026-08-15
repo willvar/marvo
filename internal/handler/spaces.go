@@ -132,19 +132,19 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 	hub := collab.NewHub()
 	space := &UserSpace{
 		UserID: userID, Paths: paths, NoteStore: noteStore, Hub: hub, Media: mediaManager,
-		DeviceStore: store.NewDeviceStore(paths.App, derivedUserSecret(r.config.Server.SessionSecret, userID, "device")),
+		DeviceStore: store.NewDeviceStore(paths.Workspace, derivedUserSecret(r.config.Server.SessionSecret, userID, "device")),
 	}
 	cleanup := func() {
 		space.Close()
 	}
-	brandStore, err := store.NewBrandStore(paths.App)
+	brandStore, err := store.NewBrandStore(paths.Workspace)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("%w: load brand settings: %v", ErrUserSpaceUnavailable, err)
 	}
 	space.BrandStore = brandStore
 
-	settings, err := store.NewAgentSettingsStore(paths.App)
+	settings, err := store.NewAgentSettingsStore(paths.Workspace)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("%w: load Agent settings: %v", ErrUserSpaceUnavailable, err)
@@ -159,7 +159,7 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 		cleanup()
 		return nil, fmt.Errorf("%w: load Agent personalization: %v", ErrUserSpaceUnavailable, err)
 	}
-	globalPrompt, err := store.NewAgentGlobalPromptFile(filepath.Join(paths.Agent, "home", ".config", "opencode", "AGENTS.md"))
+	globalPrompt, err := store.NewAgentGlobalPromptFile(filepath.Join(paths.AgentHome, ".config", "opencode", "AGENTS.md"))
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("%w: initialize Agent prompt: %v", ErrUserSpaceUnavailable, err)

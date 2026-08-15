@@ -9,8 +9,8 @@ import (
 )
 
 func TestBrandStoreDefaultsAndPersistsPrivateConfiguration(t *testing.T) {
-	appDir := t.TempDir()
-	brandStore, err := NewBrandStore(appDir)
+	workspace := t.TempDir()
+	brandStore, err := NewBrandStore(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestBrandStoreDefaultsAndPersistsPrivateConfiguration(t *testing.T) {
 	if brand.Name != "我的知识库" {
 		t.Fatalf("saved brand = %#v", brand)
 	}
-	path := filepath.Join(appDir, brandFilename)
+	path := filepath.Join(workspace, brandFilename)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestBrandStoreDefaultsAndPersistsPrivateConfiguration(t *testing.T) {
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("brand mode = %o, want 600", info.Mode().Perm())
 	}
-	reloaded, err := NewBrandStore(appDir)
+	reloaded, err := NewBrandStore(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +42,8 @@ func TestBrandStoreDefaultsAndPersistsPrivateConfiguration(t *testing.T) {
 }
 
 func TestBrandStoreRejectsInvalidNamesAndSymlinks(t *testing.T) {
-	appDir := t.TempDir()
-	brandStore, err := NewBrandStore(appDir)
+	workspace := t.TempDir()
+	brandStore, err := NewBrandStore(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,15 +52,15 @@ func TestBrandStoreRejectsInvalidNamesAndSymlinks(t *testing.T) {
 			t.Fatalf("Save(%q) error = %v, want ErrInvalidBrand", name, err)
 		}
 	}
-	target := filepath.Join(appDir, "target.json")
+	target := filepath.Join(workspace, "target.json")
 	if err := os.WriteFile(target, []byte(`{"name":"untouched"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(appDir, brandFilename)
+	path := filepath.Join(workspace, brandFilename)
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewBrandStore(appDir); !errors.Is(err, ErrInvalidBrand) {
+	if _, err := NewBrandStore(workspace); !errors.Is(err, ErrInvalidBrand) {
 		t.Fatalf("symlink load error = %v, want ErrInvalidBrand", err)
 	}
 }

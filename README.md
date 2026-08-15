@@ -107,13 +107,16 @@ make dev
     .runtime-token
     android/
   users/<userId>/
-    app/
     workspace/
+      .devices.json
+      .brand.json
+      .agent-settings.json
+      .agent-personalization.json
       <笔记标题>/
         index.md
         meta.json
         assets/
-    agent/home/
+    agent/home/              # OpenCode 会话、配置与凭据
 ```
 
 备份时应把整个 `state_dir` 视为一个整体。数据库、OpenCode 会话、用户凭据、媒体和笔记均需要保持一致。

@@ -16,7 +16,7 @@ import (
 
 const (
 	DefaultBrandName  = "Marvo"
-	brandFilename     = "brand.json"
+	brandFilename     = ".brand.json"
 	maxBrandFileBytes = 8 << 10
 	MaxBrandRunes     = 100
 )

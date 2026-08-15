@@ -250,7 +250,6 @@ func testDockerClient(server *httptest.Server) *DockerClient {
 func createRuntimeDirectories(t *testing.T, stateRoot, userID string) {
 	t.Helper()
 	for _, path := range []string{
-		filepath.Join(stateRoot, "users", userID, "app"),
 		filepath.Join(stateRoot, "users", userID, "workspace"),
 		filepath.Join(stateRoot, "users", userID, "agent", "home", ".local", "share", "opencode"),
 	} {

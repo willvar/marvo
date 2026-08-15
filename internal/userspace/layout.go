@@ -17,7 +17,6 @@ type Layout struct {
 
 type Paths struct {
 	Root         string
-	App          string
 	Workspace    string
 	Agent        string
 	AgentHome    string
@@ -60,7 +59,6 @@ func (l *Layout) UserPaths(userID string) (Paths, error) {
 	agentHome := filepath.Join(agent, "home")
 	return Paths{
 		Root:         root,
-		App:          filepath.Join(root, "app"),
 		Workspace:    filepath.Join(root, "workspace"),
 		Agent:        agent,
 		AgentHome:    agentHome,
@@ -79,7 +77,6 @@ func (l *Layout) EnsureUser(userID string) (Paths, error) {
 	}
 	for _, path := range []string{
 		paths.Root,
-		paths.App,
 		paths.Workspace,
 		paths.Agent,
 		paths.AgentHome,
@@ -91,13 +88,52 @@ func (l *Layout) EnsureUser(userID string) (Paths, error) {
 			return Paths{}, fmt.Errorf("initialize user directory: %w", err)
 		}
 	}
-	if err := migrateFileWithoutOverwrite(
-		filepath.Join(paths.App, agentcredentials.LegacyFileName),
-		filepath.Join(paths.OpenCodeData, agentcredentials.FileName),
-	); err != nil {
-		return Paths{}, fmt.Errorf("migrate Agent credentials: %w", err)
+	if err := migrateLegacyAppFiles(paths); err != nil {
+		return Paths{}, fmt.Errorf("migrate legacy app directory: %w", err)
 	}
 	return paths, nil
+}
+
+func migrateLegacyAppFiles(paths Paths) error {
+	legacyApp := filepath.Join(paths.Root, "app")
+	info, err := os.Lstat(legacyApp)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("legacy app path is not a regular directory")
+	}
+
+	migrations := []struct {
+		name        string
+		destination string
+	}{
+		{name: ".agent-settings.json", destination: filepath.Join(paths.Workspace, ".agent-settings.json")},
+		{name: ".devices.json", destination: filepath.Join(paths.Workspace, ".devices.json")},
+		{name: "brand.json", destination: filepath.Join(paths.Workspace, ".brand.json")},
+		{name: agentcredentials.LegacyFileName, destination: filepath.Join(paths.OpenCodeData, agentcredentials.FileName)},
+		{name: legacyMigrationMarker, destination: filepath.Join(paths.Root, legacyMigrationMarker)},
+	}
+	for _, migration := range migrations {
+		if err := migrateFileWithoutOverwrite(filepath.Join(legacyApp, migration.name), migration.destination); err != nil {
+			return fmt.Errorf("move %s: %w", migration.name, err)
+		}
+	}
+
+	entries, err := os.ReadDir(legacyApp)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return errors.New("legacy app directory contains unsupported entries")
+	}
+	if err := os.Remove(legacyApp); err != nil {
+		return err
+	}
+	return syncDirectories(paths.Root)
 }
 
 func migrateFileWithoutOverwrite(source, destination string) error {

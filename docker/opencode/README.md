@@ -15,7 +15,7 @@ make build-agent
 
 容器使用只读根文件系统、非 root UID/GID、`cap-drop=ALL`、`no-new-privileges`，并设有 PID、内存和 CPU 限制，同时不发布宿主机端口。提供商凭据、OpenCode SQLite 会话与日志只写入该用户的 `agent/home`；笔记和媒体只写入该用户的 `workspace`。
 
-OpenCode 内置的 Exa 搜索通过 `OPENCODE_ENABLE_EXA=1` 启用。用户可在 Marvo 智能体设置中保存自己的 Exa API Key；API Key 加密后以 `marvo-credentials.json` 存放在 OpenCode 的数据目录中，并只在创建对应用户容器时作为 `EXA_API_KEY` 注入。API Key 变更后，该用户的旧容器会在处理下一次请求前重建。
+OpenCode 内置的 Exa 搜索通过 `OPENCODE_ENABLE_EXA=1` 启用。用户可在 Marvo 智能体设置中保存自己的 Exa API Key；API Key 加密后存放在 `agent/home/.local/share/opencode/marvo-credentials.json`，并只在创建对应用户容器时作为 `EXA_API_KEY` 注入。API Key 变更后，该用户的旧容器会在处理下一次请求前重建。
 
 `AGENTS.md`、`opencode.json` 和 `marvo-personalization` 固定在镜像内。容器启动时会把 `/workspace/AGENTS.md` 指向只读系统规则，并在用户的 Agent Home 中初始化运行配置。用户设置中的全局提示词位于该用户的 `agent/home/.config/opencode/AGENTS.md`，个性化规则仍由 `marvo-personalization` 管理。
 

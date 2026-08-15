@@ -115,7 +115,7 @@ func (l *Layout) MigrateLegacy(userID string, sources LegacySources) (MigrationR
 	if status.MigratedTo != "" && status.MigratedTo != userID {
 		return MigrationResult{}, fmt.Errorf("%w: legacy data was already migrated", ErrMigrationConflict)
 	}
-	if existing, ok := readMigrationMarker(paths.App); ok {
+	if existing, ok := readMigrationMarker(paths.Root); ok {
 		return existing.MigrationResult, nil
 	}
 
@@ -161,7 +161,7 @@ func (l *Layout) MigrateLegacy(userID string, sources LegacySources) (MigrationR
 		BytesCopied: copiedBytes, CompletedAt: time.Now().UTC().Truncate(time.Millisecond),
 	}
 	marker := migrationMarker{Version: 1, MigrationResult: result}
-	if err := writeMigrationMarker(paths.App, marker); err != nil {
+	if err := writeMigrationMarker(paths.Root, marker); err != nil {
 		return MigrationResult{}, err
 	}
 	stageComplete = true
@@ -194,7 +194,7 @@ func collectLegacyFiles(paths Paths, sources LegacySources) ([]copyFile, []strin
 			case name == "theme.json" || name == ".agent-personalization.json":
 				err = collectRegularFile(source, filepath.Join(paths.Workspace, name), filepath.Join("workspace", name), &files)
 			case name == ".agent-settings.json" || name == ".devices.json":
-				err = collectRegularFile(source, filepath.Join(paths.App, name), filepath.Join("app", name), &files)
+				err = collectRegularFile(source, filepath.Join(paths.Workspace, name), filepath.Join("workspace", name), &files)
 			default:
 				continue
 			}
@@ -221,7 +221,7 @@ func collectLegacyFiles(paths Paths, sources LegacySources) ([]copyFile, []strin
 			if statErr != nil {
 				return nil, nil, fmt.Errorf("inspect legacy Agent state: %w", statErr)
 			}
-			destination := filepath.Join(paths.Agent, "home", relative)
+			destination := filepath.Join(paths.AgentHome, relative)
 			stageRelative := filepath.Join("agent", "home", relative)
 			if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
 				err = collectRegularTree(source, destination, stageRelative, &files, &directories)
@@ -296,7 +296,7 @@ func collectRegularFile(source, destination, stageRelative string, files *[]copy
 }
 
 func preflightMigrationTargets(files []copyFile, directories []string, paths Paths) error {
-	roots := []string{paths.App, paths.Workspace, paths.Agent}
+	roots := []string{paths.Workspace, paths.Agent}
 	for _, root := range roots {
 		if err := requirePrivateDirectory(root); err != nil {
 			return err
@@ -455,13 +455,13 @@ func createMigrationStage(userRoot string) (string, error) {
 	return path, nil
 }
 
-func writeMigrationMarker(appDir string, marker migrationMarker) error {
+func writeMigrationMarker(userRoot string, marker migrationMarker) error {
 	data, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	path := filepath.Join(appDir, legacyMigrationMarker)
+	path := filepath.Join(userRoot, legacyMigrationMarker)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
@@ -477,8 +477,8 @@ func writeMigrationMarker(appDir string, marker migrationMarker) error {
 	return file.Close()
 }
 
-func readMigrationMarker(appDir string) (migrationMarker, bool) {
-	path := filepath.Join(appDir, legacyMigrationMarker)
+func readMigrationMarker(userRoot string) (migrationMarker, bool) {
+	path := filepath.Join(userRoot, legacyMigrationMarker)
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > 64<<10 {
 		return migrationMarker{}, false
@@ -508,7 +508,12 @@ func (l *Layout) legacyMigrationTarget() (string, error) {
 		if err != nil {
 			continue
 		}
-		if marker, ok := readMigrationMarker(paths.App); ok {
+		if marker, ok := readMigrationMarker(paths.Root); ok {
+			return marker.UserID, nil
+		}
+		// Compatibility for user spaces that have not yet been opened since
+		// the app-directory layout was retired.
+		if marker, ok := readMigrationMarker(filepath.Join(paths.Root, "app")); ok {
 			return marker.UserID, nil
 		}
 	}

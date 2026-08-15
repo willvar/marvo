@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const migrationTestUserID = "b8c42977bc4e49779e04"
@@ -49,12 +50,15 @@ func TestLegacyMigrationCopiesUserDataWithoutLegacySystemFiles(t *testing.T) {
 	}
 	paths, _ := layout.UserPaths(migrationTestUserID)
 	assertMigrationFile(t, filepath.Join(paths.Workspace, "笔记", "index.md"), "正文")
-	assertMigrationFile(t, filepath.Join(paths.App, ".agent-settings.json"), `{"variant":""}`)
-	assertMigrationFile(t, filepath.Join(paths.Agent, "home", ".local", "share", "opencode", "opencode.db"), "database")
+	assertMigrationFile(t, filepath.Join(paths.Workspace, ".agent-settings.json"), `{"variant":""}`)
+	if marker, ok := readMigrationMarker(paths.Root); !ok || marker.UserID != migrationTestUserID {
+		t.Fatalf("migration marker = %#v, present = %t", marker, ok)
+	}
+	assertMigrationFile(t, filepath.Join(paths.OpenCodeData, "opencode.db"), "database")
 	assertMigrationMissing(t, filepath.Join(paths.Workspace, ".session-secret"))
 	assertMigrationMissing(t, filepath.Join(paths.Workspace, "AGENTS.md"))
 	assertMigrationMissing(t, filepath.Join(paths.Workspace, ".search-index"))
-	assertMigrationMissing(t, filepath.Join(paths.Agent, "home", ".cache"))
+	assertMigrationMissing(t, filepath.Join(paths.AgentHome, ".cache"))
 
 	status, err = layout.InspectLegacy(sources)
 	if err != nil || status.MigratedTo != migrationTestUserID {
@@ -63,6 +67,35 @@ func TestLegacyMigrationCopiesUserDataWithoutLegacySystemFiles(t *testing.T) {
 	second, err := layout.MigrateLegacy(migrationTestUserID, sources)
 	if err != nil || second.CompletedAt != result.CompletedAt {
 		t.Fatalf("idempotent migration = %#v, error = %v", second, err)
+	}
+}
+
+func TestLegacyMigrationTargetRecognizesRetiredAppMarker(t *testing.T) {
+	layout, err := OpenLayout(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := layout.UserPaths(migrationTestUserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyApp := filepath.Join(paths.Root, "app")
+	if err := os.MkdirAll(legacyApp, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := migrationMarker{
+		Version: 1,
+		MigrationResult: MigrationResult{
+			UserID:      migrationTestUserID,
+			CompletedAt: time.Now().UTC(),
+		},
+	}
+	if err := writeMigrationMarker(legacyApp, marker); err != nil {
+		t.Fatal(err)
+	}
+	target, err := layout.legacyMigrationTarget()
+	if err != nil || target != migrationTestUserID {
+		t.Fatalf("legacy migration target = %q, error = %v", target, err)
 	}
 }
 

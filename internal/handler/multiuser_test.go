@@ -167,6 +167,12 @@ func TestUserRoutesKeepNotesDevicesAndCookiesIsolated(t *testing.T) {
 	if spaceA.Paths.Workspace == spaceB.Paths.Workspace || spaceA.Hub == spaceB.Hub || spaceA.DeviceStore == spaceB.DeviceStore || spaceA.AgentDeps == spaceB.AgentDeps {
 		t.Fatal("user spaces share a stateful dependency")
 	}
+	if _, err := os.Stat(filepath.Join(spaceA.Paths.Workspace, ".devices.json")); err != nil {
+		t.Fatalf("device state is not stored in the workspace: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(spaceA.Paths.Root, "app")); !os.IsNotExist(err) {
+		t.Fatalf("retired app directory exists or cannot be inspected: %v", err)
+	}
 }
 
 func TestUserAdminSessionIsBoundToUserAndAuthVersion(t *testing.T) {

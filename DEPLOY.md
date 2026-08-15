@@ -8,7 +8,7 @@
 ├─ nginx / HTTPS
 │    └─ Marvo（原生进程或 App 容器）
 │         ├─ control/platform.sqlite
-│         ├─ users/<userId>/app + workspace
+│         ├─ users/<userId>/workspace + agent/home
 │         └─ HTTP/SSE ──> marvo-runtime 容器
 │                              │ 受限调用 Docker API
 │                              ├─ Agent Runtime A 容器
