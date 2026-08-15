@@ -3,6 +3,7 @@ import { Dialog } from '@ark-ui/vue/dialog'
 import QrcodeVue from 'qrcode.vue'
 import { useAuthStore } from '../stores/auth'
 import { useNoteStore } from '../stores/note'
+import { useActivityStore } from '../stores/activity'
 import AgentFloating from '../components/AgentFloating.vue'
 import MarvoMark from '../components/MarvoMark.vue'
 import {
@@ -40,10 +41,12 @@ import {
   ReloadOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
+  BellOutlined,
 } from '@ant-design/icons-vue'
 
 const auth = useAuthStore()
 const noteStore = useNoteStore()
+const activityStore = useActivityStore()
 const router = useRouter()
 const route = useRoute()
 const androidApp = isMarvoAndroidApp()
@@ -176,13 +179,25 @@ const currentNoteInfo = computed(() => {
 const headerTitle = computed(() => {
   if (currentNoteInfo.value) return currentNoteInfo.value.title
   if (route.name === 'user-agent') return '智能体对话'
+  if (route.name === 'user-activity') return '活动'
   if (route.name === 'user-trash') return '回收站'
   return ''
 })
 const showHeaderAgentEntry = computed(() => route.name !== 'user-agent')
+const showHeaderActivityEntry = computed(() => route.name !== 'user-activity')
+const activityEntryTitle = computed(() => {
+  const details = []
+  if (activityStore.unread) details.push(`${activityStore.unread} 条未读`)
+  if (activityStore.pending) details.push(`${activityStore.pending} 条待回复`)
+  return details.length ? `活动：${details.join('，')}` : '活动'
+})
 
 function openAgentPage() {
   void router.push(workspaceRoute('/agent'))
+}
+
+function openActivityPage() {
+  void router.push(workspaceRoute('/activity'))
 }
 
 async function openAndroidEntry() {
@@ -245,6 +260,7 @@ async function initializeWorkspace() {
       loadTheme()
       connect()
       await Promise.all([loadBrand(), noteStore.fetchNotes()])
+      void activityStore.loadCounts().catch(() => undefined)
       workspaceInitialized = true
     }
     connectionUnavailable.value = false
@@ -270,11 +286,15 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
   window.removeEventListener('online', retryWorkspaceWhenOnline)
+  stopThemeEvents()
+  stopBrandEvents()
+  stopActivityEvents()
   disconnect()
 })
 
-on('theme_changed', () => loadTheme())
-on('brand_changed', () => void loadBrand())
+const stopThemeEvents = on('theme_changed', () => loadTheme())
+const stopBrandEvents = on('brand_changed', () => void loadBrand())
+const stopActivityEvents = on('activity_changed', (message) => void activityStore.handleChanged(message))
 
 async function openNote(title: string) {
   if (isCompact.value) siderCollapsed.value = true
@@ -550,6 +570,23 @@ async function confirmTitle() {
           <span v-if="headerError" class="dsh-header-error" :title="headerError">{{ headerError }}</span>
         </div>
         <div class="dsh-header-actions">
+          <button
+            v-if="showHeaderActivityEntry"
+            class="dsh-header-action dsh-header-activity"
+            type="button"
+            :title="activityEntryTitle"
+            :aria-label="activityEntryTitle"
+            @click="openActivityPage"
+          >
+            <span class="dsh-header-activity-icon">
+              <BellOutlined aria-hidden="true" />
+              <span v-if="activityStore.unread" class="dsh-header-activity-count">
+                {{ activityStore.unread > 99 ? '99+' : activityStore.unread }}
+              </span>
+              <span v-else-if="activityStore.pending" class="dsh-header-activity-pending" />
+            </span>
+            <span>活动</span>
+          </button>
           <button
             v-if="showHeaderAgentEntry && !androidApp"
             class="dsh-header-action dsh-header-app"
@@ -1292,6 +1329,42 @@ async function confirmTitle() {
   }
 }
 
+.dsh-header-activity-icon {
+  position: relative;
+  display: inline-flex;
+}
+
+.dsh-header-activity-count {
+  position: absolute;
+  top: -9px;
+  left: 8px;
+  min-width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0 3px;
+  border: 2px solid var(--bg-primary);
+  border-radius: 999px;
+  background: var(--text-danger);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dsh-header-activity-pending {
+  position: absolute;
+  top: -4px;
+  right: -5px;
+  width: 7px;
+  height: 7px;
+  border: 2px solid var(--bg-primary);
+  border-radius: 50%;
+  background: var(--marvo-accent-color);
+}
+
 .dsh-content {
   flex: 1;
   min-height: 0;
@@ -1369,7 +1442,12 @@ async function confirmTitle() {
     padding-right: max(10px, env(safe-area-inset-right));
   }
   .dsh-header-title {
-    max-width: 42vw;
+    max-width: 25vw;
+  }
+  .dsh-header-action {
+    gap: 4px;
+    padding-inline: 7px;
+    font-size: var(--marvo-type-11);
   }
   .dsh-header-error,
   .dsh-header-save-error {
