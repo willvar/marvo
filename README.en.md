@@ -22,7 +22,7 @@ Marvo is a self-hosted, file-first knowledge workspace. It combines Markdown not
 - **One responsive interface**: desktop, tablet, and phone share the same Vue application, with landscape, portrait, touch, light, and dark mode support.
 - **Safe editing**: SHA-256 content revisions, conditional writes, instance tokens, local drafts, and a reviewable three-way merge prevent stale pages from overwriting newer agent or browser changes.
 - **Note management**: reading and editing, tags, full-text search, media upload and transcoding, trash, and permanent deletion.
-- **Workspace agents**: powered by OpenCode, with independent conversations, attachments, images, live execution progress and file changes, provider connections, model selection, global instructions, and personalization rules.
+- **Workspace agents**: powered by OpenCode, with independent conversations, attachments, images, live execution progress and file changes, a proactive activity feed, provider connections, model selection, global instructions, and memories.
 - **Multi-user isolation**: a platform administrator creates users; every user has isolated notes, media, trash, settings, credentials, conversations, and an agent container.
 - **Device approval**: new devices request access and must be approved by the owner of that user space. User administration supports passwords, TOTP, and device revocation.
 - **Android app**: the universal APK bundles the frontend and supports QR space binding, Android-native back navigation, sharing, image saving, and in-app updates.
@@ -108,10 +108,11 @@ All persistent state lives under the configured `server.state_dir`. Containers a
     android/
   users/<userId>/
     workspace/
-      .devices.json
-      .brand.json
-      .agent-settings.json
-      .agent-personalization.json
+      .marvo/
+        state.sqlite          # Devices, space settings, memories, and activities
+        state.sqlite-wal
+        state.sqlite-shm
+      theme.json
       <note title>/
         index.md
         meta.json

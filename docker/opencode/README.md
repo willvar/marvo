@@ -17,6 +17,6 @@ make build-agent
 
 OpenCode 内置的 Exa 搜索通过 `OPENCODE_ENABLE_EXA=1` 启用。用户可在 Marvo 智能体设置中保存自己的 Exa API Key；API Key 加密后存放在 `agent/home/.local/share/opencode/marvo-credentials.json`，并只在创建对应用户容器时作为 `EXA_API_KEY` 注入。API Key 变更后，该用户的旧容器会在处理下一次请求前重建。
 
-`AGENTS.md`、`opencode.json` 和 `marvo-personalization` 固定在镜像内。容器启动时会把 `/workspace/AGENTS.md` 指向只读系统规则，并在用户的 Agent Home 中初始化运行配置。用户设置中的全局提示词位于该用户的 `agent/home/.config/opencode/AGENTS.md`，个性化规则仍由 `marvo-personalization` 管理。
+`AGENTS.md`、`opencode.json` 和 `marvo_*` 原生工具固定在镜像内。容器启动时会把 `/workspace/AGENTS.md` 指向只读系统规则，并在用户的 Agent Home 中初始化运行配置与工具入口。用户设置中的全局提示词和记忆会同步到该用户的 `agent/home/.config/opencode/AGENTS.md`；结构化状态由工具通过 Runtime Gateway 写入用户自己的 Marvo 状态库。`marvo_sessions` 由 Runtime Gateway 代持 OpenCode 认证，只读返回经过过滤的会话标题、普通消息文本和附件名称，智能体不会接触运行时认证信息。
 
 镜像当前包含 OpenCode 1.18.15，以及 `curl`、`wget`、Git、ffmpeg/ffprobe、ImageMagick、HEIF/WebP、ExifTool、Poppler、Python、jq、rg 和压缩工具。
