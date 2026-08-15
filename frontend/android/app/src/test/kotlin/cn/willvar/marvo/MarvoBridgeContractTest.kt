@@ -52,17 +52,58 @@ class MarvoBridgeContractTest {
     }
 
     @Test
+    fun validatesColorSchemePreferenceAndResolvedValue() {
+        val system =
+            MarvoBridgeContract.validate(
+                request(
+                    "colorScheme",
+                    JSONObject().put("preference", "system").put("resolved", "dark"),
+                ),
+            )
+        assertEquals("system", system.payload?.getString("preference"))
+        assertEquals("dark", system.payload?.getString("resolved"))
+
+        val explicit =
+            MarvoBridgeContract.validate(
+                request(
+                    "colorScheme",
+                    JSONObject().put("preference", "light").put("resolved", "light"),
+                ),
+            )
+        assertEquals("light", explicit.payload?.getString("preference"))
+
+        assertThrows(MarvoBridgeException::class.java) {
+            MarvoBridgeContract.validate(
+                request(
+                    "colorScheme",
+                    JSONObject().put("preference", "light").put("resolved", "dark"),
+                ),
+            )
+        }
+        assertThrows(MarvoBridgeException::class.java) {
+            MarvoBridgeContract.validate(
+                request(
+                    "colorScheme",
+                    JSONObject().put("preference", "system").put("resolved", "sepia"),
+                ),
+            )
+        }
+    }
+
+    @Test
     fun shareRequiresTextOrFile() {
         assertThrows(MarvoBridgeException::class.java) {
             MarvoBridgeContract.validate(request("share", JSONObject()))
         }
     }
 
-    private fun request(method: String, payload: JSONObject? = null): String =
+    private fun request(
+        method: String,
+        payload: JSONObject? = null,
+    ): String =
         JSONObject()
             .put("id", "request-1")
             .put("method", method)
             .put("payload", payload ?: JSONObject.NULL)
             .toString()
 }
-

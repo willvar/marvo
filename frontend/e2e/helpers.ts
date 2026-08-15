@@ -286,11 +286,7 @@ export async function openAgentSessions(page: Page) {
   await expect(trigger.or(desktopSessions)).toBeVisible()
   if (await desktopSessions.isVisible()) return false
   const dialog = page.getByRole('dialog', { name: '对话列表' })
-  const dialogIsOpen = (await dialog.count()) > 0 && (await dialog.getAttribute('data-state')) === 'open'
-  if (!dialogIsOpen) {
-    await expect(dialog).toBeHidden()
-    await trigger.click()
-  }
+  if (!(await dialog.isVisible())) await trigger.click()
   await expect(dialog).toBeVisible()
   return true
 }

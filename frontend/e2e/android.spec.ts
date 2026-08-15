@@ -3,10 +3,15 @@ import { approveDevice, platformContext, workspacePath } from './helpers'
 
 test('Android 原生层会收到用户最终生效的明暗主题', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium-landscape')
-  let darkMode = true
+  let darkMode: boolean | 'system' = true
+  let themeAvailable = true
 
-  await page.route('**/api/user/*/theme', (route) =>
-    route.fulfill({
+  await page.route('**/api/user/*/theme', (route) => {
+    if (!themeAvailable) {
+      void route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"temporarily unavailable"}' })
+      return
+    }
+    void route.fulfill({
       json: {
         darkMode,
         fontSize: 14,
@@ -15,12 +20,12 @@ test('Android 原生层会收到用户最终生效的明暗主题', async ({ pag
         contentWidth: 'full',
         accentColor: '#4f46e5',
       },
-    }),
-  )
+    })
+  })
 
   await approveDevice(page, 'Playwright Android theme bridge')
   await page.addInitScript(() => {
-    const messages: string[] = []
+    const messages: Array<{ preference: string; resolved: string }> = []
     const browserUserAgent = navigator.userAgent
     Object.defineProperty(navigator, 'userAgent', {
       configurable: true,
@@ -29,8 +34,14 @@ test('Android 原生层会收到用户最终生效的明暗主题', async ({ pag
     const native = {
       onmessage: null as null | ((event: { data: string }) => void),
       postMessage(raw: string) {
-        const request = JSON.parse(raw) as { id: string; method: string; payload?: { style?: string } }
-        if (request.method === 'statusBar' && request.payload?.style) messages.push(request.payload.style)
+        const request = JSON.parse(raw) as {
+          id: string
+          method: string
+          payload?: { preference?: string; resolved?: string }
+        }
+        if (request.method === 'colorScheme' && request.payload?.preference && request.payload.resolved) {
+          messages.push({ preference: request.payload.preference, resolved: request.payload.resolved })
+        }
         queueMicrotask(() => native.onmessage?.({ data: JSON.stringify({ id: request.id, ok: true, result: null }) }))
       },
     }
@@ -40,9 +51,16 @@ test('Android 原生层会收到用户最终生效的明暗主题', async ({ pag
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe('dark')
   await expect
     .poll(() =>
-      page.evaluate(() => (window as typeof window & { __marvoThemeMessages: string[] }).__marvoThemeMessages),
+      page.evaluate(() =>
+        (
+          window as typeof window & {
+            __marvoThemeMessages: Array<{ preference: string; resolved: string }>
+          }
+        ).__marvoThemeMessages.some((message) => message.preference === 'dark' && message.resolved === 'dark'),
+      ),
     )
-    .toContain('dark')
+    .toBe(true)
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark')
 
   await page.goto(workspacePath('/login?mode=admin'))
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe('dark')
@@ -54,12 +72,62 @@ test('Android 原生层会收到用户最终生效的明暗主题', async ({ pag
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe('light')
   await expect
     .poll(() =>
-      page.evaluate(() => (window as typeof window & { __marvoThemeMessages: string[] }).__marvoThemeMessages),
+      page.evaluate(() =>
+        (
+          window as typeof window & {
+            __marvoThemeMessages: Array<{ preference: string; resolved: string }>
+          }
+        ).__marvoThemeMessages.some((message) => message.preference === 'light' && message.resolved === 'light'),
+      ),
     )
-    .toContain('light')
+    .toBe(true)
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('light only')
 
   await page.goto(workspacePath('/login?mode=admin'))
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe('light')
+
+  darkMode = 'system'
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto(workspacePath())
+  await page.reload()
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe('dark')
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          window as typeof window & {
+            __marvoThemeMessages: Array<{ preference: string; resolved: string }>
+          }
+        ).__marvoThemeMessages.some((message) => message.preference === 'system' && message.resolved === 'dark'),
+      ),
+    )
+    .toBe(true)
+
+  await page.emulateMedia({ colorScheme: 'light' })
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe('light')
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('light only')
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          window as typeof window & {
+            __marvoThemeMessages: Array<{ preference: string; resolved: string }>
+          }
+        ).__marvoThemeMessages.some((message) => message.preference === 'system' && message.resolved === 'light'),
+      ),
+    )
+    .toBe(true)
+
+  darkMode = true
+  await page.reload()
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe('dark')
+  themeAvailable = false
+  await page.reload()
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.colorScheme)).toBe('dark')
 })
 
 test('APP 返回协议按浮层、业务子页和工作区根页逐层处理', async ({ page }) => {
@@ -221,6 +289,14 @@ test('工作区 Android 入口提供扫码下载、直接下载与登录二维�
     }),
   )
   await approveDevice(page, 'Playwright Android entry')
+  const appEntry = page.getByRole('button', { name: 'APP', exact: true })
+  const agentEntry = page.getByRole('button', { name: '智能体', exact: true })
+  await expect(appEntry).toBeVisible()
+  await expect(agentEntry).toBeVisible()
+
+  await page.goto(workspacePath('/trash'))
+  await expect(appEntry).toBeVisible()
+  await expect(agentEntry).toBeVisible()
   await page.getByRole('button', { name: 'APP', exact: true }).click()
 
   const dialog = page.getByRole('dialog', { name: 'Android APP' })
@@ -246,6 +322,11 @@ test('工作区 Android 入口提供扫码下载、直接下载与登录二维�
   expect(bounds).not.toBeNull()
   expect(bounds!.x).toBeGreaterThanOrEqual(0)
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width)
+
+  await dialog.getByRole('button', { name: '完成' }).click()
+  await page.goto(workspacePath('/agent'))
+  await expect(appEntry).toHaveCount(0)
+  await expect(agentEntry).toHaveCount(0)
 })
 
 test('Android APP 壳内不显示网页端 APP 入口', async ({ page }) => {

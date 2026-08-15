@@ -127,6 +127,16 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await search.press('Enter')
   await expect(page).toHaveURL(new RegExp(`/note/${encodedTitle}$`))
   await expect(page).toHaveTitle(`${title} · ${brand}`)
+  await expect(appEntry).toBeVisible()
+  await expect(agentEntry).toBeVisible()
+  const [noteAppEntryBounds, noteAgentEntryBounds] = await Promise.all([
+    appEntry.boundingBox(),
+    agentEntry.boundingBox(),
+  ])
+  expect(noteAppEntryBounds).not.toBeNull()
+  expect(noteAgentEntryBounds).not.toBeNull()
+  expect(noteAppEntryBounds!.x + noteAppEntryBounds!.width).toBeLessThanOrEqual(noteAgentEntryBounds!.x)
+  expect(noteAgentEntryBounds!.x + noteAgentEntryBounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width)
   const editableHeaderTitle = page.locator('.dsh-header-title')
   await expect(editableHeaderTitle).toHaveText(title)
   await expect(editableHeaderTitle).toHaveClass(/is-clickable/)
@@ -325,6 +335,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect.poll(() => sessionItems.count()).toBeGreaterThan(0)
   const sessionCount = await sessionItems.count()
   await page.getByRole('button', { name: '新对话', exact: true }).click()
+  if (compactAgentSessions) await expect(page.getByRole('dialog', { name: '对话列表' })).toBeHidden()
   await openAgentSessions(page)
   await expect(sessionItems).toHaveCount(sessionCount + 1)
   const activeSession = sessionItems.first()
@@ -390,7 +401,10 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   expect(await page.locator('.x-conversations-loading').count()).toBe(0)
   await expect(otherSession).toHaveClass(/active/)
   await activeSession.click()
-  if (compactAgentSessions) await openAgentSessions(page)
+  if (compactAgentSessions) {
+    await expect(page.getByRole('dialog', { name: '对话列表' })).toBeHidden()
+    await openAgentSessions(page)
+  }
   await expect(activeSession).toHaveClass(/active/)
   releaseHistory()
   await historyFinished
