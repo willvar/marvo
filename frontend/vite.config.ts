@@ -5,11 +5,11 @@ const apiTarget = process.env.VITE_API_TARGET || 'http://localhost:5090'
 const apiProxy = {
   '/api': {
     target: apiTarget,
-    changeOrigin: true,
+    changeOrigin: false,
   },
   '/static': {
     target: apiTarget,
-    changeOrigin: true,
+    changeOrigin: false,
   },
 }
 
