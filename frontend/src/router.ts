@@ -83,6 +83,18 @@ function claimStaleAssetReload(target: string) {
   }
 }
 
+function recoverStaleAssets(target: string) {
+  if (!claimStaleAssetReload(target)) return
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  if (target === current) window.location.reload()
+  else window.location.assign(target)
+}
+
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  recoverStaleAssets(`${window.location.pathname}${window.location.search}${window.location.hash}`)
+})
+
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -178,8 +190,7 @@ router.afterEach((to) => {
 router.onError((error, to) => {
   if (!isStaleDynamicImportError(error)) return
   const target = to.fullPath || `${window.location.pathname}${window.location.search}${window.location.hash}`
-  if (!claimStaleAssetReload(target)) return
-  window.location.assign(target)
+  recoverStaleAssets(target)
 })
 
 void router.isReady().then(

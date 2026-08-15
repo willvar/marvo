@@ -517,6 +517,18 @@ test('路由资源版本失效时自动恢复到当前前端版本', async ({ pa
   await expect(page.getByRole('heading', { name: '回收站' })).toBeVisible()
   expect(trashModuleRequests).toBeGreaterThanOrEqual(2)
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('marvo.staleAssetReload'))).toBeNull()
+
+  const preloadReload = page.waitForEvent('framenavigated', (frame) => frame === page.mainFrame())
+  await page.evaluate(() => {
+    setTimeout(() => {
+      const event = new Event('vite:preloadError', { cancelable: true })
+      const accepted = window.dispatchEvent(event)
+      sessionStorage.setItem('marvo.preloadRecoveryPrevented', String(!accepted && event.defaultPrevented))
+    })
+  })
+  await preloadReload
+  await expect(page.getByRole('heading', { name: '回收站' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('marvo.preloadRecoveryPrevented'))).toBe('true')
 })
 
 test('桌面端刷新后保留笔记列表展开状态', async ({ page }, testInfo) => {
