@@ -5,6 +5,7 @@ ANDROID_CHECK_ORIGIN ?= http://127.0.0.1:5080
 ANDROID_GRADLE := frontend/android/run-gradle.sh -p frontend/android
 
 build: build-frontend
+	go test -tags marvo_web ./frontend
 	CGO_ENABLED=0 go build -tags marvo_web -ldflags "-s -w -X 'main.Version=$(VERSION)'" -o dist/marvo .
 
 build-frontend:
@@ -74,8 +75,9 @@ preview: start-runtime build-frontend
 
 test: test-go test-android
 
-test-go:
+test-go: build-frontend
 	go test ./...
+	go test -tags marvo_web ./frontend
 
 test-android: build-frontend
 	$(ANDROID_GRADLE) :app:testDebugUnitTest -Pmarvo.serverOrigin="$(ANDROID_CHECK_ORIGIN)"

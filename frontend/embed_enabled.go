@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-//go:embed dist/*
+//go:embed all:dist
 var assets embed.FS
 
 func Handler() http.Handler {
