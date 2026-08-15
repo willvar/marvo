@@ -6,6 +6,10 @@
 
 <p align="center"><strong>Markdown Revolution</strong></p>
 
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-1f6feb.svg" alt="AGPL-3.0-only"></a>
+</p>
+
 <p align="center">中文 | <a href="README.en.md">English</a></p>
 
 Marvo（码窝）是一个可自行托管、以文件为核心的知识工作区。它把 Markdown 笔记、媒体、响应式编辑界面和可直接操作工作区的智能体整合在同一套系统中，同时为每个用户提供独立的数据空间、设备审批和智能体运行环境。
@@ -146,3 +150,9 @@ make dev
 ## 参与贡献
 
 欢迎提交问题、文档、测试和代码。涉及用户隔离、认证、文件布局、智能体运行边界或关键交互的改动，请先在 Issue 中说明目标与方案。提交前请阅读[贡献指南](CONTRIBUTING.md)。
+
+## 开源协议
+
+Marvo 根据 [GNU Affero General Public License v3.0 only](LICENSE) 开源。
+
+Copyright (C) 2026 William Varmus。仓库中另有协议或版权声明的第三方代码与资产，继续遵循各自的许可条款。

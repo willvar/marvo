@@ -6,6 +6,10 @@
 
 <p align="center"><strong>Markdown Revolution</strong></p>
 
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-1f6feb.svg" alt="AGPL-3.0-only"></a>
+</p>
+
 <p align="center"><a href="README.md">中文</a> | English</p>
 
 Marvo is a self-hosted, file-first knowledge workspace. It combines Markdown notes, media, a responsive editing interface, and agents that can work directly inside the workspace, while giving every user a separate data space, device approval flow, and agent runtime.
@@ -146,3 +150,9 @@ In both cases, nginx proxies all traffic to one Marvo HTTP port because the Vue 
 ## Contributing
 
 Issues, documentation, tests, and code contributions are welcome. For changes involving user isolation, authentication, the on-disk layout, agent runtime boundaries, or critical interactions, open an issue describing the goal and proposed approach first. Read the [contributing guide](CONTRIBUTING.en.md) before submitting a pull request.
+
+## License
+
+Marvo is open source under the [GNU Affero General Public License v3.0 only](LICENSE).
+
+Copyright (C) 2026 William Varmus. Third-party code and assets carrying separate license or copyright notices remain subject to their respective terms.
