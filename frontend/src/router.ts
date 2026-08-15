@@ -13,6 +13,10 @@ function routeParameter(value: unknown) {
 
 function routeTitleParts(route: RouteLocationNormalizedLoaded) {
   switch (route.name) {
+    case 'landing':
+      return []
+    case 'not-found':
+      return ['页面未找到']
     case 'platform-login':
       return ['平台登录']
     case 'platform-users':
@@ -99,6 +103,11 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
+      path: '/',
+      name: 'landing',
+      component: () => import('./pages/Landing.vue'),
+    },
+    {
       path: '/admin/login',
       name: 'platform-login',
       component: () => import('./pages/admin/Login.vue'),
@@ -152,8 +161,11 @@ export const router = createRouter({
         { path: 'trash', name: 'user-trash', component: () => import('./pages/desktop/Trash.vue') },
       ],
     },
-    { path: '/', redirect: '/admin' },
-    { path: '/:pathMatch(.*)*', redirect: '/admin' },
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      component: () => import('./pages/NotFound.vue'),
+    },
   ],
 })
 
