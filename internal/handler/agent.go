@@ -35,16 +35,9 @@ type AgentDeps struct {
 	globalPromptFile *store.AgentGlobalPromptFile
 	promptMu         sync.Mutex
 	sessionRuns      map[string]agentSessionRun
-	runMu            sync.Mutex
-	noteRuns         map[string]agentNoteRun
 	providerMu       sync.Mutex
 	providerAttempts map[string]*agentProviderOAuthAttempt
 	providerBusy     map[string]string
-}
-
-type agentNoteRun struct {
-	SessionID string
-	Reserved  time.Time
 }
 
 type agentPromptContext struct {
@@ -72,7 +65,6 @@ func NewAgentDeps(
 		personalization:  personalization,
 		globalPromptFile: globalPromptFile,
 		sessionRuns:      make(map[string]agentSessionRun),
-		noteRuns:         make(map[string]agentNoteRun),
 		providerAttempts: make(map[string]*agentProviderOAuthAttempt),
 		providerBusy:     make(map[string]string),
 	}
@@ -140,9 +132,8 @@ func (d *AgentDeps) ProxyJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	promptSessionID := agentPromptSessionID(decodedPath, r.Method)
-	noteTitle := ""
 	if len(bodyData) > 0 {
-		bodyData, noteTitle, err = applyMarvoPromptContext(decodedPath, r.Method, bodyData)
+		bodyData, err = applyMarvoPromptContext(decodedPath, r.Method, bodyData)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "无效的智能体上下文"})
 			return
@@ -159,20 +150,8 @@ func (d *AgentDeps) ProxyJSON(w http.ResponseWriter, r *http.Request) {
 		body = bytes.NewReader(bodyData)
 	}
 	attachmentSessionID := attachmentPromptSession(decodedPath, r.Method, bodyData)
-	if noteTitle != "" {
-		if err := d.reserveNoteRun(r.Context(), noteTitle, promptSessionID); err != nil {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error": "这篇笔记已有智能体任务正在运行",
-				"code":  "agent_note_busy",
-			})
-			return
-		}
-	}
 	if promptSessionID != "" {
 		if err := d.beginAgentPrompt(r.Context(), promptSessionID); err != nil {
-			if noteTitle != "" {
-				d.releaseNoteRun(noteTitle, promptSessionID)
-			}
 			if errors.Is(err, errAgentGlobalPromptPending) {
 				writeJSON(w, http.StatusConflict, map[string]any{
 					"error": "全局提示词将在当前智能体任务结束后生效，请稍后发送",
@@ -187,9 +166,6 @@ func (d *AgentDeps) ProxyJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	if attachmentSessionID != "" {
 		if err := d.prepareAttachmentPrompt(r.Context(), attachmentSessionID); err != nil {
-			if noteTitle != "" {
-				d.releaseNoteRun(noteTitle, promptSessionID)
-			}
 			d.releaseAgentPrompt(promptSessionID)
 			slog.Error("agent proxy: prepare attachment context failed", "session", attachmentSessionID, "error", err)
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "无法在发送附件前整理会话上下文，请重试"})
@@ -214,15 +190,11 @@ func (d *AgentDeps) ProxyJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	if noteTitle != "" && resp.StatusCode >= 400 {
-		d.releaseNoteRun(noteTitle, promptSessionID)
-	}
 	if resp.StatusCode >= 400 || isSynchronousPromptPath(decodedPath, r.Method) {
 		d.releaseAgentPrompt(promptSessionID)
 	}
 	if resp.StatusCode < 400 {
 		if abortedSession := abortedSessionID(decodedPath, r.Method); abortedSession != "" {
-			d.releaseSessionRuns(abortedSession)
 			d.releaseAgentPrompt(abortedSession)
 		}
 	}
@@ -320,9 +292,9 @@ func isSynchronousPromptPath(path, method string) bool {
 	return method == http.MethodPost && len(parts) == 3 && parts[0] == "session" && parts[1] != "" && parts[2] == "prompt"
 }
 
-func applyMarvoPromptContext(path, method string, body []byte) ([]byte, string, error) {
+func applyMarvoPromptContext(path, method string, body []byte) ([]byte, error) {
 	if method != http.MethodPost || !isPromptPath(path) || len(body) == 0 {
-		return body, "", nil
+		return body, nil
 	}
 
 	var payload map[string]json.RawMessage
@@ -331,14 +303,14 @@ func applyMarvoPromptContext(path, method string, body []byte) ([]byte, string, 
 		if err == nil {
 			err = errors.New("prompt body must be an object")
 		}
-		return nil, "", err
+		return nil, err
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("prompt body must contain one JSON value")
 		}
-		return nil, "", err
+		return nil, err
 	}
 
 	delete(payload, "system")
@@ -346,46 +318,44 @@ func applyMarvoPromptContext(path, method string, body []byte) ([]byte, string, 
 	delete(payload, "marvoContext")
 	if !hasContext || bytes.Equal(bytes.TrimSpace(rawContext), []byte("null")) {
 		result, err := json.Marshal(payload)
-		return result, "", err
+		return result, err
 	}
 
 	var promptContext agentPromptContext
 	contextDecoder := json.NewDecoder(bytes.NewReader(rawContext))
 	contextDecoder.DisallowUnknownFields()
 	if err := contextDecoder.Decode(&promptContext); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if err := contextDecoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("marvo context must contain one JSON value")
 		}
-		return nil, "", err
+		return nil, err
 	}
 
-	noteTitle := ""
 	if promptContext.Note != nil {
-		noteTitle = promptContext.Note.Title
-		if err := store.ValidateTitle(noteTitle); err != nil {
-			return nil, "", err
+		if err := store.ValidateTitle(promptContext.Note.Title); err != nil {
+			return nil, err
 		}
 	}
 	if promptContext.Viewport != nil {
 		viewport := promptContext.Viewport
 		if viewport.Width < 1 || viewport.Width > 100_000 || viewport.Height < 1 || viewport.Height > 100_000 ||
 			viewport.DevicePixelRatio <= 0 || viewport.DevicePixelRatio > 16 {
-			return nil, "", errors.New("invalid viewport")
+			return nil, errors.New("invalid viewport")
 		}
 	}
 
 	if system := renderMarvoPromptContext(promptContext); system != "" {
 		encodedSystem, err := json.Marshal(system)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		payload["system"] = encodedSystem
 	}
 	result, err := json.Marshal(payload)
-	return result, noteTitle, err
+	return result, err
 }
 
 func renderMarvoPromptContext(context agentPromptContext) string {
@@ -556,52 +526,6 @@ func abortedSessionID(path, method string) string {
 		return parts[1]
 	}
 	return ""
-}
-
-func (d *AgentDeps) reserveNoteRun(ctx context.Context, title, sessionID string) error {
-	d.refreshNoteRuns(ctx)
-	d.runMu.Lock()
-	defer d.runMu.Unlock()
-	if current, exists := d.noteRuns[title]; exists && current.SessionID != "" {
-		return errors.New("note already has an Agent run")
-	}
-	d.noteRuns[title] = agentNoteRun{SessionID: sessionID, Reserved: time.Now()}
-	return nil
-}
-
-func (d *AgentDeps) refreshNoteRuns(parent context.Context) {
-	statuses, err := d.openCodeSessionStatuses(parent)
-	if err != nil {
-		return
-	}
-	now := time.Now()
-	d.runMu.Lock()
-	for title, run := range d.noteRuns {
-		status, exists := statuses[run.SessionID]
-		busy := exists && isBusyAgentStatus(status.Type)
-		if !busy && now.Sub(run.Reserved) > 5*time.Second {
-			delete(d.noteRuns, title)
-		}
-	}
-	d.runMu.Unlock()
-}
-
-func (d *AgentDeps) releaseNoteRun(title, sessionID string) {
-	d.runMu.Lock()
-	if current := d.noteRuns[title]; current.SessionID == sessionID {
-		delete(d.noteRuns, title)
-	}
-	d.runMu.Unlock()
-}
-
-func (d *AgentDeps) releaseSessionRuns(sessionID string) {
-	d.runMu.Lock()
-	for title, run := range d.noteRuns {
-		if run.SessionID == sessionID {
-			delete(d.noteRuns, title)
-		}
-	}
-	d.runMu.Unlock()
 }
 
 func (d *AgentDeps) ProxyGlobalSSE(w http.ResponseWriter, r *http.Request) {

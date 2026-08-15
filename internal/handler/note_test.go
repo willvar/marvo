@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"marvo/internal/store"
 )
@@ -44,15 +43,13 @@ func TestAttachmentURLEscapesPathSegments(t *testing.T) {
 	}
 }
 
-func TestBrowserContentWriteStillUsesRevisionWhileNoteAgentIsBusy(t *testing.T) {
+func TestBrowserContentWriteUsesRevision(t *testing.T) {
 	noteStore := store.NewNoteStore(t.TempDir())
 	snapshot, err := noteStore.CreateNote("busy-note", "Agent base", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent := NewAgentDeps("http://unused.invalid", make(chan struct{}), nil, nil, nil)
-	agent.noteRuns["busy-note"] = agentNoteRun{SessionID: "ses_busy", Reserved: time.Now()}
-	deps := &Dependencies{NoteStore: noteStore, AgentDeps: agent}
+	deps := &Dependencies{NoteStore: noteStore}
 	body, _ := json.Marshal(map[string]string{
 		"content":        "browser overwrite",
 		"base_revision":  snapshot.ContentRevision,

@@ -11,19 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 )
 
 func TestApplyMarvoPromptContext(t *testing.T) {
 	body := []byte(`{"system":"client supplied system","marvoContext":{"note":{"title":"测试 note"},"viewport":{"width":1366,"height":768,"devicePixelRatio":1.5}},"parts":[]}`)
-	result, title, err := applyMarvoPromptContext("session/ses_1/prompt_async", http.MethodPost, body)
+	result, err := applyMarvoPromptContext("session/ses_1/prompt_async", http.MethodPost, body)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if title != "测试 note" {
-		t.Fatalf("note title = %q", title)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(result, &payload); err != nil {
@@ -43,7 +38,7 @@ func TestApplyMarvoPromptContext(t *testing.T) {
 		`{"marvoContext":{"viewport":{"width":0,"height":768,"devicePixelRatio":1}}}`,
 		`{"marvoContext":{"unexpected":true}}`,
 	} {
-		if _, _, err := applyMarvoPromptContext("session/ses_1/prompt_async", http.MethodPost, []byte(invalid)); err == nil {
+		if _, err := applyMarvoPromptContext("session/ses_1/prompt_async", http.MethodPost, []byte(invalid)); err == nil {
 			t.Fatalf("invalid context accepted: %s", invalid)
 		}
 	}
@@ -285,13 +280,6 @@ func TestAgentProxyInjectsSavedModelAndLoadsGlobalPromptFromOpenCodeRules(t *tes
 		strings.Contains(system, "始终使用中文") {
 		t.Fatalf("global instructions = %q, request system = %q", globalInstructions, system)
 	}
-	deps.runMu.Lock()
-	_, actualLocked := deps.noteRuns["actual-note"]
-	_, spoofedLocked := deps.noteRuns["should-not-lock"]
-	deps.runMu.Unlock()
-	if !actualLocked || spoofedLocked {
-		t.Fatalf("note locks: actual=%v spoofed=%v", actualLocked, spoofedLocked)
-	}
 }
 
 func TestGlobalPromptActivationWaitsForRunningSessions(t *testing.T) {
@@ -469,23 +457,12 @@ func TestAgentProxyInjectsOpenCodeModelBeforeSettingsAreSaved(t *testing.T) {
 	}
 }
 
-func TestAgentProxyAllowsDifferentNotesButLocksSameNote(t *testing.T) {
-	var mu sync.Mutex
-	statuses := map[string]map[string]string{}
-	called := map[string]int{}
+func TestAgentProxyAllowsSameNoteContextAcrossSessions(t *testing.T) {
+	called := make(map[string]int)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/session/status" {
-			mu.Lock()
-			defer mu.Unlock()
-			_ = json.NewEncoder(w).Encode(statuses)
-			return
-		}
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		if len(parts) == 3 && parts[0] == "session" && parts[2] == "prompt_async" {
-			mu.Lock()
 			called[parts[1]]++
-			statuses[parts[1]] = map[string]string{"type": "busy"}
-			mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -494,8 +471,8 @@ func TestAgentProxyAllowsDifferentNotesButLocksSameNote(t *testing.T) {
 	defer upstream.Close()
 
 	deps := NewAgentDeps(upstream.URL, make(chan struct{}), nil, nil, nil)
-	request := func(sessionID, title string) *httptest.ResponseRecorder {
-		body := `{"marvoContext":{"note":{"title":"` + title + `"}},"parts":[{"type":"text","text":"test"}]}`
+	request := func(sessionID string) *httptest.ResponseRecorder {
+		body := `{"marvoContext":{"note":{"title":"note-a"}},"parts":[{"type":"text","text":"test"}]}`
 		req := httptest.NewRequest(http.MethodPost, "/api/agent/session/"+sessionID+"/prompt_async", strings.NewReader(body))
 		req.SetPathValue("path", "session/"+sessionID+"/prompt_async")
 		recorder := httptest.NewRecorder()
@@ -503,43 +480,13 @@ func TestAgentProxyAllowsDifferentNotesButLocksSameNote(t *testing.T) {
 		return recorder
 	}
 
-	if response := request("one", "note-a"); response.Code != http.StatusNoContent {
-		t.Fatalf("first prompt status = %d, body = %s", response.Code, response.Body.String())
+	for _, sessionID := range []string{"one", "two"} {
+		if response := request(sessionID); response.Code != http.StatusNoContent {
+			t.Fatalf("prompt %s status = %d, body = %s", sessionID, response.Code, response.Body.String())
+		}
 	}
-	if response := request("two", "note-a"); response.Code != http.StatusConflict {
-		t.Fatalf("same-note prompt status = %d, want 409", response.Code)
-	}
-	if response := request("two", "note-b"); response.Code != http.StatusNoContent {
-		t.Fatalf("different-note prompt status = %d, body = %s", response.Code, response.Body.String())
-	}
-
-	mu.Lock()
 	if called["one"] != 1 || called["two"] != 1 {
-		mu.Unlock()
 		t.Fatalf("upstream calls = %#v", called)
-	}
-	mu.Unlock()
-
-	deps.runMu.Lock()
-	_, reserved := deps.noteRuns["note-a"]
-	deps.runMu.Unlock()
-	if !reserved {
-		t.Fatal("accepted note task did not retain its Agent concurrency reservation")
-	}
-	mu.Lock()
-	statuses["one"] = map[string]string{"type": "idle"}
-	mu.Unlock()
-	deps.runMu.Lock()
-	run := deps.noteRuns["note-a"]
-	run.Reserved = time.Now().Add(-6 * time.Second)
-	deps.noteRuns["note-a"] = run
-	deps.runMu.Unlock()
-	deps.refreshNoteRuns(context.Background())
-	deps.runMu.Lock()
-	_, reserved = deps.noteRuns["note-a"]
-	deps.runMu.Unlock()
-	if reserved {
-		t.Fatal("idle Agent task retained its concurrency reservation")
 	}
 }
 
