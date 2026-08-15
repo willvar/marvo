@@ -71,4 +71,3 @@ internal object MarvoBridgeScripts {
         })();
         """.trimIndent()
 }
-

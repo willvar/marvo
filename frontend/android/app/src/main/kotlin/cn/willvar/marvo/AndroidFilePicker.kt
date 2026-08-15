@@ -57,12 +57,19 @@ internal class AndroidFilePicker(
         val directCapture = params.isCaptureEnabled && capture != null
         val launch =
             when {
-                directCapture -> capture
-                capture != null ->
+                directCapture -> {
+                    capture
+                }
+
+                capture != null -> {
                     Intent.createChooser(document, chooserTitle(capture)).apply {
                         putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(capture))
                     }
-                else -> document
+                }
+
+                else -> {
+                    document
+                }
             }
         val permission = capturePermission(capture)
         if (permission != null && ContextCompat.checkSelfPermission(activity, permission) != PackageManager.PERMISSION_GRANTED) {
@@ -109,20 +116,32 @@ internal class AndroidFilePicker(
         val type = normalized.firstOrNull().orEmpty()
         val action =
             when {
-                normalized.any { it.startsWith("image/") } || type.startsWith("image/") ->
+                normalized.any { it.startsWith("image/") } || type.startsWith("image/") -> {
                     MediaStore.ACTION_IMAGE_CAPTURE
-                normalized.any { it.startsWith("video/") } || type.startsWith("video/") ->
+                }
+
+                normalized.any { it.startsWith("video/") } || type.startsWith("video/") -> {
                     MediaStore.ACTION_VIDEO_CAPTURE
-                normalized.any { it.startsWith("audio/") } || type.startsWith("audio/") ->
+                }
+
+                normalized.any { it.startsWith("audio/") } || type.startsWith("audio/") -> {
                     MediaStore.Audio.Media.RECORD_SOUND_ACTION
-                else -> return null
+                }
+
+                else -> {
+                    return null
+                }
             }
         val manager = activity.packageManager
         val hardware =
             when (action) {
-                MediaStore.ACTION_IMAGE_CAPTURE, MediaStore.ACTION_VIDEO_CAPTURE ->
+                MediaStore.ACTION_IMAGE_CAPTURE, MediaStore.ACTION_VIDEO_CAPTURE -> {
                     manager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
-                else -> manager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
+                }
+
+                else -> {
+                    manager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
+                }
             }
         if (!hardware) return null
         val intent = Intent(action)
@@ -149,8 +168,7 @@ internal class AndroidFilePicker(
             .putExtra(
                 Intent.EXTRA_ALLOW_MULTIPLE,
                 params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE,
-            )
-            .apply {
+            ).apply {
                 if (types.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, types.toTypedArray())
             }
     }
@@ -168,11 +186,21 @@ internal class AndroidFilePicker(
         val data = result.data
         val values =
             when {
-                data?.clipData != null ->
+                data?.clipData != null -> {
                     Array(data.clipData!!.itemCount) { index -> data.clipData!!.getItemAt(index).uri }
-                data?.data != null -> arrayOf(data.data!!)
-                captureUri != null -> arrayOf(captureUri!!)
-                else -> WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+                }
+
+                data?.data != null -> {
+                    arrayOf(data.data!!)
+                }
+
+                captureUri != null -> {
+                    arrayOf(captureUri!!)
+                }
+
+                else -> {
+                    WebChromeClient.FileChooserParams.parseResult(result.resultCode, data)
+                }
             }
         target.onReceiveValue(values)
         if (data?.data != null || data?.clipData != null) {

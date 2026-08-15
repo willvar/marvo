@@ -1,6 +1,8 @@
-.PHONY: build build-frontend build-agent build-runtime rebuild-images start-runtime stop-runtime wait-runtime dev preview android-debug android-apk test test-runtime test-webkit lint lint-go lint-frontend deadcode audit clean
+.PHONY: build build-frontend build-agent build-runtime rebuild-images start-runtime stop-runtime wait-runtime dev preview android-debug android-apk test test-go test-android test-runtime test-webkit lint lint-go lint-frontend lint-android format-android deadcode audit clean
 
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.1.0")
+ANDROID_CHECK_ORIGIN ?= http://127.0.0.1:5080
+ANDROID_GRADLE := frontend/android/run-gradle.sh -p frontend/android
 
 build: build-frontend
 	CGO_ENABLED=0 go build -tags marvo_web -ldflags "-s -w -X 'main.Version=$(VERSION)'" -o dist/marvo .
@@ -70,8 +72,13 @@ preview: start-runtime build-frontend
 	npm --prefix frontend run preview -- --host 0.0.0.0 & \
 	wait
 
-test:
+test: test-go test-android
+
+test-go:
 	go test ./...
+
+test-android: build-frontend
+	$(ANDROID_GRADLE) :app:testDebugUnitTest -Pmarvo.serverOrigin="$(ANDROID_CHECK_ORIGIN)"
 
 test-runtime:
 	go test ./internal/runtimegateway ./internal/runtimeauth
@@ -79,7 +86,7 @@ test-runtime:
 test-webkit:
 	npm --prefix frontend run test:e2e:webkit
 
-lint: lint-go lint-frontend
+lint: lint-go lint-frontend lint-android
 
 lint-go:
 	@unformatted="$$(gofmt -l $$(find . -type f -name '*.go'))"; \
@@ -90,6 +97,12 @@ lint-go:
 
 lint-frontend:
 	npm --prefix frontend run check
+
+lint-android: build-frontend
+	$(ANDROID_GRADLE) :app:lintDebug :app:detekt :app:ktlintCheck -Pmarvo.serverOrigin="$(ANDROID_CHECK_ORIGIN)"
+
+format-android:
+	$(ANDROID_GRADLE) :app:ktlintFormat
 
 deadcode:
 	@unused="$$(go run golang.org/x/tools/cmd/deadcode@v0.48.0 ./...)"; \

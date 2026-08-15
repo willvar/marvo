@@ -1,0 +1,43 @@
+complexity:
+  ComplexCondition:
+    threshold: 6
+  CyclomaticComplexMethod:
+    threshold: 20
+  LongMethod:
+    threshold: 100
+  LongParameterList:
+    functionThreshold: 8
+    constructorThreshold: 10
+  NestedBlockDepth:
+    threshold: 5
+  TooManyFunctions:
+    thresholdInFiles: 30
+    thresholdInClasses: 30
+    thresholdInInterfaces: 30
+    thresholdInObjects: 30
+    thresholdInEnums: 30
+
+exceptions:
+  TooGenericExceptionCaught:
+    exceptionNames:
+      - 'ArrayIndexOutOfBoundsException'
+      - 'Error'
+      - 'IllegalMonitorStateException'
+      - 'IndexOutOfBoundsException'
+      - 'NullPointerException'
+      - 'RuntimeException'
+      - 'Throwable'
+
+style:
+  # UI dimensions and protocol limits are clearer beside their only use than as distant constants.
+  MagicNumber:
+    active: false
+  # ktlint owns formatting; Detekt remains responsible for semantic and complexity checks.
+  MaxLineLength:
+    active: false
+  # Guard clauses make bridge and Android lifecycle boundaries easier to audit.
+  ReturnCount:
+    active: false
+  # Validation code should report every invalid field directly instead of merging unrelated checks.
+  ThrowsCount:
+    active: false

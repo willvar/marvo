@@ -12,7 +12,10 @@ import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 
 internal object QRImageDecoder {
-    fun decode(resolver: ContentResolver, uri: Uri): Result<String> =
+    fun decode(
+        resolver: ContentResolver,
+        uri: Uri,
+    ): Result<String> =
         runCatching {
             val bitmap = loadBitmap(resolver, uri) ?: error("Unable to decode image")
             try {
@@ -25,7 +28,10 @@ internal object QRImageDecoder {
             }
         }
 
-    private fun loadBitmap(resolver: ContentResolver, uri: Uri): Bitmap? {
+    private fun loadBitmap(
+        resolver: ContentResolver,
+        uri: Uri,
+    ): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
@@ -33,10 +39,11 @@ internal object QRImageDecoder {
         while (bounds.outWidth / sample > MAX_DIMENSION || bounds.outHeight / sample > MAX_DIMENSION) {
             sample *= 2
         }
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
+        val options =
+            BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
         return resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
     }
 

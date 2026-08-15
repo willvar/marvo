@@ -14,10 +14,10 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.File
@@ -37,7 +37,8 @@ internal class AndroidDownloadManager(
     private val permissions: AndroidPermissionManager,
 ) {
     private val client =
-        network.newBuilder()
+        network
+            .newBuilder()
             .followRedirects(false)
             .followSslRedirects(false)
             .build()
@@ -46,6 +47,7 @@ internal class AndroidDownloadManager(
     private val blobs = ConcurrentHashMap<String, BlobSession>()
     private val counter = AtomicInteger()
     private val token = UUID.randomUUID().toString()
+
     @Volatile private var destroyed = false
 
     fun download(
@@ -60,9 +62,11 @@ internal class AndroidDownloadManager(
         resolveFilename(view, url, contentDisposition, mimeType) { filename ->
             if (destroyed) return@resolveFilename
             when {
-                url.startsWith("blob:", ignoreCase = true) ->
+                url.startsWith("blob:", ignoreCase = true) -> {
                     withStoragePermission { startBlob(view, url, filename, mimeType) }
-                url.startsWith("data:", ignoreCase = true) ->
+                }
+
+                url.startsWith("data:", ignoreCase = true) -> {
                     withStoragePermission {
                         worker.execute {
                             runDownload(filename) {
@@ -70,7 +74,9 @@ internal class AndroidDownloadManager(
                             }
                         }
                     }
-                isAllowedNetworkURL(url, trustedOrigin) ->
+                }
+
+                isAllowedNetworkURL(url, trustedOrigin) -> {
                     withStoragePermission {
                         downloadHTTP(
                             view,
@@ -81,35 +87,47 @@ internal class AndroidDownloadManager(
                             trustedOrigin,
                         )
                     }
-                else -> toast("已阻止不安全的下载地址")
+                }
+
+                else -> {
+                    toast("已阻止不安全的下载地址")
+                }
             }
         }
     }
 
-    fun handleInternal(raw: String, reply: (String) -> Unit) {
+    fun handleInternal(
+        raw: String,
+        reply: (String) -> Unit,
+    ) {
         worker.execute {
             val request = runCatching { JSONObject(raw) }.getOrNull()
             val id = request?.optString("id").orEmpty().ifBlank { "invalid" }
             val response =
                 try {
-                    val method = request?.getString("method")
-                        ?: throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "Malformed download request")
+                    val method =
+                        request?.getString("method")
+                            ?: throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "Malformed download request")
                     val payload = request.getJSONObject("payload")
                     if (payload.optString("__token") != token) {
                         throw MarvoBridgeException(MarvoBridgeErrorCode.UNTRUSTED_ORIGIN, "Invalid download token")
                     }
                     when (method) {
                         "__downloadStart" -> startBlobSession(payload)
+
                         "__downloadChunk" -> appendBlobChunk(payload)
+
                         "__downloadFinish" -> finishBlobSession(payload)
+
                         "__downloadAbort" -> abortBlobSession(payload)
+
                         else -> throw MarvoBridgeException(
                             MarvoBridgeErrorCode.INVALID_ARGUMENT,
                             "Unknown internal download method",
                         )
                     }
                     MarvoBridgeContract.success(id)
-                } catch (error: Throwable) {
+                } catch (error: Exception) {
                     MarvoBridgeContract.failure(id, error)
                 }
             activity.runOnUiThread { reply(response) }
@@ -136,42 +154,49 @@ internal class AndroidDownloadManager(
         val cookie = if (authenticated) CookieManager.getInstance().getCookie(url) else null
         val referer = view.url?.takeIf { originOf(it) == trustedOrigin }
         toast("正在下载 $fallbackName")
-        enqueueHTTP(url, userAgent, fallbackName, fallbackMime, trustedOrigin, cookie, referer, 0)
+        enqueueHTTP(
+            NetworkDownload(
+                url = url,
+                userAgent = userAgent,
+                fallbackName = fallbackName,
+                fallbackMime = fallbackMime,
+                trustedOrigin = trustedOrigin,
+                cookie = cookie,
+                referer = referer,
+            ),
+        )
     }
 
-    private fun enqueueHTTP(
-        url: String,
-        userAgent: String,
-        fallbackName: String,
-        fallbackMime: String?,
-        trustedOrigin: String,
-        cookie: String?,
-        referer: String?,
-        redirectCount: Int,
-    ) {
+    private fun enqueueHTTP(download: NetworkDownload) {
         if (destroyed) return
-        val authenticated = originOf(url) == trustedOrigin
+        val authenticated = originOf(download.url) == download.trustedOrigin
         val request =
-            Request.Builder()
-                .url(url)
-                .header("User-Agent", userAgent)
+            Request
+                .Builder()
+                .url(download.url)
+                .header("User-Agent", download.userAgent)
                 .apply {
                     if (authenticated) {
-                        cookie?.let { header("Cookie", it) }
-                        referer?.let { header("Referer", it) }
+                        download.cookie?.let { header("Cookie", it) }
+                        download.referer?.let { header("Referer", it) }
                     }
-                }
-                .build()
+                }.build()
         val call = client.newCall(request)
         calls += call
         call.enqueue(
             object : Callback {
-                override fun onFailure(call: Call, error: IOException) {
+                override fun onFailure(
+                    call: Call,
+                    error: IOException,
+                ) {
                     calls -= call
                     if (!call.isCanceled()) toast("下载失败")
                 }
 
-                override fun onResponse(call: Call, response: Response) {
+                override fun onResponse(
+                    call: Call,
+                    response: Response,
+                ) {
                     calls -= call
                     try {
                         response.use {
@@ -180,36 +205,35 @@ internal class AndroidDownloadManager(
                                 val next = location?.let(response.request.url::resolve)
                                 if (
                                     next == null ||
-                                    !isAllowedNetworkURL(next.toString(), trustedOrigin) ||
-                                    redirectCount >= MAX_HTTP_REDIRECTS
+                                    !isAllowedNetworkURL(next.toString(), download.trustedOrigin) ||
+                                    download.redirectCount >= MAX_HTTP_REDIRECTS
                                 ) {
                                     throw IOException("Unsafe or excessive redirect")
                                 }
                                 enqueueHTTP(
-                                    next.toString(),
-                                    userAgent,
-                                    fallbackName,
-                                    fallbackMime,
-                                    trustedOrigin,
-                                    cookie,
-                                    referer,
-                                    redirectCount + 1,
+                                    download.copy(
+                                        url = next.toString(),
+                                        redirectCount = download.redirectCount + 1,
+                                    ),
                                 )
                                 return
                             }
-                            if (!response.isSuccessful || !isAllowedNetworkURL(response.request.url.toString(), trustedOrigin)) {
+                            if (
+                                !response.isSuccessful ||
+                                !isAllowedNetworkURL(response.request.url.toString(), download.trustedOrigin)
+                            ) {
                                 throw IOException("HTTP ${response.code}")
                             }
                             val body = response.body
                             val mime =
                                 response.header("Content-Type")?.substringBefore(';')
-                                    ?: fallbackMime
+                                    ?: download.fallbackMime
                                     ?: "application/octet-stream"
                             val responseDisposition = response.header("Content-Disposition")
                             val name =
                                 cleanFilename(
                                     if (responseDisposition.isNullOrBlank()) {
-                                        fallbackName
+                                        download.fallbackName
                                     } else {
                                         URLUtil.guessFileName(response.request.url.toString(), responseDisposition, mime)
                                     },
@@ -218,7 +242,7 @@ internal class AndroidDownloadManager(
                             body.byteStream().use { publish(name, mime, it) }
                             toast("下载完成：$name")
                         }
-                    } catch (_: Throwable) {
+                    } catch (_: Exception) {
                         if (!call.isCanceled()) toast("下载失败")
                     }
                 }
@@ -295,15 +319,19 @@ internal class AndroidDownloadManager(
     }
 
     private fun appendBlobChunk(payload: JSONObject) {
-        val session = blobs[payload.requiredString("session")]
-            ?: throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "Unknown download session")
+        val session =
+            blobs[payload.requiredString("session")]
+                ?: throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "Unknown download session")
         val bytes =
             try {
                 Base64.decode(payload.requiredString("data"), Base64.DEFAULT)
             } catch (_: IllegalArgumentException) {
                 throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "Invalid download chunk")
             }
-        if (session.file.parentFile?.usableSpace?.let { it < bytes.size + STORAGE_MARGIN } == true) {
+        if (session.file.parentFile
+                ?.usableSpace
+                ?.let { it < bytes.size + STORAGE_MARGIN } == true
+        ) {
             abort(payload.getString("session"))
             throw MarvoBridgeException(MarvoBridgeErrorCode.IO_ERROR, "Insufficient storage")
         }
@@ -312,8 +340,9 @@ internal class AndroidDownloadManager(
 
     private fun finishBlobSession(payload: JSONObject) {
         val id = payload.requiredString("session")
-        val session = blobs.remove(id)
-            ?: throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "Unknown download session")
+        val session =
+            blobs.remove(id)
+                ?: throw MarvoBridgeException(MarvoBridgeErrorCode.INVALID_ARGUMENT, "Unknown download session")
         session.output.close()
         try {
             session.file.inputStream().use { publish(session.filename, session.mimeType, it) }
@@ -328,17 +357,24 @@ internal class AndroidDownloadManager(
         payload.optString("message").takeIf(String::isNotBlank)?.let { toast("下载失败") }
     }
 
-    private fun runDownload(filename: String, operation: () -> Unit) {
+    private fun runDownload(
+        filename: String,
+        operation: () -> Unit,
+    ) {
         toast("正在下载 $filename")
         try {
             operation()
             toast("下载完成：$filename")
-        } catch (_: Throwable) {
+        } catch (_: Exception) {
             toast("下载失败")
         }
     }
 
-    private fun publish(filename: String, mimeType: String, input: InputStream) {
+    private fun publish(
+        filename: String,
+        mimeType: String,
+        input: InputStream,
+    ) {
         val destination = destination(filename, mimeType)
         try {
             destination.output.use { output ->
@@ -355,14 +391,17 @@ internal class AndroidDownloadManager(
                 output.flush()
             }
             destination.finish(true)
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             runCatching { destination.output.close() }
             destination.finish(false)
             throw error
         }
     }
 
-    private fun destination(requestedName: String, mimeType: String): Destination {
+    private fun destination(
+        requestedName: String,
+        mimeType: String,
+    ): Destination {
         val name = cleanFilename(requestedName, mimeType)
         if (Build.VERSION.SDK_INT >= 29) {
             val resolver = activity.contentResolver
@@ -373,13 +412,15 @@ internal class AndroidDownloadManager(
                     put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                     put(MediaStore.Downloads.IS_PENDING, 1)
                 }
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IOException("Cannot create download")
-            val output = resolver.openOutputStream(uri)
-                ?: run {
-                    resolver.delete(uri, null, null)
-                    throw IOException("Cannot open download")
-                }
+            val uri =
+                resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IOException("Cannot create download")
+            val output =
+                resolver.openOutputStream(uri)
+                    ?: run {
+                        resolver.delete(uri, null, null)
+                        throw IOException("Cannot open download")
+                    }
             return Destination(output) { success ->
                 if (success) {
                     resolver.update(
@@ -430,7 +471,11 @@ internal class AndroidDownloadManager(
     }
 
     private fun dataMime(url: String) =
-        url.substringAfter("data:").substringBefore(',').substringBefore(';').ifBlank { "application/octet-stream" }
+        url
+            .substringAfter("data:")
+            .substringBefore(',')
+            .substringBefore(';')
+            .ifBlank { "application/octet-stream" }
 
     private fun resolveFilename(
         view: WebView,
@@ -458,11 +503,19 @@ internal class AndroidDownloadManager(
         }
     }
 
-    private fun cleanFilename(value: String, mime: String?): String {
+    private fun cleanFilename(
+        value: String,
+        mime: String?,
+    ): String {
         var name =
-            value.substringAfterLast('/').substringAfterLast('\\')
+            value
+                .substringAfterLast('/')
+                .substringAfterLast('\\')
                 .replace(Regex("[\\u0000-\\u001F<>:\"|?*]"), "_")
-                .trim().trim('.').take(160).ifBlank { "download" }
+                .trim()
+                .trim('.')
+                .take(160)
+                .ifBlank { "download" }
         val extension = mime?.substringBefore(';')?.let { MimeTypeMap.getSingleton().getExtensionFromMimeType(it) }
         if (!extension.isNullOrBlank() && !name.endsWith(".$extension", ignoreCase = true)) {
             name = "${name.substringBeforeLast('.', name)}.$extension"
@@ -470,7 +523,10 @@ internal class AndroidDownloadManager(
         return name
     }
 
-    private fun uniqueFile(directory: File, name: String): File {
+    private fun uniqueFile(
+        directory: File,
+        name: String,
+    ): File {
         val base = name.substringBeforeLast('.', name)
         val extension = name.substringAfterLast('.', "").let { if (it.isBlank()) "" else ".$it" }
         var candidate = File(directory, name)
@@ -494,7 +550,10 @@ internal class AndroidDownloadManager(
         activity.runOnUiThread { Toast.makeText(activity, message, Toast.LENGTH_SHORT).show() }
     }
 
-    private fun isAllowedNetworkURL(url: String, trustedOrigin: String): Boolean {
+    private fun isAllowedNetworkURL(
+        url: String,
+        trustedOrigin: String,
+    ): Boolean {
         val parsed = url.toHttpUrlOrNull() ?: return false
         return parsed.isHttps || (parsed.scheme == "http" && originOf(url) == trustedOrigin)
     }
@@ -516,6 +575,17 @@ internal class AndroidDownloadManager(
     private data class Destination(
         val output: OutputStream,
         val finish: (Boolean) -> Unit,
+    )
+
+    private data class NetworkDownload(
+        val url: String,
+        val userAgent: String,
+        val fallbackName: String,
+        val fallbackMime: String?,
+        val trustedOrigin: String,
+        val cookie: String?,
+        val referer: String?,
+        val redirectCount: Int = 0,
     )
 
     private companion object {

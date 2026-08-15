@@ -73,7 +73,8 @@ internal class AndroidUpdateManager(
             return
         }
         val request =
-            Request.Builder()
+            Request
+                .Builder()
                 .url(BuildConfig.SERVER_ORIGIN + "/api/app/android/release")
                 .header("User-Agent", "MarvoAndroid/${BuildConfig.VERSION_NAME}")
                 .get()
@@ -82,13 +83,19 @@ internal class AndroidUpdateManager(
             network.newCall(request).also { call ->
                 call.enqueue(
                     object : Callback {
-                        override fun onFailure(call: Call, error: IOException) {
+                        override fun onFailure(
+                            call: Call,
+                            error: IOException,
+                        ) {
                             checking.set(false)
                             checkCall = null
                             activity.runOnUiThread { callback?.invoke("failed") }
                         }
 
-                        override fun onResponse(call: Call, response: Response) {
+                        override fun onResponse(
+                            call: Call,
+                            response: Response,
+                        ) {
                             response.use {
                                 checking.set(false)
                                 checkCall = null
@@ -209,7 +216,8 @@ internal class AndroidUpdateManager(
         if (destroyed || downloadCall?.isExecuted() == true) return
         showProgress(release.required)
         val request =
-            Request.Builder()
+            Request
+                .Builder()
                 .url(BuildConfig.SERVER_ORIGIN + "/api/app/android/apk")
                 .header("User-Agent", "MarvoAndroid/${BuildConfig.VERSION_NAME}")
                 .get()
@@ -218,14 +226,20 @@ internal class AndroidUpdateManager(
             network.newCall(request).also { call ->
                 call.enqueue(
                     object : Callback {
-                        override fun onFailure(call: Call, error: IOException) {
+                        override fun onFailure(
+                            call: Call,
+                            error: IOException,
+                        ) {
                             if (call.isCanceled()) return
                             activity.runOnUiThread {
                                 if (downloadCall === call) updateFailed(release)
                             }
                         }
 
-                        override fun onResponse(call: Call, response: Response) {
+                        override fun onResponse(
+                            call: Call,
+                            response: Response,
+                        ) {
                             response.use {
                                 if (!response.isSuccessful) {
                                     activity.runOnUiThread {
@@ -304,36 +318,40 @@ internal class AndroidUpdateManager(
     }
 
     private fun showProgress(required: Boolean) {
-        val indicator = LinearProgressIndicator(activity).apply {
-            isIndeterminate = false
-            max = 100
-            progress = 0
-            contentDescription = "下载进度 0%"
-        }
-        val label = TextView(activity).apply {
-            text = "正在连接服务器…"
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
+        val indicator =
+            LinearProgressIndicator(activity).apply {
+                isIndeterminate = false
+                max = 100
+                progress = 0
+                contentDescription = "下载进度 0%"
+            }
+        val label =
+            TextView(activity).apply {
+                text = "正在连接服务器…"
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
         val spacing = (24 * activity.resources.displayMetrics.density).toInt()
         val labelSpacing = (12 * activity.resources.displayMetrics.density).toInt()
-        val wrapper = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(spacing, spacing, spacing, spacing)
-            addView(
-                indicator,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-            addView(
-                label,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = labelSpacing },
-            )
-        }
+        val wrapper =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(spacing, spacing, spacing, spacing)
+                addView(
+                    indicator,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+                addView(
+                    label,
+                    LinearLayout
+                        .LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { topMargin = labelSpacing },
+                )
+            }
         progressIndicator = indicator
         progressLabel = label
         progress =
@@ -357,7 +375,11 @@ internal class AndroidUpdateManager(
                 }
     }
 
-    private fun updateDownloadProgress(call: Call, downloadedBytes: Long, totalBytes: Long?) {
+    private fun updateDownloadProgress(
+        call: Call,
+        downloadedBytes: Long,
+        totalBytes: Long?,
+    ) {
         activity.runOnUiThread {
             if (destroyed || downloadCall !== call || call.isCanceled()) return@runOnUiThread
             val indicator = progressIndicator ?: return@runOnUiThread
@@ -377,7 +399,10 @@ internal class AndroidUpdateManager(
         }
     }
 
-    private fun install(file: File, release: Release) {
+    private fun install(
+        file: File,
+        release: Release,
+    ) {
         val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.files", file)
         val intent =
             Intent(Intent.ACTION_VIEW)

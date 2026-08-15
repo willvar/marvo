@@ -16,7 +16,10 @@ internal class AndroidPermissionManager(
             pending?.invoke(result.isNotEmpty() && result.values.all { it })
         }
 
-    fun request(permissions: Collection<String>, result: (Boolean) -> Unit) {
+    fun request(
+        permissions: Collection<String>,
+        result: (Boolean) -> Unit,
+    ) {
         val required =
             permissions.distinct().filter {
                 ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
@@ -39,4 +42,3 @@ internal class AndroidPermissionManager(
         callback = null
     }
 }
-

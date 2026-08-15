@@ -1,22 +1,32 @@
-import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.net.URI
+import java.util.Properties
 
 plugins {
     id("com.android.application")
+    id("io.gitlab.arturbosch.detekt")
+    id("org.jlleitschuh.gradle.ktlint")
     kotlin("android")
 }
 
-val versionProperties = Properties().apply {
-    rootProject.file("version.properties").inputStream().use(::load)
-}
-val marvoVersionCode = versionProperties.getProperty("VERSION_CODE")?.toIntOrNull()
-    ?: error("VERSION_CODE must be a positive integer")
+val versionProperties =
+    Properties().apply {
+        rootProject.file("version.properties").inputStream().use(::load)
+    }
+val marvoVersionCode =
+    versionProperties.getProperty("VERSION_CODE")?.toIntOrNull()
+        ?: error("VERSION_CODE must be a positive integer")
 val marvoVersionName = versionProperties.getProperty("VERSION_NAME")?.trim().orEmpty()
 val versionNamePattern = Regex("[0-9]+(?:\\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?")
 require(marvoVersionCode > 0) { "VERSION_CODE must be greater than zero" }
 require(versionNamePattern.matches(marvoVersionName)) { "VERSION_NAME is invalid" }
 
-val configuredServerOrigin = providers.gradleProperty("marvo.serverOrigin").orNull?.trim()?.trimEnd('/')
+val configuredServerOrigin =
+    providers
+        .gradleProperty("marvo.serverOrigin")
+        .orNull
+        ?.trim()
+        ?.trimEnd('/')
 val serverOrigin = configuredServerOrigin ?: "https://marvo.invalid"
 val parsedOrigin = URI(serverOrigin)
 
@@ -41,24 +51,30 @@ val isOriginShapeValid =
         parsedOrigin.rawFragment == null
 val isPrivateDebugHTTP = parsedOrigin.scheme == "http" && isPrivateDebugHost(parsedOrigin.host)
 require(
-    isOriginShapeValid && (parsedOrigin.scheme == "https" || isPrivateDebugHTTP)
+    isOriginShapeValid && (parsedOrigin.scheme == "https" || isPrivateDebugHTTP),
 ) {
     "marvo.serverOrigin must be an HTTPS origin, or a private/loopback HTTP origin for debug builds"
 }
 
-fun quoted(value: String): String =
-    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+fun quoted(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 val signingPropertiesFile =
     providers.gradleProperty("marvo.signingFile").orNull?.let(rootProject::file)
         ?: rootProject.file("signing.properties")
-val signingProperties = Properties().apply {
-    if (signingPropertiesFile.isFile) signingPropertiesFile.inputStream().use(::load)
-}
+val signingProperties =
+    Properties().apply {
+        if (signingPropertiesFile.isFile) signingPropertiesFile.inputStream().use(::load)
+    }
+
 fun signingSecret(name: String): String? {
     signingProperties.getProperty(name)?.takeIf(String::isNotBlank)?.let { return it }
     val secretFile = signingProperties.getProperty("${name}File")?.takeIf(String::isNotBlank) ?: return null
-    return rootProject.file(secretFile).takeIf { it.isFile }?.readText()?.trim()?.takeIf(String::isNotBlank)
+    return rootProject
+        .file(secretFile)
+        .takeIf { it.isFile }
+        ?.readText()
+        ?.trim()
+        ?.takeIf(String::isNotBlank)
 }
 val signingStoreFile = signingProperties.getProperty("storeFile")?.takeIf(String::isNotBlank)
 val signingStorePassword = signingSecret("storePassword")
@@ -119,40 +135,61 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+        allWarningsAsErrors.set(true)
+        extraWarnings.set(true)
+    }
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
+    parallel = true
+    ignoreFailures = false
+}
+
+ktlint {
+    version.set("1.8.0")
+    android.set(true)
+    outputToConsole.set(true)
+    ignoreFailures.set(false)
+}
+
 val frontendDist = rootProject.projectDir.parentFile.resolve("dist")
-fun registerWebAssetsTask(name: String, applicationID: String) =
-    tasks.register<Sync>(name) {
-        group = "marvo"
-        description = "Copies the current Vite build and Android release metadata into the APK."
-        from(frontendDist)
-        val output = layout.buildDirectory.dir("generated/$name")
-        into(output)
-        doFirst {
-            require(frontendDist.resolve("index.html").isFile) {
-                "frontend/dist is missing; run npm --prefix frontend run build first"
-            }
-        }
-        doLast {
-            output.get().file("marvo-app.json").asFile.writeText(
-                """
-                {
-                  "application_id": "$applicationID",
-                  "version_code": $marvoVersionCode,
-                  "version_name": "$marvoVersionName"
-                }
-                """.trimIndent() + "\n",
-            )
+
+fun registerWebAssetsTask(
+    name: String,
+    applicationID: String,
+) = tasks.register<Sync>(name) {
+    group = "marvo"
+    description = "Copies the current Vite build and Android release metadata into the APK."
+    from(frontendDist)
+    val output = layout.buildDirectory.dir("generated/$name")
+    into(output)
+    doFirst {
+        require(frontendDist.resolve("index.html").isFile) {
+            "frontend/dist is missing; run npm --prefix frontend run build first"
         }
     }
+    doLast {
+        output.get().file("marvo-app.json").asFile.writeText(
+            """
+            {
+              "application_id": "$applicationID",
+              "version_code": $marvoVersionCode,
+              "version_name": "$marvoVersionName"
+            }
+            """.trimIndent() + "\n",
+        )
+    }
+}
 
 val validateServerOrigin by tasks.registering {
     doLast {
@@ -180,18 +217,28 @@ val validateReleaseSigning by tasks.registering {
 }
 val prepareDebugWebAssets = registerWebAssetsTask("prepareDebugWebAssets", "cn.willvar.marvo.debug")
 val prepareReleaseWebAssets = registerWebAssetsTask("prepareReleaseWebAssets", "cn.willvar.marvo")
-android.sourceSets.getByName("debug").assets.srcDir(layout.buildDirectory.dir("generated/prepareDebugWebAssets"))
-android.sourceSets.getByName("release").assets.srcDir(layout.buildDirectory.dir("generated/prepareReleaseWebAssets"))
+android.sourceSets
+    .getByName("debug")
+    .assets
+    .srcDir(layout.buildDirectory.dir("generated/prepareDebugWebAssets"))
+android.sourceSets
+    .getByName("release")
+    .assets
+    .srcDir(layout.buildDirectory.dir("generated/prepareReleaseWebAssets"))
 tasks.configureEach {
     when (name) {
-        "preDebugBuild" -> dependsOn(prepareDebugWebAssets, validateServerOrigin)
-        "preReleaseBuild" ->
+        "preDebugBuild" -> {
+            dependsOn(prepareDebugWebAssets, validateServerOrigin)
+        }
+
+        "preReleaseBuild" -> {
             dependsOn(
                 prepareReleaseWebAssets,
                 validateServerOrigin,
                 validateReleaseServerOrigin,
                 validateReleaseSigning,
             )
+        }
     }
 }
 

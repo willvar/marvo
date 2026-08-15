@@ -7,8 +7,8 @@ import androidx.webkit.ScriptHandler
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 
 internal class MarvoMessageBridge(
     private val webView: WebView,
@@ -83,7 +83,7 @@ internal class MarvoMessageBridge(
         val validatedCall =
             try {
                 MarvoBridgeContract.validate(raw)
-            } catch (error: Throwable) {
+            } catch (error: Exception) {
                 reply.postMessage(MarvoBridgeContract.failure(requestID, error))
                 return
             }
