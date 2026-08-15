@@ -103,7 +103,7 @@ func (m *RuntimeManager) Ensure(ctx context.Context, userID string) (*RuntimeTar
 		return nil, err
 	}
 	credentialStore, err := agentcredentials.NewStore(
-		filepath.Join(m.config.StateDir, "users", userID, "app"),
+		filepath.Join(m.config.StateDir, "users", userID, "agent", "home", ".local", "share", "opencode"),
 		userID,
 		m.config.Token,
 	)
@@ -310,6 +310,7 @@ func (m *RuntimeManager) validateUserDirectories(userID string) error {
 		filepath.Join(root, "workspace"),
 		filepath.Join(root, "agent"),
 		filepath.Join(root, "agent", "home"),
+		filepath.Join(root, "agent", "home", ".local", "share", "opencode"),
 	} {
 		info, err := os.Lstat(path)
 		if err != nil {

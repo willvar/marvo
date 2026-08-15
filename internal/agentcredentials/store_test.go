@@ -29,14 +29,14 @@ func TestStoreEncryptsAndReloadsExaAPIKey(t *testing.T) {
 	if err := store.Save(Credentials{ExaAPIKey: "  " + secret + "  "}); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join(directory, credentialsFilename))
+	raw, err := os.ReadFile(filepath.Join(directory, FileName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), secret) {
 		t.Fatal("credential file contains the plaintext Exa API key")
 	}
-	info, err := os.Stat(filepath.Join(directory, credentialsFilename))
+	info, err := os.Stat(filepath.Join(directory, FileName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +59,9 @@ func TestStoreEncryptsAndReloadsExaAPIKey(t *testing.T) {
 
 	if err := reloaded.Save(Credentials{}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(directory, FileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleared credential file still exists: %v", err)
 	}
 	cleared, err := reloaded.Load()
 	if err != nil || cleared.ExaAPIKey != "" || reloaded.Fingerprint(cleared) != "" {
@@ -111,7 +114,7 @@ func TestStoreRejectsUnsafeFilesAndInvalidKeys(t *testing.T) {
 	if err := os.WriteFile(target, []byte("untouched"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	credentialPath := filepath.Join(directory, credentialsFilename)
+	credentialPath := filepath.Join(directory, FileName)
 	if err := os.Symlink(target, credentialPath); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,7 @@ func TestStoreRejectsUnsafeFilesAndInvalidKeys(t *testing.T) {
 
 func TestStoreRejectsUnknownEnvelopeFieldsAndBroadPermissions(t *testing.T) {
 	directory := privateTempDir(t)
-	path := filepath.Join(directory, credentialsFilename)
+	path := filepath.Join(directory, FileName)
 	if err := os.WriteFile(path, []byte(`{"version":1,"nonce":"x","ciphertext":"y","unknown":true}`), 0600); err != nil {
 		t.Fatal(err)
 	}

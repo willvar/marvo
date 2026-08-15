@@ -149,7 +149,7 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 		cleanup()
 		return nil, fmt.Errorf("%w: load Agent settings: %v", ErrUserSpaceUnavailable, err)
 	}
-	credentials, err := agentcredentials.NewStore(paths.App, userID, r.config.Runtime.Token)
+	credentials, err := agentcredentials.NewStore(paths.OpenCodeData, userID, r.config.Runtime.Token)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("%w: initialize Agent credentials: %v", ErrUserSpaceUnavailable, err)

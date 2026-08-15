@@ -59,9 +59,9 @@ Android 通用 APK 位于 `frontend/android`。调试构建使用 `make android-
     .runtime-token
     android/                 # 平台发布的最新 Android APK 与版本元数据
   users/<userId>/
-    app/                     # 设备、智能体设置、加密工具凭据、迁移记录
+    app/                     # 设备、品牌、智能体设置与迁移记录
     workspace/               # 笔记、媒体、回收站、主题、个性化规则
-    agent/home/              # 提供商凭据、OpenCode 会话与用户全局提示词
+    agent/home/              # 提供商与工具凭据、OpenCode 会话及用户全局提示词
 ```
 
 `.session-secret` 由 Marvo 自动生成并以 `0600` 权限持久化，不属于用户配置，也不会从旧版单用户目录继承。

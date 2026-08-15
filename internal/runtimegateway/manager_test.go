@@ -101,7 +101,7 @@ func TestRuntimeManagerReplacesContainerWhenExaCredentialChanges(t *testing.T) {
 	createRuntimeDirectories(t, stateRoot, gatewayTestUserID)
 	config := testRuntimeConfig(stateRoot)
 	credentialStore, err := agentcredentials.NewStore(
-		filepath.Join(stateRoot, "users", gatewayTestUserID, "app"),
+		filepath.Join(stateRoot, "users", gatewayTestUserID, "agent", "home", ".local", "share", "opencode"),
 		gatewayTestUserID,
 		config.Token,
 	)
@@ -252,7 +252,7 @@ func createRuntimeDirectories(t *testing.T, stateRoot, userID string) {
 	for _, path := range []string{
 		filepath.Join(stateRoot, "users", userID, "app"),
 		filepath.Join(stateRoot, "users", userID, "workspace"),
-		filepath.Join(stateRoot, "users", userID, "agent", "home"),
+		filepath.Join(stateRoot, "users", userID, "agent", "home", ".local", "share", "opencode"),
 	} {
 		if err := os.MkdirAll(path, 0700); err != nil {
 			t.Fatal(err)

@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	credentialsFilename = ".agent-credentials.json"
+	FileName            = "marvo-credentials.json"
+	LegacyFileName      = ".agent-credentials.json"
 	credentialsVersion  = 1
 	maxCredentialsBytes = 16 << 10
 	MaxExaAPIKeyBytes   = 4 << 10
@@ -65,7 +66,7 @@ func NewStore(dataDir, userID, masterSecret string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		path:           filepath.Join(dataDir, credentialsFilename),
+		path:           filepath.Join(dataDir, FileName),
 		userID:         userID,
 		encryptionKey:  deriveKey(masterSecret, "encryption", userID),
 		fingerprintKey: deriveKey(masterSecret, "fingerprint", userID),
@@ -96,6 +97,12 @@ func (s *Store) Save(credentials Credentials) error {
 	}
 	if err := validateCredentialFileOrMissing(s.path); err != nil {
 		return err
+	}
+	if normalized.ExaAPIKey == "" {
+		if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return syncDirectory(filepath.Dir(s.path))
 	}
 	payload, err := json.Marshal(normalized)
 	if err != nil {
@@ -303,4 +310,13 @@ func writePrivateFileAtomic(path string, data []byte) error {
 		_ = directoryFile.Close()
 	}
 	return nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }

@@ -147,7 +147,7 @@ func TestAgentSettingsListsConnectedModelsAndPersistsSelection(t *testing.T) {
 	if err != nil || credentials.ExaAPIKey != "exa-handler-secret" {
 		t.Fatalf("stored Agent credentials = %#v, error = %v", credentials, err)
 	}
-	credentialFile, err := os.ReadFile(filepath.Join(settingsDirectory, ".agent-credentials.json"))
+	credentialFile, err := os.ReadFile(filepath.Join(settingsDirectory, agentcredentials.FileName))
 	if err != nil || strings.Contains(string(credentialFile), "exa-handler-secret") {
 		t.Fatalf("encrypted credential file = %q, error = %v", credentialFile, err)
 	}

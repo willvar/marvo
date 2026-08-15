@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"marvo/internal/agentcredentials"
 	"marvo/internal/control"
 )
 
@@ -15,10 +16,12 @@ type Layout struct {
 }
 
 type Paths struct {
-	Root      string
-	App       string
-	Workspace string
-	Agent     string
+	Root         string
+	App          string
+	Workspace    string
+	Agent        string
+	AgentHome    string
+	OpenCodeData string
 }
 
 func OpenLayout(root string) (*Layout, error) {
@@ -53,11 +56,15 @@ func (l *Layout) UserPaths(userID string) (Paths, error) {
 		return Paths{}, errors.New("invalid user id")
 	}
 	root := filepath.Join(l.root, "users", userID)
+	agent := filepath.Join(root, "agent")
+	agentHome := filepath.Join(agent, "home")
 	return Paths{
-		Root:      root,
-		App:       filepath.Join(root, "app"),
-		Workspace: filepath.Join(root, "workspace"),
-		Agent:     filepath.Join(root, "agent"),
+		Root:         root,
+		App:          filepath.Join(root, "app"),
+		Workspace:    filepath.Join(root, "workspace"),
+		Agent:        agent,
+		AgentHome:    agentHome,
+		OpenCodeData: filepath.Join(agentHome, ".local", "share", "opencode"),
 	}, nil
 }
 
@@ -70,12 +77,82 @@ func (l *Layout) EnsureUser(userID string) (Paths, error) {
 	if err := requirePrivateDirectory(usersRoot); err != nil {
 		return Paths{}, fmt.Errorf("inspect users directory: %w", err)
 	}
-	for _, path := range []string{paths.Root, paths.App, paths.Workspace, paths.Agent} {
+	for _, path := range []string{
+		paths.Root,
+		paths.App,
+		paths.Workspace,
+		paths.Agent,
+		paths.AgentHome,
+		filepath.Join(paths.AgentHome, ".local"),
+		filepath.Join(paths.AgentHome, ".local", "share"),
+		paths.OpenCodeData,
+	} {
 		if err := ensurePrivateDirectory(path); err != nil {
 			return Paths{}, fmt.Errorf("initialize user directory: %w", err)
 		}
 	}
+	if err := migrateFileWithoutOverwrite(
+		filepath.Join(paths.App, agentcredentials.LegacyFileName),
+		filepath.Join(paths.OpenCodeData, agentcredentials.FileName),
+	); err != nil {
+		return Paths{}, fmt.Errorf("migrate Agent credentials: %w", err)
+	}
 	return paths, nil
+}
+
+func migrateFileWithoutOverwrite(source, destination string) error {
+	sourceInfo, err := os.Lstat(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.Mode().IsRegular() {
+		return errors.New("migration source is not a regular file")
+	}
+
+	destinationInfo, err := os.Lstat(destination)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Rename(source, destination); err != nil {
+			return err
+		}
+		return syncDirectories(filepath.Dir(source), filepath.Dir(destination))
+	}
+	if err != nil {
+		return err
+	}
+	if destinationInfo.Mode()&os.ModeSymlink != 0 || !destinationInfo.Mode().IsRegular() || !filesEqual(source, destination) {
+		return errors.New("migration destination conflicts with source")
+	}
+	if err := os.Remove(source); err != nil {
+		return err
+	}
+	return syncDirectories(filepath.Dir(source), filepath.Dir(destination))
+}
+
+func syncDirectories(paths ...string) error {
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		path = filepath.Clean(path)
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		directory, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		syncErr := directory.Sync()
+		closeErr := directory.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
 }
 
 // UserUsage returns the bytes occupied by regular files inside one complete

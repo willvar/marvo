@@ -1,9 +1,12 @@
 package userspace
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"marvo/internal/agentcredentials"
 )
 
 func TestLayoutCreatesPrivateUserBoundaries(t *testing.T) {
@@ -17,7 +20,17 @@ func TestLayoutCreatesPrivateUserBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{root, filepath.Join(root, "control"), filepath.Join(root, "users"), paths.Root, paths.App, paths.Workspace, paths.Agent} {
+	for _, path := range []string{
+		root,
+		filepath.Join(root, "control"),
+		filepath.Join(root, "users"),
+		paths.Root,
+		paths.App,
+		paths.Workspace,
+		paths.Agent,
+		paths.AgentHome,
+		paths.OpenCodeData,
+	} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
@@ -31,6 +44,67 @@ func TestLayoutCreatesPrivateUserBoundaries(t *testing.T) {
 	}
 	if got := layout.AndroidReleaseDirectory(); got != filepath.Join(root, "control", "android") {
 		t.Fatalf("Android release directory = %q", got)
+	}
+}
+
+func TestEnsureUserMigratesAgentCredentialsBesideOpenCodeState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	layout, err := OpenLayout(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const userID = "9e2ef88f87ad4d07962c"
+	paths, err := layout.EnsureUser(userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(paths.App, agentcredentials.LegacyFileName)
+	targetPath := filepath.Join(paths.OpenCodeData, agentcredentials.FileName)
+	const encrypted = `{"version":1,"nonce":"legacy","ciphertext":"encrypted"}`
+	if err := os.WriteFile(legacyPath, []byte(encrypted), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := layout.EnsureUser(userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy credential file still exists: %v", err)
+	}
+	raw, err := os.ReadFile(targetPath)
+	if err != nil || string(raw) != encrypted {
+		t.Fatalf("migrated credentials = %q, error = %v", raw, err)
+	}
+	if _, err := layout.EnsureUser(userID); err != nil {
+		t.Fatalf("idempotent EnsureUser() error = %v", err)
+	}
+}
+
+func TestEnsureUserRejectsConflictingAgentCredentialMigration(t *testing.T) {
+	layout, err := OpenLayout(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const userID = "77598e6c72714703a204"
+	paths, err := layout.EnsureUser(userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(paths.App, agentcredentials.LegacyFileName)
+	targetPath := filepath.Join(paths.OpenCodeData, agentcredentials.FileName)
+	if err := os.WriteFile(legacyPath, []byte("legacy"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte("current"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := layout.EnsureUser(userID); err == nil {
+		t.Fatal("conflicting credential files were accepted")
+	}
+	for path, want := range map[string]string{legacyPath: "legacy", targetPath: "current"} {
+		raw, err := os.ReadFile(path)
+		if err != nil || string(raw) != want {
+			t.Fatalf("file %q = %q, error = %v", path, raw, err)
+		}
 	}
 }
 
