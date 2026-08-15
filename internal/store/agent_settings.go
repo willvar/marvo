@@ -1,15 +1,11 @@
 package store
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
+	"log/slog"
 	"strings"
-	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -34,23 +30,27 @@ type AgentSettings struct {
 }
 
 type AgentSettingsStore struct {
-	mu       sync.RWMutex
-	path     string
-	settings AgentSettings
+	state *StateDB
 }
 
-func NewAgentSettingsStore(dataDir string) (*AgentSettingsStore, error) {
-	settingsStore := &AgentSettingsStore{path: filepath.Join(dataDir, agentSettingsFilename)}
-	if err := settingsStore.load(); err != nil {
+func NewAgentSettingsStore(state *StateDB) (*AgentSettingsStore, error) {
+	if state == nil || state.sql == nil {
+		return nil, errors.New("user state database is unavailable")
+	}
+	settingsStore := &AgentSettingsStore{state: state}
+	if _, err := settingsStore.load(); err != nil {
 		return nil, err
 	}
 	return settingsStore, nil
 }
 
 func (s *AgentSettingsStore) Get() AgentSettings {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return copyAgentSettings(s.settings)
+	settings, err := s.load()
+	if err != nil {
+		slog.Error("failed to read Agent settings", "error", err)
+		return AgentSettings{}
+	}
+	return settings
 }
 
 func (s *AgentSettingsStore) Save(settings AgentSettings) error {
@@ -59,58 +59,47 @@ func (s *AgentSettingsStore) Save(settings AgentSettings) error {
 	if err := validateAgentSettings(settings); err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := validateRegularFileOrMissing(s.path); err != nil {
-		return err
+	var provider any
+	var model any
+	if settings.Model != nil {
+		provider = settings.Model.ProviderID
+		model = settings.Model.ModelID
 	}
-	data, err := json.MarshalIndent(settings, "", "  ")
+	_, err := s.state.sql.Exec(`
+		UPDATE space_settings
+		SET agent_provider_id = ?, agent_model_id = ?, agent_variant = ?, agent_global_prompt = ?,
+			updated_at = ?
+		WHERE id = 1
+	`, provider, model, settings.Variant, settings.GlobalPrompt, time.Now().UTC().UnixMilli())
 	if err != nil {
-		return err
+		return fmt.Errorf("save Agent settings: %w", err)
 	}
-	data = append(data, '\n')
-	if err := writePrivateFileAtomic(s.path, data); err != nil {
-		return err
-	}
-	s.settings = settings
 	return nil
 }
 
-func (s *AgentSettingsStore) load() error {
-	if err := validateRegularFileOrMissing(s.path); err != nil {
-		return err
+func (s *AgentSettingsStore) load() (AgentSettings, error) {
+	if s == nil || s.state == nil {
+		return AgentSettings{}, errors.New("agent settings store is unavailable")
 	}
-	info, err := os.Stat(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Size() > maxAgentSettingsBytes {
-		return fmt.Errorf("%w: settings file is too large", ErrInvalidAgentSettings)
-	}
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return err
-	}
+	var provider *string
+	var model *string
 	var settings AgentSettings
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&settings); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidAgentSettings, err)
+	err := s.state.sql.QueryRow(`
+		SELECT agent_provider_id, agent_model_id, agent_variant, agent_global_prompt
+		FROM space_settings WHERE id = 1
+	`).Scan(&provider, &model, &settings.Variant, &settings.GlobalPrompt)
+	if err != nil {
+		return AgentSettings{}, fmt.Errorf("load Agent settings: %w", err)
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("%w: settings file must contain one JSON value", ErrInvalidAgentSettings)
+	if provider != nil && model != nil {
+		settings.Model = &AgentModelSelection{ProviderID: *provider, ModelID: *model}
+	} else if provider != nil || model != nil {
+		return AgentSettings{}, fmt.Errorf("%w: incomplete model selection", ErrInvalidAgentSettings)
 	}
-	settings.Variant = strings.TrimSpace(settings.Variant)
 	if err := validateAgentSettings(settings); err != nil {
-		return err
+		return AgentSettings{}, err
 	}
-	s.settings = copyAgentSettings(settings)
-	return nil
+	return copyAgentSettings(settings), nil
 }
 
 func validateAgentSettings(settings AgentSettings) error {
@@ -133,20 +122,6 @@ func validateAgentSettings(settings AgentSettings) error {
 	}
 	settings.Model.ProviderID = providerID
 	settings.Model.ModelID = modelID
-	return nil
-}
-
-func validateRegularFileOrMissing(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("%w: settings path is not a regular file", ErrInvalidAgentSettings)
-	}
 	return nil
 }
 

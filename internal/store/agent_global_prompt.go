@@ -35,13 +35,13 @@ func NewAgentGlobalPromptFile(path string) (*AgentGlobalPromptFile, error) {
 	return file, nil
 }
 
-func (f *AgentGlobalPromptFile) MatchesPreferences(prompt string, rules []PersonalizationRule) (bool, error) {
+func (f *AgentGlobalPromptFile) MatchesPreferences(prompt string, memories []Memory) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := validateGlobalPrompt(prompt); err != nil {
 		return false, err
 	}
-	if _, err := normalizePersonalizationRules(rules, false); err != nil {
+	if _, err := normalizeMemories(memories, false); err != nil {
 		return false, err
 	}
 	if err := f.validateRegularOrMissing(); err != nil {
@@ -49,33 +49,33 @@ func (f *AgentGlobalPromptFile) MatchesPreferences(prompt string, rules []Person
 	}
 	data, err := os.ReadFile(f.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return prompt == "" && len(rules) == 0, nil
+		return prompt == "" && len(memories) == 0, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return bytes.Equal(data, renderGlobalPrompt(prompt, rules)), nil
+	return bytes.Equal(data, renderGlobalPrompt(prompt, memories)), nil
 }
 
-func (f *AgentGlobalPromptFile) SyncPreferences(prompt string, rules []PersonalizationRule) error {
+func (f *AgentGlobalPromptFile) SyncPreferences(prompt string, memories []Memory) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := validateGlobalPrompt(prompt); err != nil {
 		return err
 	}
-	if _, err := normalizePersonalizationRules(rules, false); err != nil {
+	if _, err := normalizeMemories(memories, false); err != nil {
 		return err
 	}
 	if err := f.validateRegularOrMissing(); err != nil {
 		return err
 	}
-	if prompt == "" && len(rules) == 0 {
+	if prompt == "" && len(memories) == 0 {
 		if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return syncDirectory(filepath.Dir(f.path))
 	}
-	return writePrivateFileAtomic(f.path, renderGlobalPrompt(prompt, rules))
+	return writePrivateFileAtomic(f.path, renderGlobalPrompt(prompt, memories))
 }
 
 func (f *AgentGlobalPromptFile) validateRegularOrMissing() error {
@@ -99,15 +99,15 @@ func validateGlobalPrompt(prompt string) error {
 	return nil
 }
 
-func renderGlobalPrompt(prompt string, rules []PersonalizationRule) []byte {
+func renderGlobalPrompt(prompt string, memories []Memory) []byte {
 	var result strings.Builder
 	result.WriteString(userPreferencesHeader)
-	if len(rules) > 0 {
-		result.WriteString("## 个性化规则\n\n")
-		result.WriteString("这些规则由用户和智能体共同维护，属于低于当前请求和用户全局提示词的默认偏好。\n\n")
-		for _, rule := range rules {
+	if len(memories) > 0 {
+		result.WriteString("## 记忆\n\n")
+		result.WriteString("这些记忆由用户和智能体共同维护，属于低于当前请求和用户全局提示词的默认偏好。\n\n")
+		for _, memory := range memories {
 			result.WriteString("- ")
-			result.WriteString(strings.TrimSpace(rule.Text))
+			result.WriteString(strings.TrimSpace(memory.Text))
 			result.WriteByte('\n')
 		}
 		result.WriteByte('\n')

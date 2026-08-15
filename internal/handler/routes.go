@@ -23,6 +23,8 @@ type Dependencies struct {
 	NoteStore    *store.NoteStore
 	Hub          *collab.Hub
 	Media        *media.Manager
+	State        *store.StateDB
+	Activity     *store.ActivityStore
 	AgentDeps    *AgentDeps
 	DeviceStore  *store.DeviceStore
 	BrandStore   *store.BrandStore
@@ -117,11 +119,15 @@ func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.Handle("DELETE /api/user/{userID}/trash", content((*Dependencies).EmptyTrash))
 	mux.Handle("GET /api/user/{userID}/events", content((*Dependencies).HandleSSE))
 	mux.Handle("POST /api/user/{userID}/send", content((*Dependencies).HandleSend))
+	mux.Handle("GET /api/user/{userID}/activity", content((*Dependencies).ListActivities))
+	mux.Handle("GET /api/user/{userID}/activity/counts", content((*Dependencies).ActivityCounts))
+	mux.Handle("POST /api/user/{userID}/activity/read", content((*Dependencies).MarkActivitiesRead))
+	mux.Handle("DELETE /api/user/{userID}/activity/{id}", content((*Dependencies).DeleteActivity))
 
 	mux.Handle("GET /api/user/{userID}/agent/settings", management((*Dependencies).AgentGetSettings))
 	mux.Handle("PUT /api/user/{userID}/agent/settings", management((*Dependencies).AgentUpdateSettings))
-	mux.Handle("GET /api/user/{userID}/agent/personalization", management((*Dependencies).AgentGetPersonalization))
-	mux.Handle("PUT /api/user/{userID}/agent/personalization", management((*Dependencies).AgentUpdatePersonalization))
+	mux.Handle("GET /api/user/{userID}/agent/memories", management((*Dependencies).AgentGetMemories))
+	mux.Handle("PUT /api/user/{userID}/agent/memories", management((*Dependencies).AgentUpdateMemories))
 	mux.Handle("GET /api/user/{userID}/agent/providers", management((*Dependencies).AgentListProviders))
 	mux.Handle("POST /api/user/{userID}/agent/providers/{providerID}/connect/key", management((*Dependencies).AgentConnectProviderKey))
 	mux.Handle("POST /api/user/{userID}/agent/providers/{providerID}/connect/oauth", management((*Dependencies).AgentStartProviderOAuth))

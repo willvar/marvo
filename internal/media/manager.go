@@ -123,6 +123,18 @@ func (m *Manager) Close() {
 	m.wg.Wait()
 }
 
+// Idle reports whether closing the manager would leave no upload or transcode
+// work behind. It is used by the user-space cache; active media work pins its
+// space even when no HTTP request is currently using it.
+func (m *Manager) Idle() bool {
+	if m == nil {
+		return true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.queued) == 0 && len(m.running) == 0 && len(m.transfers) == 0
+}
+
 func ValidAssetID(id string) bool { return assetIDPattern.MatchString(id) }
 
 func NewAssetID() (string, error) {

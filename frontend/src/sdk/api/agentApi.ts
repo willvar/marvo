@@ -23,6 +23,10 @@ export interface AgentPromptContext {
     height: number
     devicePixelRatio: number
   }
+  activity?: {
+    id: string
+    choices?: string[]
+  }
 }
 
 type ClientResult<T> = { data?: T; error?: unknown }

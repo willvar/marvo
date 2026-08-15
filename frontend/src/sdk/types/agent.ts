@@ -95,13 +95,13 @@ export interface AgentSettingsUpdate {
   clear_exa_api_key?: boolean
 }
 
-export interface AgentPersonalizationRule {
+export interface AgentMemory {
   id: string
   text: string
 }
 
-export interface AgentPersonalizationResponse {
-  rules: AgentPersonalizationRule[]
+export interface AgentMemoriesResponse {
+  memories: AgentMemory[]
   revision: string
   prompt_pending: boolean
 }

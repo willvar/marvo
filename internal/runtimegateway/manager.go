@@ -267,6 +267,9 @@ func (m *RuntimeManager) containerSpec(
 	initEnabled := true
 	environment := []string{
 		"HOME=/home/marvo",
+		"MARVO_USER_ID=" + userID,
+		"MARVO_TOOL_URL=http://marvo-runtime:4097/tool/" + userID,
+		"MARVO_TOOL_TOKEN=" + agentToolToken(m.config.Token, userID),
 		"TZ=Asia/Hong_Kong",
 		"OPENCODE_ENABLE_EXA=1",
 		"OPENCODE_SERVER_USERNAME=opencode",

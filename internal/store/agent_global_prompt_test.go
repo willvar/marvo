@@ -47,17 +47,17 @@ func TestAgentGlobalPromptFileSyncsPrivateOpenCodeRules(t *testing.T) {
 	}
 }
 
-func TestAgentGlobalPromptFileRendersPersonalizationBeforeGlobalPrompt(t *testing.T) {
+func TestAgentGlobalPromptFileRendersMemoriesBeforeGlobalPrompt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "AGENTS.md")
 	file, err := NewAgentGlobalPromptFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rules := []PersonalizationRule{{
+	memories := []Memory{{
 		ID:   "2bd3d4d2-84df-4bb8-a9aa-774df442e950",
 		Text: "统一使用“智能体”这一称呼。",
 	}}
-	if err := file.SyncPreferences("回答时提供完整依据。", rules); err != nil {
+	if err := file.SyncPreferences("回答时提供完整依据。", memories); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -65,12 +65,12 @@ func TestAgentGlobalPromptFileRendersPersonalizationBeforeGlobalPrompt(t *testin
 		t.Fatal(err)
 	}
 	text := string(data)
-	ruleIndex := strings.Index(text, "## 个性化规则")
+	memoryIndex := strings.Index(text, "## 记忆")
 	globalIndex := strings.Index(text, "## 用户全局提示词")
-	if ruleIndex < 0 || globalIndex <= ruleIndex || !strings.Contains(text, "- "+rules[0].Text) {
+	if memoryIndex < 0 || globalIndex <= memoryIndex || !strings.Contains(text, "- "+memories[0].Text) {
 		t.Fatalf("preference instructions = %q", text)
 	}
-	if matches, err := file.MatchesPreferences("回答时提供完整依据。", rules); err != nil || !matches {
+	if matches, err := file.MatchesPreferences("回答时提供完整依据。", memories); err != nil || !matches {
 		t.Fatalf("preference match = %v, error = %v", matches, err)
 	}
 }

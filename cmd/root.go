@@ -55,6 +55,7 @@ func Execute() {
 	shuttingDown := make(chan struct{})
 	spaces := handler.NewSpaceRegistry(cfg, controlDB, layout, shuttingDown)
 	defer spaces.Close()
+	spaces.StartRuntimeEvents()
 
 	deps := &handler.Dependencies{
 		Config:  cfg,

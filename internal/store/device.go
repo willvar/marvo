@@ -1,9 +1,11 @@
 package store
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,9 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/text/unicode/norm"
@@ -72,17 +72,14 @@ type approvedDeviceRecord struct {
 	ApprovedAt    time.Time  `json:"approved_at"`
 }
 
-type DeviceStore struct {
-	mu       sync.RWMutex
-	pending  map[string]*PendingRequest
-	approved map[string]*ApprovedDevice
-	path     string
-	secret   string
-}
-
 type deviceFile struct {
 	Pending  map[string]*PendingRequest       `json:"pending"`
 	Approved map[string]*approvedDeviceRecord `json:"approved"`
+}
+
+type DeviceStore struct {
+	state  *StateDB
+	secret string
 }
 
 const MaxDeviceNameRunes = 50
@@ -93,20 +90,16 @@ var (
 	ErrDeviceNameConflict    = errors.New("device name already exists")
 )
 
-func NewDeviceStore(dataDir string, sessionSecret string) *DeviceStore {
-	ds := &DeviceStore{
-		pending:  make(map[string]*PendingRequest),
-		approved: make(map[string]*ApprovedDevice),
-		path:     dataDir,
-		secret:   sessionSecret,
-	}
-	ds.load()
-	ds.normalizeLoadedDeviceNames()
-	return ds
+func NewDeviceStore(state *StateDB, sessionSecret string) *DeviceStore {
+	return &DeviceStore{state: state, secret: sessionSecret}
 }
 
 func normalizeDeviceName(name string) string {
 	return norm.NFC.String(strings.TrimSpace(name))
+}
+
+func deviceNameKey(name string) string {
+	return strings.ToLower(normalizeDeviceName(name))
 }
 
 func validDeviceName(name string) bool {
@@ -144,254 +137,181 @@ func nextUniqueDeviceName(name string, used func(string) bool) string {
 	}
 }
 
-func (ds *DeviceStore) normalizeLoadedDeviceNames() {
-	devices := make([]*ApprovedDevice, 0, len(ds.approved))
-	for _, device := range ds.approved {
-		if device != nil {
-			devices = append(devices, device)
-		}
-	}
-	sort.Slice(devices, func(i, j int) bool {
-		if devices[i].ApprovedAt.Equal(devices[j].ApprovedAt) {
-			return devices[i].ID < devices[j].ID
-		}
-		return devices[i].ApprovedAt.Before(devices[j].ApprovedAt)
-	})
-
-	claimed := make([]string, 0, len(devices))
-	changed := false
-	for _, device := range devices {
-		name := nextUniqueDeviceName(device.DeviceName, func(candidate string) bool {
-			for _, existing := range claimed {
-				if strings.EqualFold(existing, candidate) {
-					return true
-				}
-			}
-			return false
-		})
-		claimed = append(claimed, name)
-		if device.DeviceName != name {
-			device.DeviceName = name
-			changed = true
-		}
-	}
-	if changed {
-		if err := ds.saveLocked(); err != nil {
-			slog.Warn("failed to persist normalized device names", "error", err)
-		}
-	}
-}
-
-func (ds *DeviceStore) deviceNameUsedLocked(name string, exceptLocalDeviceID string) bool {
-	for localDeviceID, device := range ds.approved {
-		if localDeviceID == exceptLocalDeviceID || device == nil {
-			continue
-		}
-		if strings.EqualFold(normalizeDeviceName(device.DeviceName), name) {
-			return true
-		}
-	}
-	return false
-}
-
-func (ds *DeviceStore) load() {
-	file := ds.devicesFile()
-	if info, err := os.Lstat(file); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			slog.Warn("devices file is not a regular file", "path", file)
-			return
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("failed to inspect devices file", "error", err)
-		return
-	}
-	data, err := os.ReadFile(file)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("failed to read devices file", "error", err)
-		}
-		return
-	}
-	var df deviceFile
-	if err := json.Unmarshal(data, &df); err != nil {
-		slog.Warn("failed to parse devices file", "error", err)
-		ds.pending = make(map[string]*PendingRequest)
-		ds.approved = make(map[string]*ApprovedDevice)
-		return
-	}
-	if df.Pending != nil {
-		ds.pending = df.Pending
-	}
-	if df.Approved != nil {
-		ds.approved = make(map[string]*ApprovedDevice, len(df.Approved))
-		for key, record := range df.Approved {
-			if record == nil || record.Token == "" {
-				continue
-			}
-			ds.approved[key] = &ApprovedDevice{
-				ID: record.ID, LocalDeviceID: record.LocalDeviceID,
-				DeviceName: record.DeviceName, DeviceInfo: record.DeviceInfo,
-				Token: record.Token, ApprovedAt: record.ApprovedAt,
-			}
-		}
-	}
-}
-
-func (ds *DeviceStore) saveLocked() error {
-	approved := make(map[string]*approvedDeviceRecord, len(ds.approved))
-	for key, dev := range ds.approved {
-		approved[key] = &approvedDeviceRecord{
-			ID: dev.ID, LocalDeviceID: dev.LocalDeviceID,
-			DeviceName: dev.DeviceName, DeviceInfo: dev.DeviceInfo,
-			Token: dev.Token, ApprovedAt: dev.ApprovedAt,
-		}
-	}
-	df := deviceFile{Pending: ds.pending, Approved: approved}
-	data, err := json.MarshalIndent(df, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return writePrivateFileAtomic(ds.devicesFile(), data)
-}
-
-func (ds *DeviceStore) devicesFile() string {
-	return filepath.Join(ds.path, ".devices.json")
-}
-
 func (ds *DeviceStore) CreateRequest(localDeviceID string, deviceName string, info DeviceInfo) (*PendingRequest, error) {
 	deviceName = normalizeDeviceName(deviceName)
 	if !validDeviceName(deviceName) {
 		return nil, ErrInvalidDeviceName
 	}
-
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
-	if _, ok := ds.approved[localDeviceID]; ok {
-		return nil, nil
+	tx, err := ds.state.sql.BeginTx(context.Background(), nil)
+	if err != nil {
+		return nil, err
 	}
-
-	for _, r := range ds.pending {
-		if r.LocalDeviceID == localDeviceID {
-			return r, nil
-		}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices WHERE local_device_id = ?`, localDeviceID).Scan(&exists); err != nil {
+		return nil, err
 	}
-	if len(ds.pending) >= 1000 {
+	if exists > 0 {
+		return nil, tx.Commit()
+	}
+	request, err := findPendingRequest(tx, localDeviceID)
+	if err == nil {
+		return request, tx.Commit()
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM device_requests`).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists >= 1000 {
 		return nil, ErrTooManyPendingDevices
 	}
-
 	id, err := randomID()
 	if err != nil {
 		return nil, err
 	}
-	req := &PendingRequest{
-		ID:            id,
-		LocalDeviceID: localDeviceID,
-		DeviceName:    deviceName,
-		DeviceInfo:    info,
-		CreatedAt:     time.Now(),
-	}
-	ds.pending[id] = req
-	if err := ds.saveLocked(); err != nil {
-		delete(ds.pending, id)
+	request = &PendingRequest{ID: id, LocalDeviceID: localDeviceID, DeviceName: deviceName, DeviceInfo: info, CreatedAt: time.Now().UTC()}
+	infoJSON, err := json.Marshal(info)
+	if err != nil {
 		return nil, err
 	}
-	return req, nil
+	if _, err := tx.Exec(`
+		INSERT INTO device_requests(id, local_device_id, device_name, info_json, created_at)
+		VALUES(?, ?, ?, ?, ?)
+	`, request.ID, request.LocalDeviceID, request.DeviceName, string(infoJSON), request.CreatedAt.UnixMilli()); err != nil {
+		return nil, err
+	}
+	return request, tx.Commit()
 }
 
 func (ds *DeviceStore) FindByLocalDeviceID(localDeviceID string) (*ApprovedDevice, *PendingRequest) {
-	ds.mu.RLock()
-	defer ds.mu.RUnlock()
-
-	if dev, ok := ds.approved[localDeviceID]; ok {
-		return dev, nil
+	device, err := findApprovedDevice(ds.state.sql, localDeviceID, true)
+	if err == nil {
+		return device, nil
 	}
-
-	for _, r := range ds.pending {
-		if r.LocalDeviceID == localDeviceID {
-			return nil, r
-		}
+	if !errors.Is(err, sql.ErrNoRows) {
+		slog.Error("failed to find approved device", "error", err)
+		return nil, nil
+	}
+	request, err := findPendingRequest(ds.state.sql, localDeviceID)
+	if err == nil {
+		return nil, request
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		slog.Error("failed to find pending device", "error", err)
 	}
 	return nil, nil
 }
 
 func (ds *DeviceStore) ListRequests() []*PendingRequest {
-	ds.mu.RLock()
-	defer ds.mu.RUnlock()
-
-	result := make([]*PendingRequest, 0, len(ds.pending))
-	for _, r := range ds.pending {
-		result = append(result, r)
+	rows, err := ds.state.sql.Query(`
+		SELECT id, local_device_id, device_name, info_json, created_at
+		FROM device_requests ORDER BY created_at DESC, id DESC
+	`)
+	if err != nil {
+		slog.Error("failed to list device requests", "error", err)
+		return []*PendingRequest{}
+	}
+	defer rows.Close()
+	result := make([]*PendingRequest, 0)
+	for rows.Next() {
+		request, scanErr := scanPendingRequest(rows)
+		if scanErr != nil {
+			slog.Error("failed to read device request", "error", scanErr)
+			return []*PendingRequest{}
+		}
+		result = append(result, request)
 	}
 	return result
 }
 
 func (ds *DeviceStore) ApproveRequest(id string) (*ApprovedDevice, error) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
-	req, ok := ds.pending[id]
-	if !ok {
-		return nil, nil
+	tx, err := ds.state.sql.BeginTx(context.Background(), nil)
+	if err != nil {
+		return nil, err
 	}
-
+	defer tx.Rollback()
+	request, err := findPendingRequestByID(tx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, tx.Commit()
+	}
+	if err != nil {
+		return nil, err
+	}
 	token, err := randomID()
 	if err != nil {
 		return nil, err
 	}
-	dev := &ApprovedDevice{
-		ID:            req.ID,
-		LocalDeviceID: req.LocalDeviceID,
-		DeviceName: nextUniqueDeviceName(req.DeviceName, func(candidate string) bool {
-			return ds.deviceNameUsedLocked(candidate, "")
-		}),
-		DeviceInfo: req.DeviceInfo,
-		Token:      token,
-		ApprovedAt: time.Now(),
-	}
-	delete(ds.pending, id)
-	ds.approved[req.LocalDeviceID] = dev
-	if err := ds.saveLocked(); err != nil {
-		delete(ds.approved, req.LocalDeviceID)
-		ds.pending[id] = req
+	rows, err := tx.Query(`SELECT device_name_key FROM devices`)
+	if err != nil {
 		return nil, err
 	}
-	return dev, nil
+	usedNames := make(map[string]struct{})
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		usedNames[key] = struct{}{}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	name := nextUniqueDeviceName(request.DeviceName, func(candidate string) bool {
+		_, exists := usedNames[deviceNameKey(candidate)]
+		return exists
+	})
+	device := &ApprovedDevice{
+		ID: request.ID, LocalDeviceID: request.LocalDeviceID, DeviceName: name,
+		DeviceInfo: request.DeviceInfo, Token: token, ApprovedAt: time.Now().UTC(),
+	}
+	infoJSON, err := json.Marshal(device.DeviceInfo)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`DELETE FROM device_requests WHERE id = ?`, id); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO devices(local_device_id, id, device_name, device_name_key, info_json, token, approved_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?)
+	`, device.LocalDeviceID, device.ID, device.DeviceName, deviceNameKey(device.DeviceName), string(infoJSON), device.Token,
+		device.ApprovedAt.UnixMilli()); err != nil {
+		return nil, err
+	}
+	return device, tx.Commit()
 }
 
 func (ds *DeviceStore) RejectRequest(id string) (bool, error) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
-	req, exists := ds.pending[id]
-	if !exists {
-		return false, nil
-	}
-	delete(ds.pending, id)
-	if err := ds.saveLocked(); err != nil {
-		ds.pending[id] = req
+	result, err := ds.state.sql.Exec(`DELETE FROM device_requests WHERE id = ?`, id)
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	affected, err := result.RowsAffected()
+	return affected > 0, err
 }
 
 func (ds *DeviceStore) ListDevices() []*ApprovedDevice {
-	ds.mu.RLock()
-	defer ds.mu.RUnlock()
-
-	result := make([]*ApprovedDevice, 0, len(ds.approved))
-	for _, d := range ds.approved {
-		copy := *d
-		copy.Token = ""
-		result = append(result, &copy)
+	rows, err := ds.state.sql.Query(`
+		SELECT id, local_device_id, device_name, info_json, approved_at
+		FROM devices ORDER BY approved_at DESC, id DESC
+	`)
+	if err != nil {
+		slog.Error("failed to list approved devices", "error", err)
+		return []*ApprovedDevice{}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].ApprovedAt.Equal(result[j].ApprovedAt) {
-			return result[i].ID < result[j].ID
+	defer rows.Close()
+	result := make([]*ApprovedDevice, 0)
+	for rows.Next() {
+		device, scanErr := scanApprovedDevice(rows, false)
+		if scanErr != nil {
+			slog.Error("failed to read approved device", "error", scanErr)
+			return []*ApprovedDevice{}
 		}
-		return result[i].ApprovedAt.After(result[j].ApprovedAt)
-	})
+		result = append(result, device)
+	}
 	return result
 }
 
@@ -400,67 +320,123 @@ func (ds *DeviceStore) RenameDevice(localDeviceID string, deviceName string) (*A
 	if !validDeviceName(deviceName) {
 		return nil, ErrInvalidDeviceName
 	}
-
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
-	device, ok := ds.approved[localDeviceID]
-	if !ok || device == nil {
-		return nil, nil
-	}
-	if device.DeviceName == deviceName {
-		result := *device
-		result.Token = ""
-		return &result, nil
-	}
-	if ds.deviceNameUsedLocked(deviceName, localDeviceID) {
-		return nil, ErrDeviceNameConflict
-	}
-
-	previousName := device.DeviceName
-	device.DeviceName = deviceName
-	if err := ds.saveLocked(); err != nil {
-		device.DeviceName = previousName
+	tx, err := ds.state.sql.BeginTx(context.Background(), nil)
+	if err != nil {
 		return nil, err
 	}
-	result := *device
-	result.Token = ""
-	return &result, nil
+	defer tx.Rollback()
+	device, err := findApprovedDevice(tx, localDeviceID, false)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, tx.Commit()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if device.DeviceName == deviceName {
+		return device, tx.Commit()
+	}
+	var exists int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices WHERE device_name_key = ? AND local_device_id <> ?`, deviceNameKey(deviceName), localDeviceID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists > 0 {
+		return nil, ErrDeviceNameConflict
+	}
+	if _, err := tx.Exec(`UPDATE devices SET device_name = ?, device_name_key = ? WHERE local_device_id = ?`, deviceName, deviceNameKey(deviceName), localDeviceID); err != nil {
+		return nil, err
+	}
+	device.DeviceName = deviceName
+	return device, tx.Commit()
 }
 
 func (ds *DeviceStore) RevokeDevice(localDeviceID string) (bool, error) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-
-	if device, ok := ds.approved[localDeviceID]; ok {
-		delete(ds.approved, localDeviceID)
-		if err := ds.saveLocked(); err != nil {
-			ds.approved[localDeviceID] = device
-			return false, err
-		}
-		return true, nil
+	result, err := ds.state.sql.Exec(`DELETE FROM devices WHERE local_device_id = ?`, localDeviceID)
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	affected, err := result.RowsAffected()
+	return affected > 0, err
 }
 
 func (ds *DeviceStore) SignToken(token string) string {
 	mac := hmac.New(sha256.New, []byte(ds.secret))
-	mac.Write([]byte(token))
+	_, _ = mac.Write([]byte(token))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (ds *DeviceStore) VerifyToken(token, sig string) bool {
-	if token == "" || sig == "" || ds.secret == "" || !hmac.Equal([]byte(sig), []byte(ds.SignToken(token))) {
+func (ds *DeviceStore) VerifyToken(token, signature string) bool {
+	if token == "" || signature == "" || ds.secret == "" || !hmac.Equal([]byte(signature), []byte(ds.SignToken(token))) {
 		return false
 	}
-	ds.mu.RLock()
-	defer ds.mu.RUnlock()
-	for _, dev := range ds.approved {
-		if dev != nil && hmac.Equal([]byte(dev.Token), []byte(token)) {
-			return true
-		}
+	var stored string
+	if err := ds.state.sql.QueryRow(`SELECT token FROM devices WHERE token = ?`, token).Scan(&stored); err != nil {
+		return false
 	}
-	return false
+	return hmac.Equal([]byte(stored), []byte(token))
+}
+
+type rowScanner interface {
+	Scan(...any) error
+}
+
+type queryRower interface {
+	QueryRow(string, ...any) *sql.Row
+}
+
+func findPendingRequest(source queryRower, localDeviceID string) (*PendingRequest, error) {
+	return scanPendingRequest(source.QueryRow(`
+		SELECT id, local_device_id, device_name, info_json, created_at
+		FROM device_requests WHERE local_device_id = ?
+	`, localDeviceID))
+}
+
+func findPendingRequestByID(source queryRower, id string) (*PendingRequest, error) {
+	return scanPendingRequest(source.QueryRow(`
+		SELECT id, local_device_id, device_name, info_json, created_at
+		FROM device_requests WHERE id = ?
+	`, id))
+}
+
+func scanPendingRequest(row rowScanner) (*PendingRequest, error) {
+	var request PendingRequest
+	var infoJSON string
+	var createdAt int64
+	if err := row.Scan(&request.ID, &request.LocalDeviceID, &request.DeviceName, &infoJSON, &createdAt); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(infoJSON), &request.DeviceInfo); err != nil {
+		return nil, err
+	}
+	request.CreatedAt = time.UnixMilli(createdAt).UTC()
+	return &request, nil
+}
+
+func findApprovedDevice(source queryRower, localDeviceID string, includeToken bool) (*ApprovedDevice, error) {
+	columns := "id, local_device_id, device_name, info_json, approved_at"
+	if includeToken {
+		columns += ", token"
+	}
+	return scanApprovedDevice(source.QueryRow(`SELECT `+columns+` FROM devices WHERE local_device_id = ?`, localDeviceID), includeToken)
+}
+
+func scanApprovedDevice(row rowScanner, includeToken bool) (*ApprovedDevice, error) {
+	var device ApprovedDevice
+	var infoJSON string
+	var approvedAt int64
+	var err error
+	if includeToken {
+		err = row.Scan(&device.ID, &device.LocalDeviceID, &device.DeviceName, &infoJSON, &approvedAt, &device.Token)
+	} else {
+		err = row.Scan(&device.ID, &device.LocalDeviceID, &device.DeviceName, &infoJSON, &approvedAt)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(infoJSON), &device.DeviceInfo); err != nil {
+		return nil, err
+	}
+	device.ApprovedAt = time.UnixMilli(approvedAt).UTC()
+	return &device, nil
 }
 
 func writePrivateFileAtomic(path string, data []byte) error {
@@ -468,46 +444,46 @@ func writePrivateFileAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".marvo-devices-*")
+	temporary, err := os.CreateTemp(dir, ".marvo-state-*")
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
+	temporaryPath := temporary.Name()
 	cleanup := func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
 	}
-	if err := tmp.Chmod(0600); err != nil {
+	if err := temporary.Chmod(0600); err != nil {
 		cleanup()
 		return err
 	}
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := temporary.Write(data); err != nil {
 		cleanup()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := temporary.Sync(); err != nil {
 		cleanup()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
+	if err := os.Rename(temporaryPath, path); err != nil {
+		_ = os.Remove(temporaryPath)
 		return err
 	}
-	if dirFile, err := os.Open(dir); err == nil {
-		_ = dirFile.Sync()
-		_ = dirFile.Close()
+	if directory, err := os.Open(dir); err == nil {
+		_ = directory.Sync()
+		_ = directory.Close()
 	}
 	return nil
 }
 
 func randomID() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(b), nil
+	return hex.EncodeToString(value), nil
 }

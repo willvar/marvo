@@ -61,15 +61,15 @@ func (d *AgentDeps) releaseAgentPrompt(sessionID string) {
 
 func (d *AgentDeps) syncGlobalPromptLocked(ctx context.Context) (bool, error) {
 	prompt := d.settingsStore.Get().GlobalPrompt
-	var rules []store.PersonalizationRule
-	if d.personalization != nil {
-		snapshot, err := d.personalization.Get()
+	var memories []store.Memory
+	if d.memories != nil {
+		snapshot, err := d.memories.Get()
 		if err != nil {
 			return false, err
 		}
-		rules = snapshot.Rules
+		memories = snapshot.Memories
 	}
-	matches, err := d.globalPromptFile.MatchesPreferences(prompt, rules)
+	matches, err := d.globalPromptFile.MatchesPreferences(prompt, memories)
 	if err != nil {
 		return false, err
 	}
@@ -83,7 +83,7 @@ func (d *AgentDeps) syncGlobalPromptLocked(ctx context.Context) (bool, error) {
 	if d.hasActiveAgentRunLocked(statuses) {
 		return true, nil
 	}
-	if err := d.globalPromptFile.SyncPreferences(prompt, rules); err != nil {
+	if err := d.globalPromptFile.SyncPreferences(prompt, memories); err != nil {
 		return false, err
 	}
 	return false, nil

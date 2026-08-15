@@ -12,6 +12,7 @@
     "skill": "allow",
     "external_directory": "allow",
     "doom_loop": "deny",
+    "marvo_*": "allow",
     "bash": "allow"
   }
 }

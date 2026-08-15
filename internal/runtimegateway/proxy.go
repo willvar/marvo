@@ -4,15 +4,20 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"strings"
+	"time"
 )
 
 type Server struct {
 	tokenHash [32]byte
+	token     string
 	runtimes  RuntimeProvider
+	events    *eventBroker
+	sessions  *http.Client
 }
 
 type runtimeActivityTracker interface {
@@ -20,7 +25,16 @@ type runtimeActivityTracker interface {
 }
 
 func NewServer(token string, runtimes RuntimeProvider) *Server {
-	return &Server{tokenHash: sha256.Sum256([]byte(token)), runtimes: runtimes}
+	return &Server{
+		tokenHash: sha256.Sum256([]byte(token)), token: token, runtimes: runtimes,
+		events: newEventBroker(),
+		sessions: &http.Client{
+			Timeout: 20 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return errors.New("OpenCode session API redirect refused")
+			},
+		},
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -28,6 +42,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeGatewayJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	mux.Handle("GET /events", s.authenticate(http.HandlerFunc(s.handleEvents)))
+	mux.Handle("POST /tool/{userID}/{tool}", s.authenticateTool(http.HandlerFunc(s.handleTool)))
 	mux.Handle("/user/{userID}/{$}", s.authenticate(http.HandlerFunc(s.proxy)))
 	mux.Handle("/user/{userID}/{path...}", s.authenticate(http.HandlerFunc(s.proxy)))
 	return mux

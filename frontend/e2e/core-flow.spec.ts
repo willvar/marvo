@@ -67,7 +67,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page).toHaveTitle(`智能体设置 · Playwright 用户空间 · Marvo`)
   await expect(page.getByRole('heading', { name: '智能体设置' })).toBeVisible()
   await expect(page.getByRole('tablist')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '新增规则' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '新增记忆' })).toBeVisible()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
   await expect(page.locator('.agent-model-selected')).toContainText('E2E Vision')
   await expect(page.locator('.agent-model-selected')).toContainText('支持图片')
@@ -91,13 +91,13 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(changedReasoning).toHaveAttribute('data-state', 'checked')
   await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
 
-  const personalizationRule = `称呼测试规则 ${suffix}`
-  await page.getByRole('button', { name: '新增规则' }).click()
-  const newPersonalizationRule = page.locator('.agent-personalization-rule').last()
-  await expect(newPersonalizationRule).not.toHaveAttribute('data-invalid')
-  await expect(newPersonalizationRule.locator('[data-part="error-text"]')).toBeHidden()
+  const memory = `称呼测试记忆 ${suffix}`
+  await page.getByRole('button', { name: '新增记忆' }).click()
+  const newMemory = page.locator('.agent-memory').last()
+  await expect(newMemory).not.toHaveAttribute('data-invalid')
+  await expect(newMemory.locator('[data-part="error-text"]')).toBeHidden()
   await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
-  await newPersonalizationRule.locator('.agent-personalization-input').fill(personalizationRule)
+  await newMemory.locator('.agent-memory-input').fill(memory)
   const globalPrompt = `E2E global prompt ${suffix}`
   const expandedGlobalPrompt = `${globalPrompt}\n通过全屏编辑补充`
   await page.getByLabel('全局提示词', { exact: true }).fill(globalPrompt)
@@ -114,7 +114,7 @@ test('核心笔记流程在响应式布局中安全工作', async ({ page }, tes
   await expect(page.getByRole('button', { name: '保存设置' })).toBeDisabled()
   await page.reload()
   await expect(page.getByLabel('全局提示词', { exact: true })).toHaveValue(expandedGlobalPrompt)
-  await expect(page.locator('.agent-personalization-input').last()).toHaveValue(personalizationRule)
+  await expect(page.locator('.agent-memory-input').last()).toHaveValue(memory)
   await page.goto(workspacePath('/agent'))
   await expect(page.locator('.dsh-header-agent')).toHaveCount(0)
   await openSidebar(page)

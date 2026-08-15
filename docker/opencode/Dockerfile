@@ -28,11 +28,15 @@ RUN apt-get update && \
     chmod 755 /root && \
     rm -rf /root/.bun/install/cache
 
+COPY tools/package.json /opt/marvo/opencode-tools/package.json
+RUN cd /opt/marvo/opencode-tools && bun install --production --exact && rm -rf /root/.bun/install/cache
 COPY --chmod=0444 AGENTS.md /opt/marvo/AGENTS.md
 COPY --chmod=0444 opencode.json /opt/marvo/opencode.json
-COPY --chmod=0555 bin/marvo-personalization /usr/local/bin/marvo-personalization
+COPY --chmod=0444 tools/marvo-tool.ts /opt/marvo/opencode-tools/marvo-tool.ts
+COPY --chmod=0444 tools/definitions /opt/marvo/opencode-tools/definitions
 COPY --chmod=0555 entrypoint.sh /opt/marvo/entrypoint.sh
-RUN chmod 0755 /opt/marvo
+RUN chmod 0755 /opt/marvo /opt/marvo/opencode-tools && \
+    chmod 0555 /opt/marvo/opencode-tools/definitions
 
 WORKDIR /workspace
 

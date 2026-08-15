@@ -37,3 +37,33 @@ export interface TrashEntry {
   tags: string[]
   deleted_at: string
 }
+
+type ActivityKind = 'notice' | 'choice'
+
+export interface ActivityItem {
+  id: string
+  kind: ActivityKind
+  title: string
+  content: string
+  choices: string[]
+  multiple: boolean
+  created_at: string
+  read_at: string | null
+  responded_at: string | null
+  response_text?: string
+  response_choices?: string[]
+  reply_session_id?: string
+  replying: boolean
+}
+
+export interface ActivityPage {
+  activities: ActivityItem[]
+  next_cursor?: string
+  unread: number
+  pending: number
+}
+
+export interface ActivityCounts {
+  unread: number
+  pending: number
+}

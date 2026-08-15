@@ -3,7 +3,8 @@ set -eu
 
 config_dir="$HOME/.config/opencode"
 config_file="$config_dir/opencode.json"
-mkdir -p "$config_dir" "$HOME/.local/share/opencode"
+tools_dir="$config_dir/tools"
+mkdir -p "$config_dir" "$tools_dir" "$HOME/.local/share/opencode"
 
 if ! cmp -s /opt/marvo/opencode.json "$config_file" 2>/dev/null; then
   if ! cp /opt/marvo/opencode.json "$config_file" 2>/dev/null; then
@@ -15,6 +16,12 @@ if ! cmp -s /opt/marvo/opencode.json "$config_file" 2>/dev/null; then
     chmod 600 "$config_file"
   fi
 fi
+
+for tool_file in /opt/marvo/opencode-tools/definitions/*.ts; do
+  target="$tools_dir/$(basename "$tool_file")"
+  printf 'export { default } from "%s";\n' "$tool_file" > "$target"
+  chmod 600 "$target"
+done
 
 # New multi-user runtimes use an immutable in-image target. The legacy launcher
 # may already have a read-only bind at this path, in which case it stays intact.

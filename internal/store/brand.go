@@ -1,15 +1,11 @@
 package store
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
+	"log/slog"
 	"strings"
-	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -28,26 +24,27 @@ type BrandConfig struct {
 }
 
 type BrandStore struct {
-	mu     sync.RWMutex
-	path   string
-	config BrandConfig
+	state *StateDB
 }
 
-func NewBrandStore(appDir string) (*BrandStore, error) {
-	brandStore := &BrandStore{
-		path:   filepath.Join(appDir, brandFilename),
-		config: BrandConfig{Name: DefaultBrandName},
+func NewBrandStore(state *StateDB) (*BrandStore, error) {
+	if state == nil || state.sql == nil {
+		return nil, errors.New("user state database is unavailable")
 	}
-	if err := brandStore.load(); err != nil {
+	brandStore := &BrandStore{state: state}
+	if _, err := brandStore.load(); err != nil {
 		return nil, err
 	}
 	return brandStore, nil
 }
 
 func (s *BrandStore) Get() BrandConfig {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.config
+	config, err := s.load()
+	if err != nil {
+		slog.Error("failed to read brand settings", "error", err)
+		return BrandConfig{Name: DefaultBrandName}
+	}
+	return config
 }
 
 func (s *BrandStore) Save(name string) (BrandConfig, error) {
@@ -55,57 +52,27 @@ func (s *BrandStore) Save(name string) (BrandConfig, error) {
 	if err := ValidateBrandName(config.Name); err != nil {
 		return BrandConfig{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := validateBrandFile(s.path); err != nil {
-		return BrandConfig{}, err
+	if _, err := s.state.sql.Exec(`
+		UPDATE space_settings SET brand_name = ?, updated_at = ? WHERE id = 1
+	`, config.Name, time.Now().UTC().UnixMilli()); err != nil {
+		return BrandConfig{}, fmt.Errorf("save brand settings: %w", err)
 	}
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return BrandConfig{}, err
-	}
-	data = append(data, '\n')
-	if err := writePrivateFileAtomic(s.path, data); err != nil {
-		return BrandConfig{}, err
-	}
-	s.config = config
 	return config, nil
 }
 
-func (s *BrandStore) load() error {
-	if err := validateBrandFile(s.path); err != nil {
-		return err
-	}
-	info, err := os.Stat(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Size() > maxBrandFileBytes {
-		return fmt.Errorf("%w: file is too large", ErrInvalidBrand)
-	}
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return err
+func (s *BrandStore) load() (BrandConfig, error) {
+	if s == nil || s.state == nil {
+		return BrandConfig{}, errors.New("brand store is unavailable")
 	}
 	var config BrandConfig
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&config); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidBrand, err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("%w: file must contain one JSON value", ErrInvalidBrand)
+	if err := s.state.sql.QueryRow(`SELECT brand_name FROM space_settings WHERE id = 1`).Scan(&config.Name); err != nil {
+		return BrandConfig{}, fmt.Errorf("load brand settings: %w", err)
 	}
 	config.Name = strings.TrimSpace(config.Name)
 	if err := ValidateBrandName(config.Name); err != nil {
-		return err
+		return BrandConfig{}, err
 	}
-	s.config = config
-	return nil
+	return config, nil
 }
 
 func ValidateBrandName(name string) error {
@@ -119,20 +86,6 @@ func ValidateBrandName(name string) error {
 		if unicode.IsControl(char) {
 			return fmt.Errorf("%w: name contains control characters", ErrInvalidBrand)
 		}
-	}
-	return nil
-}
-
-func validateBrandFile(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("%w: path is not a regular file", ErrInvalidBrand)
 	}
 	return nil
 }

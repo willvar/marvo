@@ -1,0 +1,8 @@
+{
+  "name": "marvo-opencode-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.15"
+  }
+}

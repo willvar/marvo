@@ -12,7 +12,16 @@ export { isMarvoAndroidApp } from './appEnvironment'
 export { useAppBackHandler } from './appBack'
 export { setColorSchemePreference } from './colorScheme'
 export { connect, disconnect, on, subscribe, unsubscribe } from './collab'
-export { type NoteInfo, type NoteDetail, type SearchResult, type MediaAsset, type TrashEntry } from './types'
+export {
+  type NoteInfo,
+  type NoteDetail,
+  type SearchResult,
+  type MediaAsset,
+  type TrashEntry,
+  type ActivityItem,
+  type ActivityPage,
+  type ActivityCounts,
+} from './types'
 export {
   type AgentSession,
   type AgentSessionError,
@@ -25,8 +34,8 @@ export {
   type AgentModelOption,
   type AgentSettingsResponse,
   type AgentSettingsUpdate,
-  type AgentPersonalizationRule,
-  type AgentPersonalizationResponse,
+  type AgentMemory,
+  type AgentMemoriesResponse,
   type AgentProvider,
   type AgentProviderMethod,
   type AgentProviderPromptOption,

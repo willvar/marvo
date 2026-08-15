@@ -155,7 +155,7 @@ func newProviderTestUpstream(t *testing.T) (*providerTestUpstream, *httptest.Ser
 
 func newProviderTestDeps(t *testing.T, upstreamURL string) *AgentDeps {
 	t.Helper()
-	settingsStore, err := store.NewAgentSettingsStore(t.TempDir())
+	settingsStore, err := store.NewAgentSettingsStore(newHandlerStateDB(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func newProviderTestDeps(t *testing.T, upstreamURL string) *AgentDeps {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewAgentDeps(upstreamURL, make(chan struct{}), settingsStore, nil, globalPromptFile)
+	return NewAgentDeps(upstreamURL, make(chan struct{}), settingsStore, nil, globalPromptFile, nil)
 }
 
 func TestAgentProviderCatalogAndAPIKeyConnection(t *testing.T) {

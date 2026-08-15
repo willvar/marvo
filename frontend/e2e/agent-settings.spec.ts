@@ -22,7 +22,7 @@ test('智能体设置在单页展示所有分区并始终显示统一保存', as
   await expect(page.locator('.agent-variant-group')).not.toContainText('none')
   await expect(page.getByRole('heading', { name: '联网搜索' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '全局提示词' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '个性化规则' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '记忆', exact: true })).toBeVisible()
 
   const actionButtons = page.locator('.agent-settings-page-actions .agent-settings-action')
   const [discardBounds, saveBounds] = await Promise.all([

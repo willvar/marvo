@@ -14,19 +14,19 @@ import {
   UndoOutlined,
 } from '@ant-design/icons-vue'
 import { v4 as uuidv4 } from 'uuid'
-import { useAgentPersonalizationStore } from '../../stores/agentPersonalization'
+import { useAgentMemoriesStore } from '../../stores/agentMemories'
 import { useAgentSettingsStore } from '../../stores/agentSettings'
-import type { AgentModelOption, AgentModelSelection, AgentPersonalizationRule, AgentSettingsUpdate } from '../../sdk'
+import type { AgentModelOption, AgentModelSelection, AgentMemory, AgentSettingsUpdate } from '../../sdk'
 import AgentProviderSettings from '../../components/AgentProviderSettings.vue'
 import { XFullscreenTextarea } from '../../components/x'
 
 const MAX_PROMPT_BYTES = 64 * 1024
 const MAX_EXA_API_KEY_BYTES = 4 * 1024
-const MAX_PERSONALIZATION_RULE_BYTES = 4 * 1024
-const MAX_PERSONALIZATION_RULES = 256
+const MAX_MEMORY_BYTES = 4 * 1024
+const MAX_MEMORIES = 256
 const DEFAULT_VARIANT = '__model_default__'
 const settingsStore = useAgentSettingsStore()
-const personalizationStore = useAgentPersonalizationStore()
+const memoriesStore = useAgentMemoriesStore()
 const loading = ref(false)
 const saving = ref(false)
 const settingsReady = ref(false)
@@ -43,17 +43,17 @@ const exaAPIKey = ref('')
 const exaClearRequested = ref(false)
 const unavailableModel = ref<AgentModelSelection | null>(null)
 const unavailableVariant = ref('')
-const personalizationRules = ref<AgentPersonalizationRule[]>([])
-const personalizationRevision = ref('')
-const personalizationSnapshot = ref('')
-const personalizationReady = ref(false)
-const personalizationLoading = ref(false)
-const personalizationError = ref('')
-const touchedPersonalizationRuleIDs = ref<Set<string>>(new Set())
+const memories = ref<AgentMemory[]>([])
+const memoriesRevision = ref('')
+const memoriesSnapshot = ref('')
+const memoriesReady = ref(false)
+const memoriesLoading = ref(false)
+const memoriesError = ref('')
+const touchedMemoryIDs = ref<Set<string>>(new Set())
 const pageHeading = ref<HTMLElement | null>(null)
 const pageHeadingVisible = ref(true)
 let loadSequence = 0
-let personalizationLoadSequence = 0
+let memoriesLoadSequence = 0
 let pageHeadingObserver: IntersectionObserver | null = null
 
 const { collection, filter, set } = useListCollection<AgentModelOption>({
@@ -84,24 +84,19 @@ const exaAPIKeyTooLarge = computed(() => exaAPIKeyBytes.value > MAX_EXA_API_KEY_
 const modelDirty = computed(() => settingsReady.value && modelSnapshot.value !== modelDraftSnapshot())
 const promptDirty = computed(() => settingsReady.value && promptSnapshot.value !== globalPrompt.value)
 const exaDirty = computed(() => settingsReady.value && (exaAPIKey.value.trim().length > 0 || exaClearRequested.value))
-const personalizationDirty = computed(
-  () => personalizationReady.value && personalizationSnapshot.value !== personalizationDraftSnapshot(),
-)
-const settingsDirty = computed(
-  () => modelDirty.value || promptDirty.value || exaDirty.value || personalizationDirty.value,
-)
+const memoriesDirty = computed(() => memoriesReady.value && memoriesSnapshot.value !== memoriesDraftSnapshot())
+const settingsDirty = computed(() => modelDirty.value || promptDirty.value || exaDirty.value || memoriesDirty.value)
 const exaStatus = computed(() => {
   if (!settingsReady.value) return loading.value ? '读取中' : '不可用'
   if (exaClearRequested.value) return '等待移除'
   if (exaAPIKey.value.trim()) return exaConfigured.value ? '等待替换' : '等待保存'
   return exaConfigured.value ? '已配置' : '匿名额度'
 })
-const personalizationInvalid = computed(() => {
+const memoriesInvalid = computed(() => {
   const texts = new Set<string>()
-  for (const rule of personalizationRules.value) {
-    const text = rule.text.trim()
-    if (!text || new TextEncoder().encode(text).byteLength > MAX_PERSONALIZATION_RULE_BYTES || texts.has(text))
-      return true
+  for (const memory of memories.value) {
+    const text = memory.text.trim()
+    if (!text || new TextEncoder().encode(text).byteLength > MAX_MEMORY_BYTES || texts.has(text)) return true
     texts.add(text)
   }
   return false
@@ -125,7 +120,7 @@ watch([selectedVariant, () => variantOptions.value.length, variantScroller], () 
 })
 
 onMounted(() => {
-  touchedPersonalizationRuleIDs.value = new Set()
+  touchedMemoryIDs.value = new Set()
   if (typeof IntersectionObserver !== 'undefined' && pageHeading.value) {
     pageHeadingObserver = new IntersectionObserver(
       ([entry]) => {
@@ -136,7 +131,7 @@ onMounted(() => {
     pageHeadingObserver.observe(pageHeading.value)
   }
   void loadSettings()
-  void loadPersonalization()
+  void loadMemories()
 })
 
 onBeforeUnmount(() => pageHeadingObserver?.disconnect())
@@ -160,24 +155,24 @@ function revealSelectedVariant() {
   })
 }
 
-async function loadPersonalization() {
-  const sequence = ++personalizationLoadSequence
-  personalizationLoading.value = true
-  personalizationReady.value = false
-  personalizationError.value = ''
+async function loadMemories() {
+  const sequence = ++memoriesLoadSequence
+  memoriesLoading.value = true
+  memoriesReady.value = false
+  memoriesError.value = ''
   try {
-    const snapshot = await personalizationStore.load(true)
-    if (sequence !== personalizationLoadSequence) return
-    personalizationRules.value = snapshot.rules.map((rule) => ({ ...rule }))
-    personalizationRevision.value = snapshot.revision
-    touchedPersonalizationRuleIDs.value = new Set()
-    personalizationReady.value = true
-    personalizationSnapshot.value = personalizationDraftSnapshot()
+    const snapshot = await memoriesStore.load(true)
+    if (sequence !== memoriesLoadSequence) return
+    memories.value = snapshot.memories.map((memory) => ({ ...memory }))
+    memoriesRevision.value = snapshot.revision
+    touchedMemoryIDs.value = new Set()
+    memoriesReady.value = true
+    memoriesSnapshot.value = memoriesDraftSnapshot()
   } catch (cause) {
-    if (sequence !== personalizationLoadSequence) return
-    personalizationError.value = cause instanceof Error ? cause.message : '读取个性化规则失败'
+    if (sequence !== memoriesLoadSequence) return
+    memoriesError.value = cause instanceof Error ? cause.message : '读取记忆失败'
   } finally {
-    if (sequence === personalizationLoadSequence) personalizationLoading.value = false
+    if (sequence === memoriesLoadSequence) memoriesLoading.value = false
   }
 }
 
@@ -249,20 +244,20 @@ async function refreshModels() {
 async function saveSettings() {
   if (!canSave.value) return false
   if (!validateSettings()) return false
-  let savePhase: 'personalization' | 'settings' = 'settings'
+  let savePhase: 'memories' | 'settings' = 'settings'
   saving.value = true
   error.value = ''
-  personalizationError.value = ''
+  memoriesError.value = ''
   try {
-    if (personalizationDirty.value) {
-      savePhase = 'personalization'
-      const snapshot = await personalizationStore.save(
-        personalizationRules.value.map((rule) => ({ ...rule, text: rule.text.trim() })),
-        personalizationRevision.value,
+    if (memoriesDirty.value) {
+      savePhase = 'memories'
+      const snapshot = await memoriesStore.save(
+        memories.value.map((memory) => ({ ...memory, text: memory.text.trim() })),
+        memoriesRevision.value,
       )
-      personalizationRules.value = snapshot.rules.map((rule) => ({ ...rule }))
-      personalizationRevision.value = snapshot.revision
-      personalizationSnapshot.value = personalizationDraftSnapshot()
+      memories.value = snapshot.memories.map((memory) => ({ ...memory }))
+      memoriesRevision.value = snapshot.revision
+      memoriesSnapshot.value = memoriesDraftSnapshot()
     }
     if (modelDirty.value || promptDirty.value || exaDirty.value) {
       savePhase = 'settings'
@@ -271,8 +266,8 @@ async function saveSettings() {
     return true
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : '保存智能体设置失败'
-    if (savePhase === 'personalization') {
-      personalizationError.value = message
+    if (savePhase === 'memories') {
+      memoriesError.value = message
     } else {
       error.value = message
     }
@@ -292,8 +287,8 @@ function validateSettings() {
   }
   if (promptTooLarge.value) return false
   if (exaAPIKeyTooLarge.value) return false
-  if (personalizationDirty.value && personalizationInvalid.value) {
-    touchedPersonalizationRuleIDs.value = new Set(personalizationRules.value.map((rule) => rule.id))
+  if (memoriesDirty.value && memoriesInvalid.value) {
+    touchedMemoryIDs.value = new Set(memories.value.map((memory) => memory.id))
     return false
   }
   return true
@@ -318,33 +313,33 @@ async function saveAgentSettings() {
   promptSnapshot.value = globalPrompt.value
 }
 
-function personalizationDraftSnapshot() {
-  return JSON.stringify(personalizationRules.value.map(({ id, text }) => ({ id, text })))
+function memoriesDraftSnapshot() {
+  return JSON.stringify(memories.value.map(({ id, text }) => ({ id, text })))
 }
 
-function addPersonalizationRule() {
-  if (personalizationRules.value.length >= MAX_PERSONALIZATION_RULES) return
-  personalizationRules.value = [...personalizationRules.value, { id: uuidv4(), text: '' }]
+function addMemory() {
+  if (memories.value.length >= MAX_MEMORIES) return
+  memories.value = [...memories.value, { id: uuidv4(), text: '' }]
 }
 
-function removePersonalizationRule(id: string) {
-  personalizationRules.value = personalizationRules.value.filter((rule) => rule.id !== id)
-  const touched = new Set(touchedPersonalizationRuleIDs.value)
+function removeMemory(id: string) {
+  memories.value = memories.value.filter((memory) => memory.id !== id)
+  const touched = new Set(touchedMemoryIDs.value)
   touched.delete(id)
-  touchedPersonalizationRuleIDs.value = touched
+  touchedMemoryIDs.value = touched
 }
 
-function touchPersonalizationRule(id: string) {
-  const touched = new Set(touchedPersonalizationRuleIDs.value)
+function touchMemory(id: string) {
+  const touched = new Set(touchedMemoryIDs.value)
   touched.add(id)
-  touchedPersonalizationRuleIDs.value = touched
+  touchedMemoryIDs.value = touched
 }
 
-function personalizationRuleInvalid(rule: AgentPersonalizationRule) {
-  if (!touchedPersonalizationRuleIDs.value.has(rule.id)) return false
-  const text = rule.text.trim()
-  if (!text || new TextEncoder().encode(text).byteLength > MAX_PERSONALIZATION_RULE_BYTES) return true
-  return personalizationRules.value.filter((candidate) => candidate.text.trim() === text).length > 1
+function memoryInvalid(memory: AgentMemory) {
+  if (!touchedMemoryIDs.value.has(memory.id)) return false
+  const text = memory.text.trim()
+  if (!text || new TextEncoder().encode(text).byteLength > MAX_MEMORY_BYTES) return true
+  return memories.value.filter((candidate) => candidate.text.trim() === text).length > 1
 }
 
 function modelDraftSnapshot() {
@@ -363,11 +358,11 @@ function restoreSettingsDraft() {
   globalPrompt.value = promptSnapshot.value
   exaAPIKey.value = ''
   exaClearRequested.value = false
-  if (personalizationSnapshot.value) {
-    personalizationRules.value = JSON.parse(personalizationSnapshot.value) as AgentPersonalizationRule[]
+  if (memoriesSnapshot.value) {
+    memories.value = JSON.parse(memoriesSnapshot.value) as AgentMemory[]
   }
-  touchedPersonalizationRuleIDs.value = new Set()
-  personalizationError.value = ''
+  touchedMemoryIDs.value = new Set()
+  memoriesError.value = ''
 }
 
 function handleExaAPIKeyInput() {
@@ -693,64 +688,62 @@ function formatLimit(limit?: number) {
                 </Field.Root>
               </section>
 
-              <section class="agent-settings-section agent-personalization-rules-section">
+              <section class="agent-settings-section agent-memories-section">
                 <div class="agent-settings-section-heading">
                   <div>
-                    <h2>个性化规则</h2>
+                    <h2>记忆</h2>
                     <p>你与智能体共同维护的长期默认偏好；当前请求中的明确要求仍然优先。</p>
                   </div>
-                  <span class="agent-settings-count">{{ personalizationRules.length }} 条</span>
+                  <span class="agent-settings-count">{{ memories.length }} 条</span>
                 </div>
 
-                <div v-if="personalizationLoading" class="agent-personalization-loading" role="status">
+                <div v-if="memoriesLoading" class="agent-memories-loading" role="status">
                   <span class="page-loading-spinner" />
-                  <span>正在读取规则...</span>
+                  <span>正在读取记忆...</span>
                 </div>
 
-                <template v-else-if="personalizationReady">
-                  <div v-if="personalizationRules.length" class="agent-personalization-rules">
+                <template v-else-if="memoriesReady">
+                  <div v-if="memories.length" class="agent-memories-list">
                     <Field.Root
-                      v-for="(rule, index) in personalizationRules"
-                      :key="rule.id"
-                      class="agent-personalization-rule"
-                      :invalid="personalizationRuleInvalid(rule)"
+                      v-for="(memory, index) in memories"
+                      :key="memory.id"
+                      class="agent-memory"
+                      :invalid="memoryInvalid(memory)"
                     >
                       <Field.Input
-                        v-model="rule.text"
-                        class="agent-personalization-input"
-                        :aria-label="`个性化规则 ${index + 1}`"
+                        v-model="memory.text"
+                        class="agent-memory-input"
+                        :aria-label="`记忆 ${index + 1}`"
                         placeholder="例如：面向用户时统一使用“智能体”这一称呼"
-                        @blur="touchPersonalizationRule(rule.id)"
+                        @blur="touchMemory(memory.id)"
                       />
                       <button
                         type="button"
-                        class="agent-personalization-delete"
-                        :aria-label="`删除个性化规则 ${index + 1}`"
-                        @click="removePersonalizationRule(rule.id)"
+                        class="agent-memory-delete"
+                        :aria-label="`删除记忆 ${index + 1}`"
+                        @click="removeMemory(memory.id)"
                       >
                         <DeleteOutlined aria-hidden="true" />
                         <span>删除</span>
                       </button>
-                      <Field.ErrorText>规则不能为空、重复或超过 4 KiB。</Field.ErrorText>
+                      <Field.ErrorText>记忆不能为空、重复或超过 4 KiB。</Field.ErrorText>
                     </Field.Root>
                   </div>
-                  <div v-else class="agent-personalization-empty">
-                    尚无个性化规则，智能体也可以在收到长期偏好反馈后添加。
-                  </div>
+                  <div v-else class="agent-memories-empty">尚无记忆；智能体也可以在收到长期偏好反馈后添加。</div>
 
                   <button
                     type="button"
-                    class="admin-btn agent-personalization-add"
-                    :disabled="personalizationRules.length >= MAX_PERSONALIZATION_RULES"
-                    @click="addPersonalizationRule"
+                    class="admin-btn agent-memory-add"
+                    :disabled="memories.length >= MAX_MEMORIES"
+                    @click="addMemory"
                   >
                     <PlusOutlined aria-hidden="true" />
-                    <span>新增规则</span>
+                    <span>新增记忆</span>
                   </button>
                 </template>
 
-                <div v-if="personalizationError" class="agent-settings-error agent-personalization-error" role="alert">
-                  {{ personalizationError }}
+                <div v-if="memoriesError" class="agent-settings-error agent-memories-error" role="alert">
+                  {{ memoriesError }}
                 </div>
               </section>
             </div>
@@ -1019,7 +1012,7 @@ function formatLimit(limit?: number) {
   font-size: var(--marvo-type-11);
   line-height: 1.55;
 }
-.agent-personalization-loading {
+.agent-memories-loading {
   display: flex;
   min-height: 92px;
   align-items: center;
@@ -1028,20 +1021,20 @@ function formatLimit(limit?: number) {
   color: var(--text-muted);
   font-size: var(--marvo-type-12);
 }
-.agent-personalization-loading .page-loading-spinner {
+.agent-memories-loading .page-loading-spinner {
   position: static;
 }
-.agent-personalization-rules {
+.agent-memories-list {
   display: flex;
   flex-direction: column;
   gap: 9px;
 }
-.agent-personalization-rule {
+.agent-memory {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 7px;
 }
-.agent-personalization-input {
+.agent-memory-input {
   min-width: 0;
   height: 38px;
   box-sizing: border-box;
@@ -1057,21 +1050,21 @@ function formatLimit(limit?: number) {
     border-color 0.15s,
     box-shadow 0.15s;
 }
-.agent-personalization-input:focus {
+.agent-memory-input:focus {
   border-color: var(--text-accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color) 13%, transparent);
 }
-.agent-personalization-rule[data-invalid] .agent-personalization-input {
+.agent-memory[data-invalid] .agent-memory-input {
   border-color: var(--text-danger);
 }
-.agent-personalization-delete,
-.agent-personalization-add {
+.agent-memory-delete,
+.agent-memory-add {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
 }
-.agent-personalization-delete {
+.agent-memory-delete {
   height: 38px;
   padding: 0 10px;
   border: 1px solid var(--border-primary);
@@ -1083,18 +1076,18 @@ function formatLimit(limit?: number) {
   font: inherit;
   font-size: var(--marvo-type-11);
 }
-.agent-personalization-delete:hover {
+.agent-memory-delete:hover {
   border-color: color-mix(in srgb, var(--text-danger) 42%, var(--border-primary));
   color: var(--text-danger);
 }
-.agent-personalization-delete:focus-visible {
+.agent-memory-delete:focus-visible {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color) 18%, transparent);
 }
-.agent-personalization-rule [data-part='error-text'] {
+.agent-memory [data-part='error-text'] {
   grid-column: 1 / -1;
   margin: -2px 0 1px;
 }
-.agent-personalization-empty {
+.agent-memories-empty {
   padding: 18px;
   border: 1px dashed var(--border-primary);
   border-radius: 9px;
@@ -1104,10 +1097,10 @@ function formatLimit(limit?: number) {
   font-size: var(--marvo-type-12);
   line-height: 1.6;
 }
-.agent-personalization-add {
+.agent-memory-add {
   margin-top: 11px;
 }
-.agent-personalization-error {
+.agent-memories-error {
   margin: 12px 0 0;
 }
 .agent-settings-field-label {
@@ -1603,7 +1596,7 @@ function formatLimit(limit?: number) {
   .agent-exa-remove {
     align-self: flex-end;
   }
-  .agent-personalization-delete {
+  .agent-memory-delete {
     min-height: 40px;
   }
   .agent-variant-scroll {

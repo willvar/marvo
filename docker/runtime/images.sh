@@ -56,7 +56,7 @@ ensure_agent_image() {
     docker/opencode/AGENTS.md \
     docker/opencode/opencode.json \
     docker/opencode/entrypoint.sh \
-    docker/opencode/bin)"
+    docker/opencode/tools)"
   build_image "$AGENT_IMAGE" "$digest" "$BASE_DIR/docker/opencode"
 }
 
@@ -68,12 +68,15 @@ ensure_runtime_image() {
   local digest
   digest="$(source_digest \
     docker/runtime/Dockerfile \
-    docker/runtime/go.mod \
     docker/runtime/healthcheck.sh \
+    go.mod \
+    go.sum \
     cmd/marvo-runtime \
     internal/agentcredentials \
     internal/runtimeauth \
+    internal/runtimeevents \
     internal/runtimegateway \
+    internal/store \
     internal/userid)"
   build_image "$GATEWAY_IMAGE" "$digest" -f "$BASE_DIR/docker/runtime/Dockerfile" "$BASE_DIR"
 }

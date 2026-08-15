@@ -10,12 +10,12 @@ func (d *Dependencies) AgentUpdateSettings(w http.ResponseWriter, r *http.Reques
 	d.AgentDeps.UpdateSettings(w, r)
 }
 
-func (d *Dependencies) AgentGetPersonalization(w http.ResponseWriter, r *http.Request) {
-	d.AgentDeps.GetPersonalization(w, r)
+func (d *Dependencies) AgentGetMemories(w http.ResponseWriter, r *http.Request) {
+	d.AgentDeps.GetMemories(w, r)
 }
 
-func (d *Dependencies) AgentUpdatePersonalization(w http.ResponseWriter, r *http.Request) {
-	d.AgentDeps.UpdatePersonalization(w, r)
+func (d *Dependencies) AgentUpdateMemories(w http.ResponseWriter, r *http.Request) {
+	d.AgentDeps.UpdateMemories(w, r)
 }
 
 func (d *Dependencies) AgentListProviders(w http.ResponseWriter, r *http.Request) {

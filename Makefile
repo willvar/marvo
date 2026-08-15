@@ -107,7 +107,7 @@ format-android:
 	$(ANDROID_GRADLE) :app:ktlintFormat
 
 deadcode:
-	@unused="$$(go run golang.org/x/tools/cmd/deadcode@v0.48.0 ./...)"; \
+	@unused="$$(go run golang.org/x/tools/cmd/deadcode@v0.48.0 -tags marvo_web ./...)"; \
 	if [ -n "$$unused" ]; then echo "$$unused"; exit 1; fi
 	npm --prefix frontend run deadcode
 

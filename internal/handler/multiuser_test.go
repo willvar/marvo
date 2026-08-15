@@ -71,10 +71,7 @@ func (f *multiuserFixture) createUser(t *testing.T, name string) *control.Enroll
 
 func (f *multiuserFixture) approveDevice(t *testing.T, userID, localID string) *http.Cookie {
 	t.Helper()
-	space, err := f.registry.Resolve(context.Background(), userID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := f.space(t, userID)
 	pending, err := space.DeviceStore.CreateRequest(localID, localID, store.DeviceInfo{})
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +84,16 @@ func (f *multiuserFixture) approveDevice(t *testing.T, userID, localID string) *
 		Name:  userDeviceCookieName(userID),
 		Value: device.Token + ":" + space.DeviceStore.SignToken(device.Token),
 	}
+}
+
+func (f *multiuserFixture) space(t *testing.T, userID string) *UserSpace {
+	t.Helper()
+	space, release, err := f.registry.Acquire(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(release)
+	return space
 }
 
 func TestPublicUserIdentityOnlyExposesTheSpaceName(t *testing.T) {
@@ -162,13 +169,37 @@ func TestUserRoutesKeepNotesDevicesAndCookiesIsolated(t *testing.T) {
 	if crossed.Code != http.StatusUnauthorized {
 		t.Fatalf("A cookie accessed B with status %d", crossed.Code)
 	}
-	spaceA, _ := fixture.registry.Resolve(context.Background(), userA.User.ID)
-	spaceB, _ := fixture.registry.Resolve(context.Background(), userB.User.ID)
+	spaceA := fixture.space(t, userA.User.ID)
+	spaceB := fixture.space(t, userB.User.ID)
 	if spaceA.Paths.Workspace == spaceB.Paths.Workspace || spaceA.Hub == spaceB.Hub || spaceA.DeviceStore == spaceB.DeviceStore || spaceA.AgentDeps == spaceB.AgentDeps {
 		t.Fatal("user spaces share a stateful dependency")
 	}
-	if _, err := os.Stat(filepath.Join(spaceA.Paths.Workspace, ".devices.json")); err != nil {
-		t.Fatalf("device state is not stored in the workspace: %v", err)
+	if info, err := os.Stat(spaceA.State.Path()); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("private user state database = %#v, %v", info, err)
+	}
+	if filepath.Dir(filepath.Dir(spaceA.State.Path())) != spaceA.Paths.Workspace {
+		t.Fatalf("user state database escaped workspace: %s", spaceA.State.Path())
+	}
+	activityA, _, err := spaceA.Activity.Publish(store.ActivityPublish{
+		Kind: store.ActivityKindNotice, Title: "A-only activity", Content: "Only A can read this.",
+		SourceSessionID: "session-a", SourceMessageID: "message-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := spaceB.Activity.Publish(store.ActivityPublish{
+		Kind: store.ActivityKindNotice, Title: "B-only activity", Content: "Only B can read this.",
+		SourceSessionID: "session-b", SourceMessageID: "message-b",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	activityListA := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/activity", nil, cookieA)
+	if activityListA.Code != http.StatusOK || !bytes.Contains(activityListA.Body.Bytes(), []byte(activityA.ID)) || bytes.Contains(activityListA.Body.Bytes(), []byte("B-only activity")) {
+		t.Fatalf("user A activity status = %d, body = %s", activityListA.Code, activityListA.Body.String())
+	}
+	crossedActivities := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userB.User.ID+"/activity", nil, cookieA)
+	if crossedActivities.Code != http.StatusUnauthorized {
+		t.Fatalf("A cookie accessed B activities with status %d", crossedActivities.Code)
 	}
 	if _, err := os.Lstat(filepath.Join(spaceA.Paths.Root, "app")); !os.IsNotExist(err) {
 		t.Fatalf("retired app directory exists or cannot be inspected: %v", err)
@@ -209,11 +240,11 @@ func TestUserAdminSessionIsBoundToUserAndAuthVersion(t *testing.T) {
 	if crossedIdentity.Code != http.StatusUnauthorized {
 		t.Fatalf("A admin session read B identity with status %d", crossedIdentity.Code)
 	}
-	deviceOnlySettings := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/agent/personalization", nil, deviceSession)
+	deviceOnlySettings := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/agent/memories", nil, deviceSession)
 	if deviceOnlySettings.Code != http.StatusUnauthorized {
 		t.Fatalf("device session accessed agent settings with status %d", deviceOnlySettings.Code)
 	}
-	adminSettings := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/agent/personalization", nil, session)
+	adminSettings := serveJSON(t, fixture.mux, http.MethodGet, "/api/user/"+userA.User.ID+"/agent/memories", nil, session)
 	if adminSettings.Code != http.StatusOK {
 		t.Fatalf("admin session agent settings status = %d, body = %s", adminSettings.Code, adminSettings.Body.String())
 	}
@@ -257,13 +288,13 @@ func TestUserAdminSessionIsBoundToUserAndAuthVersion(t *testing.T) {
 	if crossedBrand.Code != http.StatusUnauthorized {
 		t.Fatalf("A admin session changed B brand with status %d", crossedBrand.Code)
 	}
-	spaceA, err := fixture.registry.Resolve(context.Background(), userA.User.ID)
-	if err != nil || spaceA.BrandStore.Get().Name != "User A Notes" {
-		t.Fatalf("stored brand = %#v, error = %v", spaceA.BrandStore.Get(), err)
+	spaceA := fixture.space(t, userA.User.ID)
+	if spaceA.BrandStore.Get().Name != "User A Notes" {
+		t.Fatalf("stored brand = %#v", spaceA.BrandStore.Get())
 	}
-	spaceB, err := fixture.registry.Resolve(context.Background(), userB.User.ID)
-	if err != nil || spaceB.BrandStore.Get().Name != store.DefaultBrandName {
-		t.Fatalf("B brand = %#v, error = %v", spaceB.BrandStore.Get(), err)
+	spaceB := fixture.space(t, userB.User.ID)
+	if spaceB.BrandStore.Get().Name != store.DefaultBrandName {
+		t.Fatalf("B brand = %#v", spaceB.BrandStore.Get())
 	}
 	if err := os.WriteFile(filepath.Join(spaceA.Paths.Workspace, "usage-probe.bin"), bytes.Repeat([]byte("x"), 4096), 0600); err != nil {
 		t.Fatal(err)

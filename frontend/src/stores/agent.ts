@@ -226,8 +226,8 @@ function groupQuestions(raw: any) {
   return grouped
 }
 
-function promptContext(noteTitle = ''): AgentPromptContext | undefined {
-  const context: AgentPromptContext = {}
+function promptContext(noteTitle = '', extra?: AgentPromptContext): AgentPromptContext | undefined {
+  const context: AgentPromptContext = { ...extra }
   if (typeof window !== 'undefined') {
     context.viewport = {
       width: Math.round(window.innerWidth),
@@ -236,7 +236,7 @@ function promptContext(noteTitle = ''): AgentPromptContext | undefined {
     }
   }
   if (noteTitle) context.note = { title: noteTitle }
-  return context.viewport || context.note ? context : undefined
+  return context.viewport || context.note || context.activity ? context : undefined
 }
 
 export const useAgentStore = defineStore('agent', {
@@ -642,6 +642,7 @@ export const useAgentStore = defineStore('agent', {
 
     async selectSession(id: string) {
       const alreadyCurrent = this.currentSessionId === id
+      const previousSessionID = this.currentSessionId
       this.currentSessionId = id
       localStorage.setItem(CURRENT_SESSION_KEY, id)
       const conversation = this.ensureConversation(id)
@@ -655,7 +656,17 @@ export const useAgentStore = defineStore('agent', {
         }
       }
       if (alreadyCurrent && (conversation.loaded || conversation.loading)) return
-      await this.loadConversation(id)
+      try {
+        await this.loadConversation(id)
+      } catch (cause) {
+        if (this.currentSessionId === id) {
+          this.currentSessionId = previousSessionID
+          if (previousSessionID) localStorage.setItem(CURRENT_SESSION_KEY, previousSessionID)
+          else localStorage.removeItem(CURRENT_SESSION_KEY)
+        }
+        if (!conversation.loaded) this.removeConversation(id)
+        throw cause
+      }
     },
 
     async deleteSession(id: string) {
@@ -809,7 +820,7 @@ export const useAgentStore = defineStore('agent', {
       }
     },
 
-    async sendMessage(text: string, files: AgentFilePartInput[] = []) {
+    async sendMessage(text: string, files: AgentFilePartInput[] = [], context?: AgentPromptContext) {
       const sessionID = this.currentSessionId
       if (!sessionID) return
       const conversation = this.ensureConversation(sessionID)
@@ -841,7 +852,7 @@ export const useAgentStore = defineStore('agent', {
         await agentApi.sendMessage(sessionID, {
           parts: [...(text ? [{ type: 'text' as const, text }] : []), ...files],
           agent: 'build',
-          marvoContext: promptContext(),
+          marvoContext: promptContext('', context),
         })
       } catch (error) {
         if (addedLocalMessage) {

@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"sync"
+	"time"
 
 	"marvo/config"
 	"marvo/internal/agentcredentials"
 	"marvo/internal/collab"
 	"marvo/internal/control"
 	"marvo/internal/media"
+	"marvo/internal/runtimeevents"
 	"marvo/internal/store"
 	"marvo/internal/userspace"
 )
@@ -23,17 +26,31 @@ var (
 	ErrUserSpaceMigrating   = errors.New("user space migration in progress")
 )
 
+const (
+	userSpaceIdleTTL      = 5 * time.Minute
+	maxIdleUserSpaces     = 32
+	userSpaceReapInterval = time.Minute
+)
+
 type UserSpace struct {
 	UserID      string
 	Paths       userspace.Paths
+	State       *store.StateDB
 	NoteStore   *store.NoteStore
 	Hub         *collab.Hub
 	Media       *media.Manager
+	Activity    *store.ActivityStore
 	AgentDeps   *AgentDeps
 	DeviceStore *store.DeviceStore
 	BrandStore  *store.BrandStore
 	watcher     *store.NoteWatcher
 	closeOnce   sync.Once
+}
+
+type cachedUserSpace struct {
+	space    *UserSpace
+	leases   int
+	lastUsed time.Time
 }
 
 type spaceInitialization struct {
@@ -48,21 +65,44 @@ type SpaceRegistry struct {
 	layout       *userspace.Layout
 	shuttingDown <-chan struct{}
 	mu           sync.Mutex
-	spaces       map[string]*UserSpace
+	spaces       map[string]*cachedUserSpace
 	initializing map[string]*spaceInitialization
 	migrating    map[string]bool
 	closed       bool
+	now          func() time.Time
+	idleTTL      time.Duration
+	maxIdle      int
+	background   context.Context
+	cancel       context.CancelFunc
+	backgroundWG sync.WaitGroup
+	eventsOnce   sync.Once
 }
 
 func NewSpaceRegistry(cfg *config.Config, controlDB *control.DB, layout *userspace.Layout, shuttingDown <-chan struct{}) *SpaceRegistry {
-	return &SpaceRegistry{
+	background, cancel := context.WithCancel(context.Background())
+	registry := &SpaceRegistry{
 		config: cfg, control: controlDB, layout: layout, shuttingDown: shuttingDown,
-		spaces: make(map[string]*UserSpace), initializing: make(map[string]*spaceInitialization),
-		migrating: make(map[string]bool),
+		spaces: make(map[string]*cachedUserSpace), initializing: make(map[string]*spaceInitialization),
+		migrating: make(map[string]bool), now: time.Now, idleTTL: userSpaceIdleTTL,
+		maxIdle: maxIdleUserSpaces, background: background, cancel: cancel,
 	}
+	registry.backgroundWG.Add(1)
+	go registry.runIdleReaper()
+	return registry
 }
 
-func (r *SpaceRegistry) Resolve(ctx context.Context, userID string) (*UserSpace, error) {
+func (r *SpaceRegistry) Acquire(ctx context.Context, userID string) (*UserSpace, func(), error) {
+	space, err := r.resolve(ctx, userID)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	var once sync.Once
+	return space, func() {
+		once.Do(func() { r.release(userID, space) })
+	}, nil
+}
+
+func (r *SpaceRegistry) resolve(ctx context.Context, userID string) (*UserSpace, error) {
 	user, err := r.control.GetUser(ctx, userID)
 	if err != nil {
 		if errors.Is(err, control.ErrUserNotFound) {
@@ -75,28 +115,37 @@ func (r *SpaceRegistry) Resolve(ctx context.Context, userID string) (*UserSpace,
 		return nil, ErrUserSpaceDisabled
 	}
 
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return nil, ErrUserSpaceUnavailable
-	}
-	if r.migrating[userID] {
-		r.mu.Unlock()
-		return nil, ErrUserSpaceMigrating
-	}
-	if existing := r.spaces[userID]; existing != nil {
-		r.mu.Unlock()
-		return existing, nil
-	}
-	if pending := r.initializing[userID]; pending != nil {
-		done := pending.done
-		r.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-done:
-			return pending.space, pending.err
+	for {
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			return nil, ErrUserSpaceUnavailable
 		}
+		if r.migrating[userID] {
+			r.mu.Unlock()
+			return nil, ErrUserSpaceMigrating
+		}
+		if existing := r.spaces[userID]; existing != nil {
+			existing.lastUsed = r.now()
+			existing.leases++
+			space := existing.space
+			r.mu.Unlock()
+			return space, nil
+		}
+		if pending := r.initializing[userID]; pending != nil {
+			done := pending.done
+			r.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-done:
+				if pending.err != nil {
+					return nil, pending.err
+				}
+				continue
+			}
+		}
+		break
 	}
 	pending := &spaceInitialization{done: make(chan struct{})}
 	r.initializing[userID] = pending
@@ -109,7 +158,8 @@ func (r *SpaceRegistry) Resolve(ctx context.Context, userID string) (*UserSpace,
 		space = nil
 		initErr = ErrUserSpaceUnavailable
 	} else if initErr == nil {
-		r.spaces[userID] = space
+		entry := &cachedUserSpace{space: space, leases: 1, lastUsed: r.now()}
+		r.spaces[userID] = entry
 	}
 	pending.space = space
 	pending.err = initErr
@@ -117,6 +167,20 @@ func (r *SpaceRegistry) Resolve(ctx context.Context, userID string) (*UserSpace,
 	close(pending.done)
 	r.mu.Unlock()
 	return space, initErr
+}
+
+func (r *SpaceRegistry) release(userID string, space *UserSpace) {
+	r.mu.Lock()
+	entry := r.spaces[userID]
+	if entry == nil || entry.space != space || entry.leases == 0 {
+		r.mu.Unlock()
+		return
+	}
+	entry.leases--
+	entry.lastUsed = r.now()
+	closeSpaces := r.pruneIdleLocked(entry.lastUsed, false)
+	r.mu.Unlock()
+	closeUserSpaces(closeSpaces)
 }
 
 func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
@@ -130,21 +194,35 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 	noteStore := store.NewNoteStore(paths.Workspace)
 	mediaManager := media.NewManager(noteStore)
 	hub := collab.NewHub()
+	stateDB, err := store.OpenStateDB(paths.Workspace)
+	if err != nil {
+		mediaManager.Close()
+		hub.Close()
+		return nil, fmt.Errorf("%w: initialize user state: %v", ErrUserSpaceUnavailable, err)
+	}
+	activityStore, err := store.NewActivityStore(stateDB)
+	if err != nil {
+		_ = stateDB.Close()
+		mediaManager.Close()
+		hub.Close()
+		return nil, fmt.Errorf("%w: initialize Activity: %v", ErrUserSpaceUnavailable, err)
+	}
 	space := &UserSpace{
-		UserID: userID, Paths: paths, NoteStore: noteStore, Hub: hub, Media: mediaManager,
-		DeviceStore: store.NewDeviceStore(paths.Workspace, derivedUserSecret(r.config.Server.SessionSecret, userID, "device")),
+		UserID: userID, Paths: paths, State: stateDB, NoteStore: noteStore, Hub: hub, Media: mediaManager,
+		Activity:    activityStore,
+		DeviceStore: store.NewDeviceStore(stateDB, derivedUserSecret(r.config.Server.SessionSecret, userID, "device")),
 	}
 	cleanup := func() {
 		space.Close()
 	}
-	brandStore, err := store.NewBrandStore(paths.Workspace)
+	brandStore, err := store.NewBrandStore(stateDB)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("%w: load brand settings: %v", ErrUserSpaceUnavailable, err)
 	}
 	space.BrandStore = brandStore
 
-	settings, err := store.NewAgentSettingsStore(paths.Workspace)
+	settings, err := store.NewAgentSettingsStore(stateDB)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("%w: load Agent settings: %v", ErrUserSpaceUnavailable, err)
@@ -154,10 +232,10 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 		cleanup()
 		return nil, fmt.Errorf("%w: initialize Agent credentials: %v", ErrUserSpaceUnavailable, err)
 	}
-	personalization, err := store.NewAgentPersonalizationStore(paths.Workspace)
+	memories, err := store.NewMemoryStore(stateDB)
 	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("%w: load Agent personalization: %v", ErrUserSpaceUnavailable, err)
+		return nil, fmt.Errorf("%w: load Agent memories: %v", ErrUserSpaceUnavailable, err)
 	}
 	globalPrompt, err := store.NewAgentGlobalPromptFile(filepath.Join(paths.AgentHome, ".config", "opencode", "AGENTS.md"))
 	if err != nil {
@@ -165,9 +243,17 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 		return nil, fmt.Errorf("%w: initialize Agent prompt: %v", ErrUserSpaceUnavailable, err)
 	}
 	runtimeURL := r.config.Runtime.URL + "/user/" + userID
-	space.AgentDeps = NewAgentDeps(runtimeURL, r.shuttingDown, settings, personalization, globalPrompt)
+	space.AgentDeps = NewAgentDeps(runtimeURL, r.shuttingDown, settings, memories, globalPrompt, activityStore)
 	space.AgentDeps.SetUpstreamBearer(r.config.Runtime.Token)
 	space.AgentDeps.SetCredentialStore(credentials)
+	space.AgentDeps.SetActivityChangeHandler(func() {
+		unread, pending, countErr := activityStore.Counts()
+		if countErr == nil {
+			hub.BroadcastAll(store.MustJSON(map[string]any{
+				"action": "activity_changed", "unread": unread, "pending": pending,
+			}))
+		}
+	})
 	mediaManager.SetChangeHandler(func(title string, asset media.Asset) {
 		hub.BroadcastToNote(title, "", store.MustJSON(map[string]any{
 			"action": "asset_changed", "title": title, "asset": asset,
@@ -199,11 +285,11 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 
 func (r *SpaceRegistry) CloseUser(userID string) {
 	r.mu.Lock()
-	space := r.spaces[userID]
+	entry := r.spaces[userID]
 	delete(r.spaces, userID)
 	r.mu.Unlock()
-	if space != nil {
-		space.Close()
+	if entry != nil {
+		entry.space.Close()
 	}
 }
 
@@ -225,11 +311,11 @@ func (r *SpaceRegistry) BeginMigration(ctx context.Context, userID string) (func
 			}
 		}
 		r.migrating[userID] = true
-		space := r.spaces[userID]
+		entry := r.spaces[userID]
 		delete(r.spaces, userID)
 		r.mu.Unlock()
-		if space != nil {
-			space.Close()
+		if entry != nil {
+			entry.space.Close()
 		}
 		return func() {
 			r.mu.Lock()
@@ -246,12 +332,14 @@ func (r *SpaceRegistry) Close() {
 		return
 	}
 	r.closed = true
+	r.cancel()
 	spaces := make([]*UserSpace, 0, len(r.spaces))
-	for _, space := range r.spaces {
-		spaces = append(spaces, space)
+	for _, entry := range r.spaces {
+		spaces = append(spaces, entry.space)
 	}
-	r.spaces = make(map[string]*UserSpace)
+	r.spaces = make(map[string]*cachedUserSpace)
 	r.mu.Unlock()
+	r.backgroundWG.Wait()
 	for _, space := range spaces {
 		space.Close()
 	}
@@ -271,7 +359,135 @@ func (s *UserSpace) Close() {
 		if s.Hub != nil {
 			s.Hub.Close()
 		}
+		if s.State != nil {
+			_ = s.State.Close()
+		}
 	})
+}
+
+func (r *SpaceRegistry) runIdleReaper() {
+	defer r.backgroundWG.Done()
+	ticker := time.NewTicker(userSpaceReapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			r.pruneIdle(true)
+		case <-r.background.Done():
+			return
+		case <-r.shuttingDown:
+			return
+		}
+	}
+}
+
+func (r *SpaceRegistry) pruneIdle(expire bool) {
+	r.mu.Lock()
+	spaces := r.pruneIdleLocked(r.now(), expire)
+	r.mu.Unlock()
+	closeUserSpaces(spaces)
+}
+
+func (r *SpaceRegistry) pruneIdleLocked(now time.Time, expire bool) []*UserSpace {
+	type candidate struct {
+		userID   string
+		lastUsed time.Time
+	}
+	candidates := make([]candidate, 0, len(r.spaces))
+	idleCount := 0
+	for userID, entry := range r.spaces {
+		if entry.leases != 0 {
+			continue
+		}
+		idleCount++
+		if entry.space.Media != nil && !entry.space.Media.Idle() {
+			continue
+		}
+		candidates = append(candidates, candidate{userID: userID, lastUsed: entry.lastUsed})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].lastUsed.Before(candidates[j].lastUsed) })
+	removed := make(map[string]bool)
+	spaces := make([]*UserSpace, 0)
+	remove := func(userID string) {
+		entry := r.spaces[userID]
+		if entry == nil || entry.leases != 0 || removed[userID] {
+			return
+		}
+		delete(r.spaces, userID)
+		removed[userID] = true
+		idleCount--
+		spaces = append(spaces, entry.space)
+	}
+	if expire && r.idleTTL > 0 {
+		for _, candidate := range candidates {
+			if now.Sub(candidate.lastUsed) >= r.idleTTL {
+				remove(candidate.userID)
+			}
+		}
+	}
+	if r.maxIdle >= 0 {
+		for _, candidate := range candidates {
+			if idleCount <= r.maxIdle {
+				break
+			}
+			remove(candidate.userID)
+		}
+	}
+	return spaces
+}
+
+func closeUserSpaces(spaces []*UserSpace) {
+	for _, space := range spaces {
+		space.Close()
+	}
+}
+
+func (r *SpaceRegistry) withLoadedSpace(userID string, visit func(*UserSpace)) bool {
+	r.mu.Lock()
+	entry := r.spaces[userID]
+	if entry == nil || r.closed {
+		r.mu.Unlock()
+		return false
+	}
+	entry.leases++
+	entry.lastUsed = r.now()
+	space := entry.space
+	r.mu.Unlock()
+	defer r.release(userID, space)
+	visit(space)
+	return true
+}
+
+func (r *SpaceRegistry) notifyRuntimeEvent(event runtimeevents.Event) {
+	if !event.Valid() {
+		return
+	}
+	r.withLoadedSpace(event.UserID, func(space *UserSpace) {
+		space.broadcastRuntimeEvent(event.Kind)
+	})
+}
+
+func (s *UserSpace) broadcastRuntimeEvent(kind runtimeevents.Kind) {
+	if s == nil || s.Hub == nil {
+		return
+	}
+	switch kind {
+	case runtimeevents.KindActivity:
+		unread, pending, err := s.Activity.Counts()
+		if err == nil {
+			s.Hub.BroadcastAll(store.MustJSON(map[string]any{
+				"action": "activity_changed", "unread": unread, "pending": pending,
+			}))
+		}
+	case runtimeevents.KindSpace:
+		s.Hub.BroadcastAll(store.MustJSON(map[string]any{"action": "brand_changed", "brand": s.BrandStore.Get()}))
+	case runtimeevents.KindMemories:
+		s.Hub.BroadcastAll(store.MustJSON(map[string]any{"action": "agent_memories_changed"}))
+	case runtimeevents.KindAgentSettings:
+		s.Hub.BroadcastAll(store.MustJSON(map[string]any{"action": "agent_settings_changed"}))
+	case runtimeevents.KindDevices:
+		s.Hub.BroadcastAll(store.MustJSON(map[string]any{"action": "devices_changed"}))
+	}
 }
 
 func derivedUserSecret(secret, userID, purpose string) string {
@@ -284,7 +500,7 @@ func (d *Dependencies) UserSpaceMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			userID := r.PathValue("userID")
-			space, err := d.Spaces.Resolve(r.Context(), userID)
+			space, release, err := d.Spaces.Acquire(r.Context(), userID)
 			if errors.Is(err, ErrUserSpaceDisabled) {
 				writeJSON(w, http.StatusForbidden, map[string]any{"error": "user disabled"})
 				return
@@ -301,6 +517,7 @@ func (d *Dependencies) UserSpaceMiddleware() func(http.Handler) http.Handler {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "user space unavailable"})
 				return
 			}
+			defer release()
 			ctx := context.WithValue(r.Context(), userSpaceContextKey{}, space)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -330,6 +547,8 @@ func (d *Dependencies) Scoped(handler scopedHandler) http.Handler {
 			NoteStore:    space.NoteStore,
 			Hub:          space.Hub,
 			Media:        space.Media,
+			State:        space.State,
+			Activity:     space.Activity,
 			AgentDeps:    space.AgentDeps,
 			DeviceStore:  space.DeviceStore,
 			BrandStore:   space.BrandStore,

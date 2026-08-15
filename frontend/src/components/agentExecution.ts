@@ -4,7 +4,8 @@ import type { XThoughtItem, XThoughtStatus } from './x'
 const TOOL_PART_TYPES = new Set(['tool', 'tool_use', 'tool_result'])
 const VISIBLE_EVENT_PART_TYPES = new Set(['subtask', 'patch', 'retry'])
 
-type ActivityKind = 'research' | 'inspect' | 'modify' | 'command' | 'task' | 'plan' | 'setup' | 'repository' | 'unknown'
+type ActivityKind =
+  'research' | 'inspect' | 'modify' | 'command' | 'task' | 'plan' | 'setup' | 'marvo' | 'repository' | 'unknown'
 
 export interface AgentExecutionOutcome {
   streaming: boolean
@@ -172,7 +173,12 @@ function toolActivity(part: MessagePart, index: number, outcome: AgentExecutionO
   return {
     key: part.callID || part.id || `tool-${index}`,
     kind,
-    groupKey: kind === 'unknown' ? `unknown:${tool || index}` : kind,
+    groupKey:
+      kind === 'unknown'
+        ? `unknown:${tool || index}`
+        : kind === 'marvo'
+          ? `marvo:${tool}:${toolActionTitle(part, tool)}`
+          : kind,
     title: toolActionTitle(part, tool),
     targets,
     files,
@@ -228,6 +234,7 @@ function groupTitle(group: ActivityGroup, files: string[]) {
   if (group.kind === 'task') return count === 1 ? group.items[0].title : `处理 ${count} 个子任务`
   if (group.kind === 'plan') return '更新执行计划'
   if (group.kind === 'setup') return count === 1 ? group.items[0].title : `加载 ${count} 项能力`
+  if (group.kind === 'marvo') return count === 1 ? group.items[0].title : `${group.items[0].title} ${count} 次`
   if (group.kind === 'repository') return count === 1 ? group.items[0].title : '处理代码仓库'
   if (count === 1) return group.items[0].title
   return `${group.items[0].title} ${count} 次`
@@ -252,6 +259,7 @@ function toolStatus(part: MessagePart, streaming: boolean): XThoughtStatus {
 }
 
 function toolKind(tool: string): ActivityKind {
+  if (tool.startsWith('marvo_')) return 'marvo'
   if (['webfetch', 'websearch'].includes(tool)) return 'research'
   if (['read', 'list', 'glob', 'grep', 'lsp'].includes(tool)) return 'inspect'
   if (['edit', 'write', 'patch', 'apply_patch', 'multiedit'].includes(tool)) return 'modify'
@@ -264,8 +272,8 @@ function toolKind(tool: string): ActivityKind {
 }
 
 function toolActionTitle(part: MessagePart, tool: string) {
-  const personalizationTitle = personalizationCommandTitle(part, tool)
-  if (personalizationTitle) return personalizationTitle
+  const marvoTitle = marvoToolTitle(part, tool)
+  if (marvoTitle) return marvoTitle
   const titles: Record<string, string> = {
     bash: '执行命令',
     shell: '执行命令',
@@ -320,7 +328,7 @@ function toolTargets(part: MessagePart, tool: string) {
   const metadata = record(state.metadata || part.metadata)
   const targets: string[] = []
 
-  if (personalizationCommandTitle(part, tool)) {
+  if (marvoToolTitle(part, tool)) {
     return []
   } else if (tool === 'bash' || tool === 'shell') {
     const title = stringValue(state.title)
@@ -356,15 +364,25 @@ function toolTargets(part: MessagePart, tool: string) {
   return uniqueStrings(targets.filter(Boolean))
 }
 
-function personalizationCommandTitle(part: MessagePart, tool: string) {
-  if (tool !== 'bash' && tool !== 'shell') return ''
+function marvoToolTitle(part: MessagePart, tool: string) {
   const input = record(record(part.state).input || part.input)
-  const command = stringValue(input.command)
-  const operation = command.match(/(?:^|[\s;&|])marvo-personalization\s+(list|add|update|remove)\b/)?.[1]
-  if (operation === 'list') return '查看个性化规则'
-  if (operation === 'add') return '添加个性化规则'
-  if (operation === 'update') return '更新个性化规则'
-  if (operation === 'remove') return '删除个性化规则'
+  const action = stringValue(input.action)
+  if (tool === 'marvo_activity') return input.kind === 'choice' ? '发布选择活动' : '发布活动'
+  if (tool === 'marvo_memories') {
+    if (action === 'list') return '查看记忆'
+    if (action === 'add') return '添加记忆'
+    if (action === 'update') return '更新记忆'
+    if (action === 'remove') return '删除记忆'
+  }
+  if (tool === 'marvo_space') return action === 'set_brand' ? '更新空间名称' : '查看空间信息'
+  if (tool === 'marvo_agent_settings') return action === 'update' ? '更新智能体设置' : '查看智能体设置'
+  if (tool === 'marvo_devices') {
+    if (action === 'approve') return '批准设备'
+    if (action === 'reject') return '拒绝设备'
+    if (action === 'rename') return '重命名设备'
+    if (action === 'revoke') return '撤销设备'
+    return '查看设备'
+  }
   return ''
 }
 
