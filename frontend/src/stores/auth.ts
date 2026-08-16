@@ -163,13 +163,13 @@ setUnauthorizedHandler(() => {
   store.isAuthenticated = false
   if (typeof window !== 'undefined') {
     const userID = currentUserID()
+    if (userID && window.location.pathname === `/user/${userID}/login`) return
     const userAdminRoot = userID ? `/user/${userID}/admin` : ''
     const userAdmin =
       !!userAdminRoot &&
       (window.location.pathname === userAdminRoot || window.location.pathname.startsWith(`${userAdminRoot}/`))
-    const target = userID
-      ? userLoginRoute({ admin: userAdmin, next: userAdmin ? window.location.pathname : undefined }, userID)
-      : '/admin/login'
-    if (window.location.pathname !== target) window.location.replace(target)
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    const target = userID ? userLoginRoute({ admin: userAdmin, next: current }, userID) : '/admin/login'
+    if (`${window.location.pathname}${window.location.search}` !== target) window.location.replace(target)
   }
 })

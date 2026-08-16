@@ -13,7 +13,9 @@ import (
 	"marvo/config"
 	"marvo/internal/agentcredentials"
 	"marvo/internal/collab"
+	"marvo/internal/connectors"
 	"marvo/internal/control"
+	"marvo/internal/delivery"
 	"marvo/internal/media"
 	"marvo/internal/runtimeevents"
 	"marvo/internal/store"
@@ -40,6 +42,7 @@ type UserSpace struct {
 	Hub         *collab.Hub
 	Media       *media.Manager
 	Activity    *store.ActivityStore
+	Connectors  *store.ConnectorStore
 	AgentDeps   *AgentDeps
 	DeviceStore *store.DeviceStore
 	BrandStore  *store.BrandStore
@@ -76,6 +79,9 @@ type SpaceRegistry struct {
 	cancel       context.CancelFunc
 	backgroundWG sync.WaitGroup
 	eventsOnce   sync.Once
+	deliveryOnce sync.Once
+	deliveries   *delivery.Dispatcher
+	providers    *connectors.Registry
 }
 
 func NewSpaceRegistry(cfg *config.Config, controlDB *control.DB, layout *userspace.Layout, shuttingDown <-chan struct{}) *SpaceRegistry {
@@ -86,6 +92,10 @@ func NewSpaceRegistry(cfg *config.Config, controlDB *control.DB, layout *userspa
 		migrating: make(map[string]bool), now: time.Now, idleTTL: userSpaceIdleTTL,
 		maxIdle: maxIdleUserSpaces, background: background, cancel: cancel,
 	}
+	registry.providers = connectors.NewRegistry(nil)
+	registry.deliveries = delivery.NewDispatcher(
+		controlDB, layout, cfg.Server.SessionSecret, cfg.Server.PublicURL, registry.providers,
+	)
 	registry.backgroundWG.Add(1)
 	go registry.runIdleReaper()
 	return registry
@@ -207,9 +217,17 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 		hub.Close()
 		return nil, fmt.Errorf("%w: initialize Activity: %v", ErrUserSpaceUnavailable, err)
 	}
+	connectorStore, err := store.NewConnectorStore(stateDB, userID, r.config.Server.SessionSecret)
+	if err != nil {
+		_ = stateDB.Close()
+		mediaManager.Close()
+		hub.Close()
+		return nil, fmt.Errorf("%w: initialize Activity connectors: %v", ErrUserSpaceUnavailable, err)
+	}
 	space := &UserSpace{
 		UserID: userID, Paths: paths, State: stateDB, NoteStore: noteStore, Hub: hub, Media: mediaManager,
 		Activity:    activityStore,
+		Connectors:  connectorStore,
 		DeviceStore: store.NewDeviceStore(stateDB, derivedUserSecret(r.config.Server.SessionSecret, userID, "device")),
 	}
 	cleanup := func() {
@@ -340,6 +358,9 @@ func (r *SpaceRegistry) Close() {
 	r.spaces = make(map[string]*cachedUserSpace)
 	r.mu.Unlock()
 	r.backgroundWG.Wait()
+	if r.deliveries != nil {
+		r.deliveries.Wait()
+	}
 	for _, space := range spaces {
 		space.Close()
 	}
@@ -462,9 +483,32 @@ func (r *SpaceRegistry) notifyRuntimeEvent(event runtimeevents.Event) {
 	if !event.Valid() {
 		return
 	}
+	if event.Kind == runtimeevents.KindActivity && r.deliveries != nil {
+		r.deliveries.Wake(event.UserID)
+	}
 	r.withLoadedSpace(event.UserID, func(space *UserSpace) {
 		space.broadcastRuntimeEvent(event.Kind)
 	})
+}
+
+func (r *SpaceRegistry) StartDeliveries() {
+	r.deliveryOnce.Do(func() {
+		if r.deliveries != nil {
+			r.deliveries.Start(r.background)
+		}
+	})
+}
+
+func (r *SpaceRegistry) ResyncDeliveries() {
+	if r.deliveries != nil {
+		r.deliveries.Resync(r.background)
+	}
+}
+
+func (r *SpaceRegistry) WakeDeliveries(userID string) {
+	if r.deliveries != nil {
+		r.deliveries.Wake(userID)
+	}
 }
 
 func (s *UserSpace) broadcastRuntimeEvent(kind runtimeevents.Kind) {
@@ -549,6 +593,8 @@ func (d *Dependencies) Scoped(handler scopedHandler) http.Handler {
 			Media:        space.Media,
 			State:        space.State,
 			Activity:     space.Activity,
+			Connectors:   space.Connectors,
+			Providers:    d.Spaces.providers,
 			AgentDeps:    space.AgentDeps,
 			DeviceStore:  space.DeviceStore,
 			BrandStore:   space.BrandStore,

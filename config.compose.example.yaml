@@ -1,6 +1,7 @@
 server:
   host: 0.0.0.0
   port: 9989
+  public_url: https://YOUR_FRONTEND_DOMAIN
   state_dir: /var/lib/marvo
   # 旧单用户目录只作为迁移源，迁移完成后仍原样保留。
   data_dir: /var/lib/marvo/data

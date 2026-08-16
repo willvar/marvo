@@ -45,6 +45,7 @@ systemctl enable --now marvo-runtime.service marvo.service
 server:
   host: 127.0.0.1
   port: 9989
+  public_url: https://marvo.example.com
   state_dir: /var/lib/marvo
   data_dir: /var/lib/marvo/data
   cors_origins:
@@ -60,6 +61,8 @@ runtime:
   url: http://127.0.0.1:4097
   token_file: /var/lib/marvo/control/.runtime-token
 ```
+
+`server.public_url` 是必填项，用于用户从外通知返回活动页。必须填写可访问 Marvo 的 HTTP(S) Origin，不能包含路径、查询或片段；未配置时 Marvo 会拒绝启动。
 
 启动 Runtime 时，必须让 `MARVO_STATE_DIR` 与 `server.state_dir` 指向宿主机上的同一个绝对路径。使用 Rootless Docker 时可以另行设置 `MARVO_RUNTIME_DOCKER_SOCKET`；网关仍只映射到回环地址。
 

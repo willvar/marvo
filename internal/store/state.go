@@ -22,7 +22,7 @@ import (
 const (
 	stateDirectoryName = ".marvo"
 	stateDatabaseName  = "state.sqlite"
-	stateSchemaVersion = 2
+	stateSchemaVersion = 3
 )
 
 // StateDB owns the structured state for one user space. Notes, media and
@@ -179,6 +179,37 @@ func (d *StateDB) initialize(ctx context.Context) error {
 			ON activities(read_at);
 		CREATE INDEX IF NOT EXISTS activities_pending_idx
 			ON activities(kind, responded_at);
+		CREATE TABLE IF NOT EXISTS connectors (
+			id TEXT PRIMARY KEY,
+			provider_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+			config_nonce TEXT NOT NULL,
+			config_ciphertext TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS connectors_provider_idx
+			ON connectors(provider_id, created_at, id);
+		CREATE TABLE IF NOT EXISTS activity_deliveries (
+			id TEXT PRIMARY KEY,
+			activity_id TEXT NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+			connector_id TEXT NOT NULL REFERENCES connectors(id) ON DELETE CASCADE,
+			status TEXT NOT NULL DEFAULT 'pending'
+				CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'cancelled')),
+			attempt_count INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			lease_until INTEGER,
+			last_error TEXT NOT NULL DEFAULT '',
+			sent_at INTEGER,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			UNIQUE(activity_id, connector_id)
+		);
+		CREATE INDEX IF NOT EXISTS activity_deliveries_due_idx
+			ON activity_deliveries(status, next_attempt_at, lease_until);
+		CREATE INDEX IF NOT EXISTS activity_deliveries_activity_idx
+			ON activity_deliveries(activity_id, created_at, id);
 	`); err != nil {
 		return fmt.Errorf("create user state schema: %w", err)
 	}

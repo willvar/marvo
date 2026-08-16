@@ -20,6 +20,7 @@ import {
   LeftOutlined,
   UserOutlined,
   LogoutOutlined,
+  NotificationOutlined,
 } from '@ant-design/icons-vue'
 
 const router = useRouter()
@@ -41,6 +42,7 @@ const adminTitle = computed(() => {
   if (!isUserAdmin.value) return route.name === 'platform-android' ? 'Android APP' : '用户管理'
   if (route.name === 'user-space-info') return '空间信息'
   if (route.name === 'user-agent-settings') return '智能体设置'
+  if (route.name === 'user-connectors') return '活动连接器'
   if (route.name === 'user-security') return '安全设置'
   return '设备审批'
 })
@@ -66,6 +68,12 @@ const navigationItems = computed(() => {
       routeName: 'user-agent-settings',
       label: '智能体设置',
       icon: RobotOutlined,
+    },
+    {
+      to: `${userAdminRoot.value}/connectors`,
+      routeName: 'user-connectors',
+      label: '活动连接器',
+      icon: NotificationOutlined,
     },
     {
       to: `${userAdminRoot.value}/security`,

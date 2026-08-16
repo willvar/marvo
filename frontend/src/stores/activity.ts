@@ -84,6 +84,17 @@ export const useActivityStore = defineStore('activity', {
         this.loadingMore = false
       }
     },
+    async loadOne(id: string) {
+      const existing = this.activities.find((item) => item.id === id)
+      if (existing) return existing
+      const { data } = await api.get(`/api/activity/${encodeURIComponent(id)}`)
+      const item = normalizeActivity(data as ActivityItem)
+      this.activities = [...this.activities, item].sort((left, right) => {
+        const created = new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+        return created || right.id.localeCompare(left.id)
+      })
+      return item
+    },
     async loadCounts() {
       if (activityCountsPromise) return activityCountsPromise
       const request = api

@@ -3,6 +3,7 @@ package handler
 import (
 	"marvo/internal/apprelease"
 	"marvo/internal/collab"
+	"marvo/internal/connectors"
 	"marvo/internal/control"
 	"marvo/internal/media"
 	"marvo/internal/store"
@@ -25,6 +26,8 @@ type Dependencies struct {
 	Media        *media.Manager
 	State        *store.StateDB
 	Activity     *store.ActivityStore
+	Connectors   *store.ConnectorStore
+	Providers    *connectors.Registry
 	AgentDeps    *AgentDeps
 	DeviceStore  *store.DeviceStore
 	BrandStore   *store.BrandStore
@@ -121,6 +124,7 @@ func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.Handle("POST /api/user/{userID}/send", content((*Dependencies).HandleSend))
 	mux.Handle("GET /api/user/{userID}/activity", content((*Dependencies).ListActivities))
 	mux.Handle("GET /api/user/{userID}/activity/counts", content((*Dependencies).ActivityCounts))
+	mux.Handle("GET /api/user/{userID}/activity/{id}", content((*Dependencies).GetActivity))
 	mux.Handle("POST /api/user/{userID}/activity/read", content((*Dependencies).MarkActivitiesRead))
 	mux.Handle("DELETE /api/user/{userID}/activity/{id}", content((*Dependencies).DeleteActivity))
 
@@ -157,4 +161,11 @@ func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.Handle("GET /api/user/{userID}/admin/devices", management((*Dependencies).ListDevices))
 	mux.Handle("PATCH /api/user/{userID}/admin/devices/{id}", management((*Dependencies).RenameDevice))
 	mux.Handle("DELETE /api/user/{userID}/admin/devices/{id}", management((*Dependencies).RevokeDevice))
+	mux.Handle("GET /api/user/{userID}/admin/connectors/providers", management((*Dependencies).ListConnectorProviders))
+	mux.Handle("GET /api/user/{userID}/admin/connectors", management((*Dependencies).ListConnectors))
+	mux.Handle("POST /api/user/{userID}/admin/connectors", management((*Dependencies).CreateConnector))
+	mux.Handle("PUT /api/user/{userID}/admin/connectors/{id}", management((*Dependencies).UpdateConnector))
+	mux.Handle("DELETE /api/user/{userID}/admin/connectors/{id}", management((*Dependencies).DeleteConnector))
+	mux.Handle("POST /api/user/{userID}/admin/connectors/test", management((*Dependencies).TestConnector))
+	mux.Handle("POST /api/user/{userID}/admin/connectors/{id}/retry", management((*Dependencies).RetryConnectorDeliveries))
 }

@@ -47,7 +47,7 @@ withDefaults(
   }
 
   &:focus-visible {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--marvo-accent-color) 24%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 24%, transparent);
   }
 
   &:disabled {
@@ -68,11 +68,11 @@ withDefaults(
 }
 
 .x-button-primary {
-  background: var(--marvo-accent-color);
+  background: var(--marvo-accent-color, #4f46e5);
   color: #fff;
 
   &:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--marvo-accent-color) 88%, #000);
+    background: color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 88%, #000);
   }
 }
 

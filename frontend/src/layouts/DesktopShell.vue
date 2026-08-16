@@ -253,7 +253,7 @@ async function initializeWorkspace() {
   try {
     await auth.check({ throwOnError: true })
     if (!auth.isAuthenticated) {
-      await router.replace(userLoginRoute())
+      await router.replace(userLoginRoute({ next: router.currentRoute.value.fullPath }))
       return
     }
     if (!workspaceInitialized) {

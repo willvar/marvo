@@ -23,6 +23,7 @@ const (
 )
 
 func (r *SpaceRegistry) StartRuntimeEvents() {
+	r.StartDeliveries()
 	r.eventsOnce.Do(func() {
 		r.mu.Lock()
 		if r.closed {
@@ -98,6 +99,7 @@ func (r *SpaceRegistry) consumeRuntimeEvents(client *http.Client) (bool, error) 
 	// The Gateway subscribes before flushing the response headers. Refreshing
 	// loaded spaces now closes the only loss window between stream attempts.
 	r.resyncLoadedSpaces()
+	r.ResyncDeliveries()
 	if err := r.readRuntimeEventStream(response.Body); err != nil {
 		return true, err
 	}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Dialog } from '@ark-ui/vue/dialog'
 import {
   BellOutlined,
@@ -19,6 +19,7 @@ import { useRetainedDialog } from '../../composables/useRetainedDialog'
 const activityStore = useActivityStore()
 const agent = useAgentStore()
 const router = useRouter()
+const route = useRoute()
 const drafts = reactive<Record<string, string>>({})
 const selections = reactive<Record<string, string[]>>({})
 const sendingID = ref('')
@@ -28,6 +29,7 @@ const { open: deleteDialogOpen, payload: deleteTarget } = deleteDialog
 const deletingID = ref('')
 const deleteError = ref('')
 const unavailableReplySessions = reactive(new Set<string>())
+const highlightedID = ref('')
 const cardElements = new Map<string, Element>()
 const visibilityTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const queuedReadIDs = new Set<string>()
@@ -40,7 +42,19 @@ onMounted(async () => {
   try {
     await activityStore.load(true)
   } catch {
-    // The store exposes the actionable error state.
+    // The store exposes the actionable list-loading error state.
+    return
+  }
+  const targetID = typeof route.query.activity === 'string' ? route.query.activity : ''
+  if (targetID) {
+    try {
+      await activityStore.loadOne(targetID)
+      highlightedID.value = targetID
+      await nextTick()
+      cardElements.get(targetID)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    } catch {
+      actionError.value = '链接指向的活动已不存在或暂时无法访问'
+    }
   }
 })
 
@@ -273,7 +287,14 @@ useAppBackHandler(() => {
           v-for="item in activityStore.activities"
           :key="item.id"
           :ref="(element) => setCardElement(item.id, element)"
-          :class="['activity-card', { 'is-unread': !item.read_at, 'is-responded': item.responded_at }]"
+          :class="[
+            'activity-card',
+            {
+              'is-unread': !item.read_at,
+              'is-responded': item.responded_at,
+              'is-highlighted': highlightedID === item.id,
+            },
+          ]"
         >
           <header class="activity-card-heading">
             <span class="activity-card-icon" aria-hidden="true">
@@ -438,6 +459,12 @@ useAppBackHandler(() => {
 
 .activity-card.is-unread {
   border-color: color-mix(in srgb, var(--marvo-accent-color) 36%, var(--border-primary));
+}
+
+.activity-card.is-highlighted {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--marvo-accent-color) 16%, transparent),
+    0 5px 18px color-mix(in srgb, #000 5%, transparent);
 }
 
 .activity-card-heading {

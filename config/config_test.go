@@ -6,11 +6,67 @@ import (
 	"testing"
 )
 
+const testPublicURL = "http://localhost:5080"
+
+func TestPublicURLIsRequired(t *testing.T) {
+	err := (&Config{}).resolve()
+	if err == nil || err.Error() != "server.public_url is required" {
+		t.Fatalf("resolve() error = %v, want server.public_url is required", err)
+	}
+}
+
+func TestPublicURLIsNormalizedAndRestrictedToOrigin(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  string
+		valid bool
+	}{
+		{value: "https://marvo.example.com/", want: "https://marvo.example.com", valid: true},
+		{value: "http://localhost:5080", want: "http://localhost:5080", valid: true},
+		{value: "https://user@example.com", valid: false},
+		{value: "https://example.com/marvo", valid: false},
+		{value: "https://example.com?tenant=one", valid: false},
+	} {
+		got, err := normalizePublicURL(test.value)
+		if test.valid && (err != nil || got != test.want) {
+			t.Fatalf("normalizePublicURL(%q) = %q, %v; want %q", test.value, got, err, test.want)
+		}
+		if !test.valid && err == nil {
+			t.Fatalf("normalizePublicURL(%q) unexpectedly succeeded", test.value)
+		}
+	}
+}
+
+func TestPublicURLFromFileUsesCanonicalConfiguredOrigin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  public_url: https://marvo.example.com/\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := PublicURLFromFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://marvo.example.com" {
+		t.Fatalf("PublicURLFromFile() = %q, want https://marvo.example.com", got)
+	}
+}
+
+func TestPublicURLFromFileRejectsMissingValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("server:\n  host: 127.0.0.1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PublicURLFromFile(path); err == nil || err.Error() != "server.public_url is required" {
+		t.Fatalf("PublicURLFromFile() error = %v, want server.public_url is required", err)
+	}
+}
+
 func TestPublicCORSOriginRequiresStrongCredentialsBehindLoopbackProxy(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	cfg := Config{
 		Server: ServerConfig{
 			Host:        "127.0.0.1",
+			PublicURL:   "https://marvo.example.com",
 			StateDir:    stateDir,
 			DataDir:     t.TempDir(),
 			CORSOrigins: []string{"https://marvo.example.com"},
@@ -39,7 +95,7 @@ func TestLocalDevelopmentSecretIsCreatedPrivatelyAndReused(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	newConfig := func() Config {
 		return Config{
-			Server: ServerConfig{Host: "127.0.0.1", StateDir: stateDir, DataDir: dataDir, CORSOrigins: []string{"http://localhost:5080"}},
+			Server: ServerConfig{Host: "127.0.0.1", PublicURL: testPublicURL, StateDir: stateDir, DataDir: dataDir, CORSOrigins: []string{"http://localhost:5080"}},
 			Auth:   AuthConfig{Password: "marvo"}, OpenCode: OpenCodeConfig{URL: "http://127.0.0.1:4096"},
 		}
 	}
@@ -75,7 +131,7 @@ func TestManagedSessionSecretDoesNotReuseLegacySecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Config{
-		Server:   ServerConfig{Host: "127.0.0.1", StateDir: stateDir, DataDir: dataDir},
+		Server:   ServerConfig{Host: "127.0.0.1", PublicURL: testPublicURL, StateDir: stateDir, DataDir: dataDir},
 		Auth:     AuthConfig{Password: "marvo"},
 		OpenCode: OpenCodeConfig{URL: "http://127.0.0.1:4096"},
 	}
@@ -94,7 +150,7 @@ func TestOpenCodeGlobalInstructionsPathUsesStateDirectory(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	t.Setenv("MARVO_OPENCODE_STATE_DIR", stateDir)
 	cfg := Config{
-		Server:   ServerConfig{Host: "127.0.0.1", StateDir: filepath.Join(t.TempDir(), "marvo"), DataDir: t.TempDir()},
+		Server:   ServerConfig{Host: "127.0.0.1", PublicURL: testPublicURL, StateDir: filepath.Join(t.TempDir(), "marvo"), DataDir: t.TempDir()},
 		Auth:     AuthConfig{Password: "marvo"},
 		OpenCode: OpenCodeConfig{URL: "http://127.0.0.1:4096"},
 	}
@@ -110,7 +166,7 @@ func TestOpenCodeGlobalInstructionsPathUsesStateDirectory(t *testing.T) {
 func TestOpenCodeGlobalInstructionsCannotReplaceProjectRules(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := Config{
-		Server: ServerConfig{Host: "127.0.0.1", StateDir: filepath.Join(t.TempDir(), "state"), DataDir: dataDir},
+		Server: ServerConfig{Host: "127.0.0.1", PublicURL: testPublicURL, StateDir: filepath.Join(t.TempDir(), "state"), DataDir: dataDir},
 		Auth:   AuthConfig{Password: "marvo"},
 		OpenCode: OpenCodeConfig{
 			URL:                    "http://127.0.0.1:4096",

@@ -54,7 +54,7 @@ function startPolling() {
     try {
       await auth.check({ throwOnError: true })
       error.value = ''
-      if (auth.isAuthenticated) await router.replace(workspaceRoute())
+      if (auth.isAuthenticated) await enterWorkspace()
     } catch {
       error.value = '暂时无法连接 Marvo，将继续重试'
     } finally {
@@ -79,7 +79,7 @@ onMounted(async () => {
     return
   }
   if (auth.isAuthenticated) {
-    await router.replace(workspaceRoute())
+    await enterWorkspace()
     return
   }
   if (auth.applyStatus === 'pending') {
@@ -89,7 +89,7 @@ onMounted(async () => {
     try {
       await auth.apply(deviceName.value)
       if (auth.isAuthenticated) {
-        await router.replace(workspaceRoute())
+        await enterWorkspace()
         return
       }
       startPolling()
@@ -109,7 +109,7 @@ async function apply() {
   error.value = ''
   try {
     await auth.apply(deviceName.value)
-    if (auth.isAuthenticated) await router.replace(workspaceRoute())
+    if (auth.isAuthenticated) await enterWorkspace()
     else if (auth.applyStatus === 'pending') startPolling()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '申请提交失败'
@@ -141,6 +141,22 @@ async function enterUserAdmin() {
   const requested = typeof route.query.next === 'string' ? route.query.next : ''
   const adminRoot = workspaceRoute('/admin')
   await router.replace(requested === adminRoot || requested.startsWith(`${adminRoot}/`) ? requested : adminRoot)
+}
+
+async function enterWorkspace() {
+  const requested = typeof route.query.next === 'string' ? route.query.next : ''
+  const root = workspaceRoute()
+  if (!requested) {
+    await router.replace(root)
+    return
+  }
+  const destination = router.resolve(requested)
+  const destinationUserID = Array.isArray(destination.params.userId)
+    ? destination.params.userId[0]
+    : destination.params.userId
+  const allowedRoutes = new Set(['user-home', 'user-note', 'user-agent', 'user-activity', 'user-trash'])
+  const allowed = destinationUserID === userID && allowedRoutes.has(String(destination.name))
+  await router.replace(allowed ? requested : root)
 }
 
 async function verifyTOTP() {

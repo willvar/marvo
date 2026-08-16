@@ -45,6 +45,11 @@ func (c *Config) resolve() error {
 	if c.Server.Port == 0 {
 		c.Server.Port = 5090
 	}
+	publicURL, publicURLErr := validatePublicURL(c.Server.PublicURL)
+	if publicURLErr != nil {
+		return publicURLErr
+	}
+	c.Server.PublicURL = publicURL
 	if c.Server.DataDir == "" {
 		c.Server.DataDir = "~/.marvo/data"
 	}
@@ -188,6 +193,28 @@ func validateHTTPURL(raw string) error {
 	return nil
 }
 
+func normalizePublicURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", errors.New("must be an absolute http or https URL")
+	}
+	if parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("must be an origin without credentials, path, query, or fragment")
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func validatePublicURL(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", errors.New("server.public_url is required")
+	}
+	publicURL, err := normalizePublicURL(raw)
+	if err != nil {
+		return "", fmt.Errorf("server.public_url: %w", err)
+	}
+	return publicURL, nil
+}
+
 func isLoopbackHost(host string) bool {
 	host = strings.TrimSpace(strings.Trim(host, "[]"))
 	if strings.EqualFold(host, "localhost") {
@@ -264,6 +291,7 @@ func writeNewPrivateFile(path string, data []byte) error {
 type ServerConfig struct {
 	Host          string   `yaml:"host"`
 	Port          int      `yaml:"port"`
+	PublicURL     string   `yaml:"public_url"`
 	StateDir      string   `yaml:"state_dir"`
 	DataDir       string   `yaml:"data_dir"`
 	SessionSecret string   `yaml:"-"`
@@ -279,18 +307,35 @@ type LogConfig struct {
 	FilePath string `yaml:"file"`
 }
 
-func Load(path string) *Config {
+func read(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		slog.Error("failed to read config file", "error", err, "path", path)
-		os.Exit(1)
+		return nil, fmt.Errorf("read config file %q: %w", path, err)
 	}
 
 	var cfg Config
 	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
-		slog.Error("failed to parse config file", "error", err)
+		return nil, fmt.Errorf("parse config file %q: %w", path, err)
+	}
+	return &cfg, nil
+}
+
+// PublicURLFromFile returns the canonical browser origin shared by Marvo and Android builds.
+// It intentionally avoids resolving the rest of the configuration, which can create managed state files.
+func PublicURLFromFile(path string) (string, error) {
+	cfg, err := read(path)
+	if err != nil {
+		return "", err
+	}
+	return validatePublicURL(cfg.Server.PublicURL)
+}
+
+func Load(path string) *Config {
+	cfg, err := read(path)
+	if err != nil {
+		slog.Error("failed to load config file", "error", err)
 		os.Exit(1)
 	}
 
@@ -299,5 +344,5 @@ func Load(path string) *Config {
 		os.Exit(1)
 	}
 
-	return &cfg
+	return cfg
 }

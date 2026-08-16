@@ -42,6 +42,12 @@ export {
   type AgentProviderOAuthAttempt,
 } from './types/agent'
 export { conciseAgentErrorDetail, formatAgentError, isAbortedAgentError, unwrapAgentError } from './agentErrors'
+export {
+  type ActivityConnector,
+  type ConnectorField,
+  type ConnectorFieldOption,
+  type ConnectorProvider,
+} from './types/connectors'
 export { toMarkdownAssetPath, toNoteAssetUrl, toRelativeAssetPath } from './utils/noteAssets'
 export { renderMarkdown } from './markdown'
 export { clearAgentDraft, loadAgentDraft, saveAgentDraft } from './agentDrafts'

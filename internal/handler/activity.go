@@ -10,6 +10,19 @@ import (
 
 const maxActivityControlBody = 32 << 10
 
+func (d *Dependencies) GetActivity(w http.ResponseWriter, r *http.Request) {
+	activity, err := d.Activity.Get(r.PathValue("id"))
+	if errors.Is(err, store.ErrActivityNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "Activity not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to load Activity"})
+		return
+	}
+	writeJSON(w, http.StatusOK, activity)
+}
+
 func (d *Dependencies) ListActivities(w http.ResponseWriter, r *http.Request) {
 	limit := 30
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {

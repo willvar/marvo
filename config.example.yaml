@@ -1,6 +1,8 @@
 server:
   host: 127.0.0.1
   port: 5090
+  # 必填；活动外部通知返回 Marvo 时使用的平台地址。
+  public_url: http://localhost:5080
   state_dir: ~/.marvo
   # 旧单用户数据目录，仅用于迁移；多用户数据写入 state_dir/users。
   data_dir: ~/.marvo/data

@@ -40,6 +40,10 @@ function routeTitleParts(route: RouteLocationNormalizedLoaded) {
       const userName = userTitleNames.get(routeParameter(route.params.userId))
       return userName ? ['智能体设置', userName] : ['智能体设置']
     }
+    case 'user-connectors': {
+      const userName = userTitleNames.get(routeParameter(route.params.userId))
+      return userName ? ['活动连接器', userName] : ['活动连接器']
+    }
     case 'user-security': {
       const userName = userTitleNames.get(routeParameter(route.params.userId))
       return userName ? ['安全设置', userName] : ['安全设置']
@@ -151,6 +155,11 @@ export const router = createRouter({
           name: 'user-security',
           component: () => import('./pages/admin/SecuritySettings.vue'),
         },
+        {
+          path: 'connectors',
+          name: 'user-connectors',
+          component: () => import('./pages/admin/Connectors.vue'),
+        },
       ],
     },
     {
@@ -163,6 +172,10 @@ export const router = createRouter({
         { path: 'activity', name: 'user-activity', component: () => import('./pages/desktop/Activity.vue') },
         { path: 'trash', name: 'user-trash', component: () => import('./pages/desktop/Trash.vue') },
       ],
+    },
+    {
+      path: '/user/:pathMatch(.*)*',
+      redirect: '/admin/login',
     },
     {
       path: '/:pathMatch(.*)*',

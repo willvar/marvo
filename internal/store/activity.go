@@ -100,7 +100,12 @@ func (s *ActivityStore) Publish(input ActivityPublish) (Activity, bool, error) {
 	}
 	digest := sha256.Sum256(payload)
 	dedupeKey := hex.EncodeToString(digest[:])
-	if existing, err := s.getByDedupeKey(dedupeKey); err == nil {
+	tx, err := s.state.sql.BeginTx(context.Background(), nil)
+	if err != nil {
+		return Activity{}, false, err
+	}
+	defer tx.Rollback()
+	if existing, err := scanActivity(tx.QueryRow(activitySelect+` WHERE dedupe_key = ?`, dedupeKey)); err == nil {
 		return existing, false, nil
 	} else if !errors.Is(err, ErrActivityNotFound) {
 		return Activity{}, false, err
@@ -116,7 +121,7 @@ func (s *ActivityStore) Publish(input ActivityPublish) (Activity, bool, error) {
 		CreatedAt:       time.Now().UTC(), ResponseChoices: []string{},
 	}
 	choicesJSON, _ := json.Marshal(activity.Choices)
-	_, err = s.state.sql.Exec(`
+	_, err = tx.Exec(`
 		INSERT INTO activities(
 			id, kind, title, content, choices_json, multiple,
 			source_session_id, source_message_id, source_call_id, dedupe_key, created_at
@@ -125,10 +130,39 @@ func (s *ActivityStore) Publish(input ActivityPublish) (Activity, bool, error) {
 		activity.Multiple, activity.SourceSessionID, activity.SourceMessageID, dedupeKey,
 		activity.CreatedAt.UnixMilli())
 	if err != nil {
-		if existing, getErr := s.getByDedupeKey(dedupeKey); getErr == nil {
-			return existing, false, nil
-		}
 		return Activity{}, false, fmt.Errorf("publish activity: %w", err)
+	}
+	rows, err := tx.Query(`SELECT id FROM connectors WHERE enabled = 1 ORDER BY created_at, id`)
+	if err != nil {
+		return Activity{}, false, fmt.Errorf("load Activity connectors: %w", err)
+	}
+	connectorIDs := make([]string, 0)
+	for rows.Next() {
+		var connectorID string
+		if err := rows.Scan(&connectorID); err != nil {
+			_ = rows.Close()
+			return Activity{}, false, err
+		}
+		connectorIDs = append(connectorIDs, connectorID)
+	}
+	if err := rows.Close(); err != nil {
+		return Activity{}, false, err
+	}
+	for _, connectorID := range connectorIDs {
+		deliveryID, err := randomID()
+		if err != nil {
+			return Activity{}, false, err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO activity_deliveries(
+				id, activity_id, connector_id, status, attempt_count, next_attempt_at, created_at, updated_at
+			) VALUES(?, ?, ?, 'pending', 0, ?, ?, ?)
+		`, deliveryID, activity.ID, connectorID, activity.CreatedAt.UnixMilli(), activity.CreatedAt.UnixMilli(), activity.CreatedAt.UnixMilli()); err != nil {
+			return Activity{}, false, fmt.Errorf("queue Activity delivery: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Activity{}, false, fmt.Errorf("commit Activity: %w", err)
 	}
 	return activity, true, nil
 }
@@ -331,10 +365,6 @@ func (s *ActivityStore) DetachReplySession(sessionID string) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-func (s *ActivityStore) getByDedupeKey(key string) (Activity, error) {
-	return scanActivity(s.state.sql.QueryRow(activitySelect+` WHERE dedupe_key = ?`, key))
 }
 
 const activitySelect = `
