@@ -38,7 +38,7 @@ make dev
 
 需要在局域网中以接近生产构建的方式验收时，请使用 `make preview`。它会构建前端并启动 Vite Preview；在 `dev` 与 `preview` 之间切换前，应先停止当前进程。正式执行 `make build` 时，同一份前端会嵌入 `dist/marvo`，不再需要 Vite 或独立的静态站点。
 
-Android 通用 APK 位于 `frontend/android`。调试构建使用 `make android-debug SERVER_ORIGIN=https://marvo.example.com`；正式发布、版本递增和签名配置见 `frontend/android/README.md`。服务地址（Origin）必须在构建时显式指定，不与仓库或二维码绑定。
+Android 通用 APK 位于 `frontend/android`。调试构建使用 `make android-debug`；正式发布、版本递增和签名配置见 `frontend/android/README.md`。构建默认读取 `config.yaml` 中的 `server.public_url`，也可使用 `CONFIG_FILE=/path/to/config.yaml` 选择另一份配置；不再单独接收服务地址。
 
 ## 首次进入与权限
 

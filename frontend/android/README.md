@@ -2,17 +2,17 @@
 
 这个目录包含通用 Android APP 壳。APK 内置当前 Vue 生产产物，但 API、媒体和 SSE 请求仍会发送到构建时指定的 Marvo 服务。首次启动只绑定一个用户 ID；如需绑定其他空间，需要清除 APP 数据或重新安装。
 
-应用 ID 固定为 `cn.willvar.marvo`。服务地址（Origin）不写入源码，构建时必须显式提供；域名发生变化时，需要发布使用新地址构建的 APK。用户前台生成的二维码始终只包含 20 位用户 ID。
+应用 ID 固定为 `cn.willvar.marvo`。APK 构建时会读取 Marvo 配置中必填的 `server.public_url`，并将其写入应用作为唯一可信服务 Origin；域名发生变化时，需要更新配置并重新发布 APK。用户前台生成的二维码始终只包含 20 位用户 ID。
 
 ## 构建调试包
 
 需要 JDK 17 或 21、Android SDK 36，以及已安装的前端依赖。构建脚本会在常见位置寻找兼容 JDK 和 SDK；无法自动找到时可设置 `ANDROID_JAVA_HOME=/path/to/jdk` 与 `ANDROID_HOME=/path/to/sdk`：
 
 ```bash
-make android-debug SERVER_ORIGIN=https://marvo.example.com
+make android-debug
 ```
 
-输出为 `dist/android/Marvo-debug.apk`。调试包使用 `cn.willvar.marvo.debug`，不能上传到平台发布页。本机联调时也可传入 `http://localhost` 或 `10.x`、`172.16-31.x`、`192.168.x`、`127.x` 私网地址；只有调试包允许这类明文连接，正式包仍强制使用 HTTPS。
+默认读取项目根目录的 `config.yaml`；要使用其他配置可执行 `make android-debug CONFIG_FILE=/path/to/config.yaml`。输出为 `dist/android/Marvo-debug.apk`。调试包使用 `cn.willvar.marvo.debug`，不能上传到平台发布页。`server.public_url` 可以是 HTTPS，也可以是 `localhost`、`10.x`、`172.16-31.x`、`192.168.x` 或 `127.x` 私网 HTTP 地址；只有调试包允许这类明文连接，正式包仍强制使用 HTTPS。
 
 ## 构建正式包
 
@@ -21,7 +21,7 @@ make android-debug SERVER_ORIGIN=https://marvo.example.com
 3. 构建：
 
 ```bash
-make android-apk SERVER_ORIGIN=https://marvo.example.com
+make android-apk CONFIG_FILE=/path/to/production-config.yaml
 ```
 
 输出为 `dist/android/Marvo-<版本号>.apk`。随后由平台管理员在 `/admin/android` 上传；用户可在工作区的“Android APP”入口下载，已安装 APP 也会通过公开版本接口检查更新。

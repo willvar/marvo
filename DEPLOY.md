@@ -63,6 +63,7 @@ runtime:
 ```
 
 `server.public_url` 是必填项，用于用户从外通知返回活动页。必须填写可访问 Marvo 的 HTTP(S) Origin，不能包含路径、查询或片段；未配置时 Marvo 会拒绝启动。
+正式 APK 构建也使用同一值：`make android-apk CONFIG_FILE=/path/to/production-config.yaml`。
 
 启动 Runtime 时，必须让 `MARVO_STATE_DIR` 与 `server.state_dir` 指向宿主机上的同一个绝对路径。使用 Rootless Docker 时可以另行设置 `MARVO_RUNTIME_DOCKER_SOCKET`；网关仍只映射到回环地址。
 

@@ -1,6 +1,7 @@
 .PHONY: build build-frontend build-agent build-runtime rebuild-images start-runtime stop-runtime wait-runtime dev preview android-debug android-apk test test-go test-android test-runtime test-webkit lint lint-go lint-frontend lint-android format-android deadcode audit clean
 
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.1.0")
+CONFIG_FILE ?= config.yaml
 ANDROID_CHECK_ORIGIN ?= http://127.0.0.1:5080
 ANDROID_GRADLE := frontend/android/run-gradle.sh -p frontend/android
 
@@ -12,17 +13,19 @@ build-frontend:
 	npm --prefix frontend run build
 
 android-debug:
-	@test -n "$(SERVER_ORIGIN)" || { echo "SERVER_ORIGIN=https://your-domain.example is required" >&2; exit 1; }
-	@$(MAKE) --no-print-directory build-frontend
-	frontend/android/run-gradle.sh -p frontend/android :app:assembleDebug -Pmarvo.serverOrigin="$(SERVER_ORIGIN)"
+	@set -e; \
+		server_origin="$$(go run ./cmd/marvo-config -c "$(CONFIG_FILE)" public-url)"; \
+		$(MAKE) --no-print-directory build-frontend; \
+		frontend/android/run-gradle.sh -p frontend/android :app:assembleDebug -Pmarvo.serverOrigin="$$server_origin"
 	@mkdir -p dist/android
 	cp frontend/android/app/build/outputs/apk/debug/app-debug.apk dist/android/Marvo-debug.apk
 
 android-apk:
-	@test -n "$(SERVER_ORIGIN)" || { echo "SERVER_ORIGIN=https://your-domain.example is required" >&2; exit 1; }
 	@test -f frontend/android/signing.properties || { echo "frontend/android/signing.properties is required for a release APK" >&2; exit 1; }
-	@$(MAKE) --no-print-directory build-frontend
-	frontend/android/run-gradle.sh -p frontend/android :app:assembleRelease -Pmarvo.serverOrigin="$(SERVER_ORIGIN)"
+	@set -e; \
+		server_origin="$$(go run ./cmd/marvo-config -c "$(CONFIG_FILE)" public-url)"; \
+		$(MAKE) --no-print-directory build-frontend; \
+		frontend/android/run-gradle.sh -p frontend/android :app:assembleRelease -Pmarvo.serverOrigin="$$server_origin"
 	@mkdir -p dist/android
 	@version_name="$$(sed -n 's/^VERSION_NAME=//p' frontend/android/version.properties)"; \
 		test -n "$$version_name"; \

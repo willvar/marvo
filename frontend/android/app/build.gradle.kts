@@ -194,7 +194,7 @@ fun registerWebAssetsTask(
 val validateServerOrigin by tasks.registering {
     doLast {
         require(configuredServerOrigin != null) {
-            "Pass the deployment origin with -Pmarvo.serverOrigin=https://your-domain.example"
+            "The Marvo build did not provide server.public_url as marvo.serverOrigin"
         }
     }
 }
