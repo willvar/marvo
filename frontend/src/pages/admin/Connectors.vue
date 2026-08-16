@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Checkbox } from '@ark-ui/vue/checkbox'
-import { Combobox, useListCollection } from '@ark-ui/vue/combobox'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { Field } from '@ark-ui/vue/field'
 import { Select, createListCollection, type ListCollection } from '@ark-ui/vue/select'
@@ -18,8 +17,10 @@ import {
   NotificationOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SearchOutlined,
   SaveOutlined,
   SendOutlined,
+  SwapOutlined,
 } from '@ant-design/icons-vue'
 import {
   api,
@@ -29,7 +30,7 @@ import {
   type ConnectorProvider,
 } from '../../sdk'
 import { useRetainedDialog } from '../../composables/useRetainedDialog'
-import { XButton } from '../../components/x'
+import { XButton, XPrompts } from '../../components/x'
 
 interface EditorPayload {
   connector?: ActivityConnector
@@ -43,8 +44,9 @@ const editorDialog = useRetainedDialog<EditorPayload>()
 const deleteDialog = useRetainedDialog<ActivityConnector>()
 const { open: editorOpen, payload: editorPayload } = editorDialog
 const { open: deleteOpen, payload: deleteTarget } = deleteDialog
-const selectedProviderValues = ref<string[]>([])
-const providerInput = ref('')
+const selectedProviderID = ref('')
+const providerSearch = ref('')
+const activeProviderCategory = ref('全部')
 const connectorName = ref('')
 const connectorEnabled = ref(true)
 const config = reactive<Record<string, unknown>>({})
@@ -64,27 +66,40 @@ const toaster = createToaster({
   offsets: { top: '16px', right: '16px', bottom: '28px', left: '16px' },
 })
 
-const {
-  collection: providerCollection,
-  filter: filterProviders,
-  set: setProviderItems,
-} = useListCollection<ConnectorProvider>({
-  initialItems: [],
-  itemToValue: (provider) => provider.id,
-  itemToString: (provider) => `${provider.name} · ${provider.id}`,
-  filter: (_text, query, provider) =>
-    `${provider.name} ${provider.id} ${provider.category}`
-      .toLocaleLowerCase()
-      .includes(query.trim().toLocaleLowerCase()),
-})
-
 const selectedProvider = computed(() => {
   const connector = editorPayload.value?.connector
-  const id = connector?.provider_id || selectedProviderValues.value[0]
+  const id = connector?.provider_id || selectedProviderID.value
   return providers.value.find((provider) => provider.id === id) || null
 })
 const editing = computed(() => !!editorPayload.value?.connector)
 const configuredCount = computed(() => connectors.value.filter((connector) => connector.enabled).length)
+const providerCategories = computed(() => [...new Set(providers.value.map((provider) => provider.category))])
+const providerCategoryCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const provider of providers.value) counts.set(provider.category, (counts.get(provider.category) || 0) + 1)
+  return counts
+})
+const visibleProviderGroups = computed(() => {
+  const query = providerSearch.value.trim().toLocaleLowerCase()
+  const categories =
+    !query && activeProviderCategory.value !== '全部' ? [activeProviderCategory.value] : providerCategories.value
+  return categories
+    .map((category) => ({
+      category,
+      providers: providers.value.filter((provider) => {
+        if (provider.category !== category) return false
+        if (!query) return true
+        return [provider.name, provider.id, provider.category, provider.description, ...(provider.keywords || [])]
+          .join(' ')
+          .toLocaleLowerCase()
+          .includes(query)
+      }),
+    }))
+    .filter((group) => group.providers.length > 0)
+})
+const visibleProviderCount = computed(() =>
+  visibleProviderGroups.value.reduce((total, group) => total + group.providers.length, 0),
+)
 const selectCollections = computed(() => {
   const result = new Map<string, ListCollection<{ label: string; value: string }>>()
   for (const field of selectedProvider.value?.fields || []) {
@@ -108,14 +123,8 @@ const formValid = computed(() => {
   })
 })
 
-watch(selectedProviderValues, (values, previous) => {
-  if (editing.value || !values[0] || values[0] === previous[0]) return
-  const provider = providers.value.find((candidate) => candidate.id === values[0])
-  if (!provider) return
-  connectorName.value = provider.name
-  connectorEnabled.value = true
-  initializeConfig(provider, undefined)
-  editorError.value = ''
+watch(providerSearch, (value) => {
+  if (value.trim()) activeProviderCategory.value = '全部'
 })
 
 onMounted(load)
@@ -130,7 +139,6 @@ async function load() {
     ])
     providers.value = Array.isArray(providerResponse.data?.providers) ? providerResponse.data.providers : []
     connectors.value = Array.isArray(connectorResponse.data?.connectors) ? connectorResponse.data.connectors : []
-    setProviderItems(providers.value)
   } catch (cause) {
     loadError.value = errorMessage(cause, '活动连接器加载失败')
   } finally {
@@ -143,18 +151,18 @@ function showToast(title: string, type: 'success' | 'error') {
 }
 
 function beginCreate() {
-  selectedProviderValues.value = []
-  providerInput.value = ''
+  selectedProviderID.value = ''
+  providerSearch.value = ''
+  activeProviderCategory.value = '全部'
   connectorName.value = ''
   connectorEnabled.value = true
   clearConfig()
   editorError.value = ''
   editorDialog.show({})
-  setProviderItems(providers.value)
 }
 
 function beginEdit(connector: ActivityConnector) {
-  selectedProviderValues.value = [connector.provider_id]
+  selectedProviderID.value = connector.provider_id
   connectorName.value = connector.name
   connectorEnabled.value = connector.enabled
   clearSecrets.value = new Set()
@@ -192,20 +200,37 @@ function closeEditor() {
 
 function completeEditorClose() {
   if (!editorDialog.clearAfterExit()) return
-  selectedProviderValues.value = []
-  providerInput.value = ''
+  selectedProviderID.value = ''
+  providerSearch.value = ''
+  activeProviderCategory.value = '全部'
   clearConfig()
   editorError.value = ''
 }
 
-function handleProviderOpen(details: { open: boolean }) {
-  if (details.open && !providerInput.value.trim()) setProviderItems(providers.value)
-  else {
-    if (!details.open) {
-      providerInput.value = ''
-      filterProviders('')
-    }
-  }
+function selectProvider(provider: ConnectorProvider) {
+  selectedProviderID.value = provider.id
+  connectorName.value = provider.name
+  connectorEnabled.value = true
+  initializeConfig(provider, undefined)
+  editorError.value = ''
+}
+
+function selectProviderByPrompt(prompt: { key: string }) {
+  const provider = providers.value.find((candidate) => candidate.id === prompt.key)
+  if (provider) selectProvider(provider)
+}
+
+function selectProviderCategory(category: string) {
+  activeProviderCategory.value = category
+  providerSearch.value = ''
+}
+
+function changeProvider() {
+  selectedProviderID.value = ''
+  connectorName.value = ''
+  connectorEnabled.value = true
+  clearConfig()
+  editorError.value = ''
 }
 
 function fieldCollection(field: ConnectorField) {
@@ -493,7 +518,13 @@ function errorMessage(cause: unknown, fallback: string) {
           <div class="dialog-header">
             <div>
               <Dialog.Title>{{ editing ? '编辑连接器' : '新建连接器' }}</Dialog.Title>
-              <Dialog.Description>选择服务并填写该服务要求的连接信息。</Dialog.Description>
+              <Dialog.Description>
+                {{
+                  selectedProvider
+                    ? '填写连接信息并发送测试，确认服务可以正常接收活动。'
+                    : '按用途查找要接收活动的服务。'
+                }}
+              </Dialog.Description>
             </div>
             <button
               class="dialog-close"
@@ -506,59 +537,80 @@ function errorMessage(cause: unknown, fallback: string) {
             </button>
           </div>
           <div class="dialog-body activity-connector-editor-body">
-            <div v-if="!editing" class="activity-connector-provider-picker">
-              <Combobox.Root
-                v-model="selectedProviderValues"
-                v-model:input-value="providerInput"
-                :collection="providerCollection"
-                :positioning="{
-                  placement: 'bottom-start',
-                  sameWidth: true,
-                  flip: false,
-                  fitViewport: true,
-                  gutter: 6,
-                  overflowPadding: 12,
-                }"
-                input-behavior="autohighlight"
-                open-on-click
-                selection-behavior="clear"
-                @input-value-change="filterProviders($event.inputValue)"
-                @open-change="handleProviderOpen"
-              >
-                <Combobox.Label>服务</Combobox.Label>
-                <Combobox.Control class="activity-connector-combobox-control">
-                  <Combobox.Input placeholder="搜索服务名称、类别或 ID" aria-label="选择连接器服务" />
-                  <Combobox.Trigger aria-label="展开服务列表"><DownOutlined /></Combobox.Trigger>
-                </Combobox.Control>
-                <Teleport to="body">
-                  <Combobox.Positioner class="activity-connector-provider-positioner">
-                    <Combobox.Content class="activity-connector-provider-content">
-                      <Combobox.Empty class="activity-connector-provider-empty">没有匹配的服务</Combobox.Empty>
-                      <Combobox.Item
-                        v-for="provider in providerCollection.items"
-                        :key="provider.id"
-                        :item="provider"
-                        class="activity-connector-provider-item"
-                      >
-                        <span class="activity-connector-provider-icon"><ApiOutlined /></span>
-                        <span>
-                          <Combobox.ItemText>{{ provider.name }}</Combobox.ItemText>
-                          <small>{{ provider.category }} · {{ provider.id }}</small>
-                        </span>
-                        <Combobox.ItemIndicator><CheckOutlined /></Combobox.ItemIndicator>
-                      </Combobox.Item>
-                    </Combobox.Content>
-                  </Combobox.Positioner>
-                </Teleport>
-              </Combobox.Root>
-            </div>
+            <section v-if="!editing && !selectedProvider" class="activity-connector-provider-directory">
+              <Field.Root class="activity-connector-provider-search">
+                <Field.Label class="activity-connector-visually-hidden">搜索连接器服务</Field.Label>
+                <div class="activity-connector-provider-search-control">
+                  <SearchOutlined aria-hidden="true" />
+                  <Field.Input v-model="providerSearch" autocomplete="off" placeholder="搜索服务名称、用途或关键词" />
+                  <span v-if="providerSearch.trim()">{{ visibleProviderCount }} 个结果</span>
+                </div>
+              </Field.Root>
+
+              <nav class="activity-connector-provider-categories" aria-label="服务类别">
+                <XButton
+                  size="small"
+                  :variant="activeProviderCategory === '全部' ? 'primary' : 'secondary'"
+                  :aria-pressed="activeProviderCategory === '全部'"
+                  @click="selectProviderCategory('全部')"
+                >
+                  全部<span>{{ providers.length }}</span>
+                </XButton>
+                <XButton
+                  v-for="category in providerCategories"
+                  :key="category"
+                  size="small"
+                  :variant="activeProviderCategory === category ? 'primary' : 'secondary'"
+                  :aria-pressed="activeProviderCategory === category"
+                  @click="selectProviderCategory(category)"
+                >
+                  {{ category }}<span>{{ providerCategoryCounts.get(category) || 0 }}</span>
+                </XButton>
+              </nav>
+
+              <div v-if="visibleProviderGroups.length" class="activity-connector-provider-groups">
+                <section
+                  v-for="group in visibleProviderGroups"
+                  :key="group.category"
+                  class="activity-connector-provider-group"
+                >
+                  <header>
+                    <h3>{{ group.category }}</h3>
+                    <span>{{ group.providers.length }} 个服务</span>
+                  </header>
+                  <XPrompts
+                    class="activity-connector-provider-prompts"
+                    :items="
+                      group.providers.map((provider) => ({
+                        key: provider.id,
+                        label: provider.name,
+                        description: provider.description,
+                        icon: ApiOutlined,
+                      }))
+                    "
+                    @select="selectProviderByPrompt"
+                  />
+                </section>
+              </div>
+              <div v-else class="activity-connector-provider-empty">
+                <SearchOutlined aria-hidden="true" />
+                <strong>没有匹配的服务</strong>
+                <span>尝试搜索服务名称、用途或接收渠道。</span>
+              </div>
+            </section>
 
             <div v-else-if="selectedProvider" class="activity-connector-selected-provider">
               <span class="activity-connector-provider-icon"><ApiOutlined /></span>
-              <div>
-                <strong>{{ selectedProvider.name }}</strong
-                ><span>{{ selectedProvider.category }} · {{ selectedProvider.id }}</span>
+              <div class="activity-connector-selected-provider-copy">
+                <div>
+                  <strong>{{ selectedProvider.name }}</strong>
+                  <span>{{ selectedProvider.category }}</span>
+                </div>
+                <p>{{ selectedProvider.description }}</p>
               </div>
+              <XButton v-if="!editing" size="small" @click="changeProvider">
+                <SwapOutlined aria-hidden="true" />更换服务
+              </XButton>
             </div>
 
             <template v-if="selectedProvider">
@@ -675,11 +727,16 @@ function errorMessage(cause: unknown, fallback: string) {
           </div>
           <div class="dialog-footer activity-connector-editor-actions">
             <XButton :disabled="saving || testing" @click="closeEditor"><CloseOutlined />取消</XButton>
-            <XButton :disabled="!formValid || saving || testing" @click="testDraft">
+            <XButton v-if="selectedProvider" :disabled="!formValid || saving || testing" @click="testDraft">
               <LoadingOutlined v-if="testing" class="activity-connector-spin" />
               <SendOutlined v-else />{{ testing ? '测试中…' : '发送测试' }}
             </XButton>
-            <XButton variant="primary" :disabled="!formValid || saving || testing" @click="save">
+            <XButton
+              v-if="selectedProvider"
+              variant="primary"
+              :disabled="!formValid || saving || testing"
+              @click="save"
+            >
               <LoadingOutlined v-if="saving" class="activity-connector-spin" />
               <SaveOutlined v-else />{{ saving ? '保存中…' : '保存连接器' }}
             </XButton>
@@ -918,7 +975,7 @@ function errorMessage(cause: unknown, fallback: string) {
 }
 
 .activity-connector-editor {
-  max-width: 760px;
+  max-width: 900px;
   z-index: calc(1000 + var(--layer-index, 0));
 }
 .activity-connector-editor-body {
@@ -928,7 +985,6 @@ function errorMessage(cause: unknown, fallback: string) {
   flex-direction: column;
   gap: 18px;
 }
-.activity-connector-provider-picker [data-part='label'],
 .activity-connector-field [data-part='label'] {
   display: block;
   margin-bottom: 7px;
@@ -936,7 +992,6 @@ function errorMessage(cause: unknown, fallback: string) {
   font-size: var(--marvo-type-12);
   font-weight: 600;
 }
-.activity-connector-combobox-control,
 .activity-connector-select-trigger,
 .activity-connector-field :is([data-part='input'], [data-part='textarea']) {
   width: 100%;
@@ -953,26 +1008,6 @@ function errorMessage(cause: unknown, fallback: string) {
   &:focus-within {
     border-color: var(--text-accent);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 12%, transparent);
-  }
-}
-.activity-connector-combobox-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 40px;
-  overflow: hidden;
-  input,
-  button {
-    border: 0;
-    outline: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-  }
-  input {
-    min-width: 0;
-    padding: 0 12px;
-  }
-  button {
-    cursor: pointer;
   }
 }
 .activity-connector-select-trigger {
@@ -1019,24 +1054,177 @@ function errorMessage(cause: unknown, fallback: string) {
   font: inherit;
   font-size: var(--marvo-type-10);
 }
-.activity-connector-selected-provider {
+.activity-connector-provider-directory {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.activity-connector-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.activity-connector-provider-search-control {
+  min-height: 42px;
   display: flex;
   align-items: center;
+  gap: 9px;
+  padding-inline: 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-tertiary);
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s;
+  &:focus-within {
+    border-color: var(--text-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--marvo-accent-color, #4f46e5) 12%, transparent);
+  }
+  > .anticon {
+    flex: none;
+    font-size: var(--marvo-type-15);
+  }
+  [data-part='input'] {
+    min-width: 0;
+    flex: 1;
+    align-self: stretch;
+    padding: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--marvo-type-13);
+  }
+  > span {
+    flex: none;
+    font-size: var(--marvo-type-11);
+    white-space: nowrap;
+  }
+}
+.activity-connector-provider-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  .x-button {
+    border-radius: 999px;
+  }
+  .x-button > span {
+    min-width: 18px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    font-size: var(--marvo-type-10);
+    line-height: 1.35;
+  }
+}
+.activity-connector-provider-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.activity-connector-provider-group {
+  min-width: 0;
+  > header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 9px;
+  }
+  h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: var(--marvo-type-13);
+    font-weight: 600;
+  }
+  > header span {
+    color: var(--text-muted);
+    font-size: var(--marvo-type-11);
+  }
+}
+.activity-connector-provider-prompts {
+  .x-prompts-list {
+    gap: 9px;
+  }
+  .x-prompts-item {
+    flex: 1 1 calc(50% - 5px);
+    min-height: 76px;
+    background: var(--bg-primary);
+  }
+  .x-prompts-content small {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+}
+.activity-connector-provider-empty {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 24px;
+  border: 1px dashed var(--border-primary);
+  border-radius: 12px;
+  text-align: center;
+  color: var(--text-tertiary);
+  > .anticon {
+    margin-bottom: 3px;
+    font-size: var(--marvo-type-22);
+  }
+  strong {
+    color: var(--text-primary);
+    font-size: var(--marvo-type-13);
+  }
+  span {
+    font-size: var(--marvo-type-12);
+  }
+}
+.activity-connector-selected-provider {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: 10px;
-  padding: 11px;
+  padding: 13px;
   border-radius: 10px;
   background: var(--bg-secondary);
-  div {
+}
+.activity-connector-selected-provider-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  > div {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    gap: 8px;
   }
   strong {
     font-size: var(--marvo-type-13);
   }
-  span {
+  > div span {
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--bg-primary);
     color: var(--text-tertiary);
+    font-size: var(--marvo-type-10);
+    white-space: nowrap;
+  }
+  p {
+    margin: 0;
+    color: var(--text-secondary);
     font-size: var(--marvo-type-11);
+    line-height: 1.45;
   }
 }
 .activity-connector-checkbox {
@@ -1117,11 +1305,9 @@ function errorMessage(cause: unknown, fallback: string) {
   }
 }
 
-.activity-connector-provider-positioner,
 .activity-connector-select-positioner {
   z-index: var(--z-index, 1000);
 }
-.activity-connector-provider-content,
 .activity-connector-select-content {
   z-index: calc(1000 + var(--layer-index, 0));
   max-height: min(360px, var(--available-height));
@@ -1132,38 +1318,6 @@ function errorMessage(cause: unknown, fallback: string) {
   background: var(--bg-card);
   box-shadow: var(--shadow-card);
   outline: none;
-}
-.activity-connector-provider-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  outline: none;
-  &[data-highlighted] {
-    background: var(--bg-hover);
-  }
-  > span:nth-child(2) {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  small {
-    color: var(--text-tertiary);
-    font-size: var(--marvo-type-10);
-  }
-  [data-part='item-indicator'] {
-    color: var(--text-accent);
-  }
-}
-.activity-connector-provider-empty {
-  padding: 18px;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: var(--marvo-type-12);
 }
 .activity-connector-select-item {
   display: flex;
@@ -1224,6 +1378,29 @@ function errorMessage(cause: unknown, fallback: string) {
   }
   .activity-connector-fields {
     grid-template-columns: 1fr;
+  }
+  .activity-connector-provider-prompts .x-prompts-item {
+    flex-basis: 100%;
+  }
+  .activity-connector-provider-categories {
+    flex-wrap: nowrap;
+    margin-inline: -14px;
+    padding-inline: 14px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    .x-button {
+      flex: none;
+    }
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+  .activity-connector-selected-provider {
+    grid-template-columns: auto minmax(0, 1fr);
+    .x-button {
+      grid-column: 1 / -1;
+      justify-self: end;
+    }
   }
   .activity-connector-field:has([data-part='textarea']) {
     grid-column: auto;

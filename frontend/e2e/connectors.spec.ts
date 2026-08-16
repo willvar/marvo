@@ -2,11 +2,9 @@ import { expect, test } from '@playwright/test'
 import { approveDevice, authenticateUserAdministrator, workspaceAPI, workspacePath } from './helpers'
 
 test('用户后台可配置 Activity Webhook 且敏感地址不回显', async ({ page }, testInfo) => {
-  test.skip(!['chromium-landscape', 'chromium-portrait'].includes(testInfo.project.name))
+  const portrait = testInfo.project.name.endsWith('-portrait')
   const connectorName = 'E2E Activity Webhook 用于验证较长名称排版'
-  await page.setViewportSize(
-    testInfo.project.name === 'chromium-portrait' ? { width: 360, height: 740 } : { width: 1366, height: 768 },
-  )
+  await page.setViewportSize(portrait ? { width: 360, height: 740 } : { width: 1366, height: 768 })
   await approveDevice(page, '连接器深链接设备')
   await authenticateUserAdministrator(page)
 
@@ -32,7 +30,7 @@ test('用户后台可配置 Activity Webhook 且敏感地址不回显', async ({
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(
     true,
   )
-  if (testInfo.project.name === 'chromium-portrait') {
+  if (portrait) {
     const overviewTops = await page
       .locator('.activity-connectors-overview > div')
       .evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().top)))
@@ -42,23 +40,33 @@ test('用户后台可配置 Activity Webhook 且敏感地址不回显', async ({
 
   const dialog = page.getByRole('dialog', { name: '新建连接器' })
   await expect(dialog).toBeVisible()
-  const provider = dialog.getByRole('combobox', { name: '选择连接器服务' })
-  await expect(provider).toHaveCSS('padding-left', '12px')
-  await expect(provider).toHaveCSS('padding-right', '12px')
-  await provider.click()
-  const providerList = page.locator('.activity-connector-provider-content')
-  await expect(providerList).toBeVisible()
-  const [providerBounds, providerListBounds] = await Promise.all([provider.boundingBox(), providerList.boundingBox()])
-  expect(providerBounds).not.toBeNull()
-  expect(providerListBounds).not.toBeNull()
-  expect(providerListBounds!.y).toBeGreaterThanOrEqual(providerBounds!.y + providerBounds!.height - 1)
-  expect(providerListBounds!.y + providerListBounds!.height).toBeLessThanOrEqual(page.viewportSize()!.height - 8)
-  await provider.fill('SMTP')
-  await page.locator('.activity-connector-provider-item[data-value="smtp"]').click()
+  const providerSearch = dialog.getByRole('textbox', { name: '搜索连接器服务' })
+  const providerSearchControl = dialog.locator('.activity-connector-provider-search-control')
+  await expect(providerSearchControl).toHaveCSS('padding-left', '12px')
+  await expect(providerSearchControl).toHaveCSS('padding-right', '12px')
+  await expect(dialog.getByRole('button', { name: /协作办公 16/ })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: /即时通讯 21/ })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: /消息推送 17/ })).toBeVisible()
+  await expect(dialog).not.toContainText('告警与值班')
+  await expect(dialog).not.toContainText('事件响应')
+
+  await providerSearch.fill('微信')
+  for (const providerName of ['企业微信', 'PushPlus', 'Server酱', 'WxPusher']) {
+    await expect(dialog.getByRole('button', { name: new RegExp(providerName) })).toBeVisible()
+  }
+  await providerSearch.fill('PagerDuty')
+  await expect(dialog.getByText('没有匹配的服务')).toBeVisible()
+  await providerSearch.fill('SMTP')
+  await dialog.getByRole('button', { name: /SMTP 通过自定义 SMTP 服务器/ }).click()
   const uncheckedIndicator = dialog.locator('.activity-connector-checkbox [data-part="indicator"][hidden]').first()
   await expect(uncheckedIndicator).toHaveCSS('display', 'none')
-  await provider.fill('Webhook')
-  await page.locator('.activity-connector-provider-item').filter({ hasText: 'Webhook' }).click()
+  await dialog.getByRole('button', { name: '更换服务' }).click()
+  await providerSearch.fill('Webhook')
+  await dialog.getByRole('button', { name: /Webhook 将活动以 JSON/ }).click()
+  await expect(dialog.locator('.activity-connector-selected-provider')).toContainText(
+    '将活动以 JSON、表单或自定义文本发送到任意 HTTP(S) 接口。',
+  )
+  await expect(dialog.locator('.activity-connector-selected-provider')).not.toContainText('webhook')
 
   const editorActions = dialog.locator('.activity-connector-editor-actions')
   await expect(editorActions).toBeVisible()
