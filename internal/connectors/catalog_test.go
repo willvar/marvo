@@ -11,53 +11,95 @@ import (
 	"time"
 )
 
-func TestCatalogMatchesSupportedUptimeKumaHTTPAndSMTPProviders(t *testing.T) {
+func TestCatalogContainsSupportedActivityConnectors(t *testing.T) {
 	want := strings.Fields(`
-		360messenger 46elks alerta alertnow aliyun-sms bale bark bearsms bitrix24 brevo
-		call-me-bot cellsynt clicksendsms clickup dingding discord egosms evolution feishu flashduty
-		flowtriq fluxer freemobile goalert google-chat google-sheets gorush gotify grafana-oncall gtx-messaging
-		halopsa heii-oncall home-assistant jira-service-management keep kook line lunasea matrix mattermost
-		max milky nextcloudtalk notifery ntfy octopush onebot onechat onesender ooredoo
-		openwa opsgenie pagerduty pagertree pinglet plivo promosms pumble pushbullet pushdeer
+		360messenger 46elks aliyun-sms bale bark bearsms bitrix24 brevo call-me-bot cellsynt
+		clicksendsms clickup dingding discord egosms evolution feishu fluxer freemobile google-chat
+		google-sheets gorush gotify gtx-messaging home-assistant kook line lunasea matrix mattermost
+		max milky nextcloudtalk notifery ntfy octopush onebot onechat onesender ooredoo openwa
+		pinglet plivo promosms pumble pushbullet pushdeer
 		pushover pushplus pushy resend rocket-chat send-grid serverchan serwersms sevenio signal
-		signl4 slack sms-planet smsc smseagle smsir smsmanager smspartner smtp splunk
-		spugpush squadcast stackfield teams techulus-push telegram telnyx teltonika threema turbosmtp
+		slack sms-planet smsc smseagle smsir smsmanager smspartner smtp spugpush stackfield
+		teams techulus-push telegram telnyx teltonika threema turbosmtp
 		twilio vk vkteams waha webhook wecom whapi wpush wxpusher yzj zoho-cliq
 	`)
 	registry := NewRegistry(nil)
 	catalog := registry.Catalog()
-	if len(catalog) != len(want) || len(catalog) != 101 {
+	if len(catalog) != len(want) || len(catalog) != 85 {
 		t.Fatalf("catalog size = %d, want %d", len(catalog), len(want))
 	}
 	actual := make(map[string]bool, len(catalog))
+	categoryCounts := make(map[string]int)
+	categoryRank := map[string]int{
+		"协作办公": 0, "即时通讯": 1, "消息推送": 2,
+		"邮件": 3, "短信与语音": 4, "自动化与集成": 5,
+	}
+	previousRank := -1
 	for _, provider := range catalog {
 		if actual[provider.ID] {
 			t.Fatalf("duplicate provider %q", provider.ID)
 		}
 		actual[provider.ID] = true
-		if provider.send != nil {
+		if provider.Send != nil {
 			t.Fatalf("catalog leaked sender for %q", provider.ID)
 		}
+		if strings.TrimSpace(provider.Description) == "" {
+			t.Errorf("provider %q has no description", provider.ID)
+		}
+		if len(provider.Keywords) == 0 {
+			t.Errorf("provider %q has no search keywords", provider.ID)
+		}
+		for _, keyword := range provider.Keywords {
+			if strings.TrimSpace(keyword) == "" {
+				t.Errorf("provider %q has an empty search keyword", provider.ID)
+			}
+		}
+		rank, exists := categoryRank[provider.Category]
+		if !exists {
+			t.Errorf("provider %q has unknown category %q", provider.ID, provider.Category)
+		}
+		if rank < previousRank {
+			t.Errorf("provider %q is out of category order", provider.ID)
+		}
+		previousRank = rank
+		categoryCounts[provider.Category]++
 	}
 	for _, id := range want {
 		if !actual[id] {
 			t.Errorf("missing provider %q", id)
 		}
 	}
-	for _, excluded := range []string{"apprise", "nostr", "webpush"} {
+	for _, excluded := range []string{
+		"alerta", "alertnow", "apprise", "flashduty", "flowtriq", "goalert", "grafana-oncall",
+		"halopsa", "heii-oncall", "jira-service-management", "keep", "nostr", "opsgenie", "pagerduty",
+		"pagertree", "signl4", "splunk", "squadcast", "webpush",
+	} {
 		if actual[excluded] {
 			t.Errorf("unsupported provider %q was registered", excluded)
+		}
+	}
+	wantCategoryCounts := map[string]int{
+		"协作办公":   16,
+		"即时通讯":   21,
+		"消息推送":   17,
+		"邮件":     5,
+		"短信与语音":  23,
+		"自动化与集成": 3,
+	}
+	for category, count := range wantCategoryCounts {
+		if categoryCounts[category] != count {
+			t.Errorf("category %q has %d providers, want %d", category, categoryCounts[category], count)
 		}
 	}
 }
 
 func TestRegistryValidatesURLsAndRejectsUnknownSettings(t *testing.T) {
 	registry := NewRegistry(nil)
-	if _, err := registry.Validate("webhook", map[string]any{"url": "file:///tmp/result", "method": "POST", "content_type": "json"}); err == nil {
-		t.Fatal("non-HTTP URL was accepted")
+	if _, err := registry.Validate("webhook", map[string]any{"url": "file:///tmp/result", "method": "POST", "content_type": "json"}); err == nil || err.Error() != "请求地址必须是有效的 HTTP 或 HTTPS 地址" {
+		t.Fatalf("non-HTTP URL error = %v", err)
 	}
-	if _, err := registry.Validate("webhook", map[string]any{"url": "https://example.test/hook", "method": "POST", "content_type": "json", "unknown": "value"}); err == nil {
-		t.Fatal("unknown setting was accepted")
+	if _, err := registry.Validate("webhook", map[string]any{"url": "https://example.test/hook", "method": "POST", "content_type": "json", "unknown": "value"}); err == nil || err.Error() != `unsupported Webhook setting "unknown"` {
+		t.Fatalf("unknown setting error = %v", err)
 	}
 }
 

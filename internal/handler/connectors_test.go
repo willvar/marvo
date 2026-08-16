@@ -32,7 +32,7 @@ func TestConnectorManagementRedactsCredentialsAndIsolatesUsers(t *testing.T) {
 	var catalog struct {
 		Providers []any `json:"providers"`
 	}
-	if err := json.Unmarshal(providers.Body.Bytes(), &catalog); err != nil || len(catalog.Providers) != 101 {
+	if err := json.Unmarshal(providers.Body.Bytes(), &catalog); err != nil || len(catalog.Providers) != 85 {
 		t.Fatalf("provider catalog = %d, %v", len(catalog.Providers), err)
 	}
 
