@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Checkbox } from '@ark-ui/vue/checkbox'
 import { Dialog } from '@ark-ui/vue/dialog'
 import { Field } from '@ark-ui/vue/field'
@@ -23,12 +23,21 @@ import {
   SwapOutlined,
 } from '@ant-design/icons-vue'
 import {
-  api,
-  type ActivityConnector,
+  buildCreateInput,
+  buildTestInput,
+  buildUpdateInput,
+  filterProviders,
+  groupProviders,
+  isSensitiveField,
+  secretIsPreserved as notixSecretIsPreserved,
+  useConnectorCatalog,
+  useConnectorForm,
+  useConnectors,
   type ConnectorField,
   type ConnectorFieldOption,
   type ConnectorProvider,
-} from '../../sdk'
+} from '@willvar/notix-vue'
+import { createConnectorClient, type ActivityConnector } from '../../sdk'
 import { useRetainedDialog } from '../../composables/useRetainedDialog'
 import { XButton, XPrompts } from '../../components/x'
 
@@ -36,21 +45,28 @@ interface EditorPayload {
   connector?: ActivityConnector
 }
 
-const providers = ref<ConnectorProvider[]>([])
-const connectors = ref<ActivityConnector[]>([])
+const emptyProvider: ConnectorProvider = {
+  id: '',
+  name: '',
+  category: '',
+  description: '',
+  fields: [],
+}
+const connectorClient = createConnectorClient()
+const catalogState = useConnectorCatalog(connectorClient)
+const connectorsState = useConnectors(connectorClient)
+const formController = useConnectorForm(emptyProvider)
+const providers = computed(() => catalogState.providers.value)
+const connectors = computed(() => connectorsState.connectors.value)
+const form = formController.state
 const loading = ref(true)
 const loadError = ref('')
 const editorDialog = useRetainedDialog<EditorPayload>()
 const deleteDialog = useRetainedDialog<ActivityConnector>()
 const { open: editorOpen, payload: editorPayload } = editorDialog
 const { open: deleteOpen, payload: deleteTarget } = deleteDialog
-const selectedProviderID = ref('')
 const providerSearch = ref('')
 const activeProviderCategory = ref('全部')
-const connectorName = ref('')
-const connectorEnabled = ref(true)
-const config = reactive<Record<string, unknown>>({})
-const clearSecrets = ref(new Set<string>())
 const editorError = ref('')
 const saving = ref(false)
 const testing = ref(false)
@@ -67,35 +83,24 @@ const toaster = createToaster({
 })
 
 const selectedProvider = computed(() => {
-  const connector = editorPayload.value?.connector
-  const id = connector?.provider_id || selectedProviderID.value
-  return providers.value.find((provider) => provider.id === id) || null
+  return providers.value.find((provider) => provider.id === form.providerId) || null
 })
 const editing = computed(() => !!editorPayload.value?.connector)
 const configuredCount = computed(() => connectors.value.filter((connector) => connector.enabled).length)
-const providerCategories = computed(() => [...new Set(providers.value.map((provider) => provider.category))])
-const providerCategoryCounts = computed(() => {
-  const counts = new Map<string, number>()
-  for (const provider of providers.value) counts.set(provider.category, (counts.get(provider.category) || 0) + 1)
-  return counts
-})
+const providerGroups = computed(() => groupProviders(providers.value))
+const providerCategories = computed(() => [...providerGroups.value.keys()])
+const providerCategoryCounts = computed(
+  () => new Map([...providerGroups.value].map(([category, items]) => [category, items.length])),
+)
 const visibleProviderGroups = computed(() => {
-  const query = providerSearch.value.trim().toLocaleLowerCase()
-  const categories =
-    !query && activeProviderCategory.value !== '全部' ? [activeProviderCategory.value] : providerCategories.value
-  return categories
-    .map((category) => ({
-      category,
-      providers: providers.value.filter((provider) => {
-        if (provider.category !== category) return false
-        if (!query) return true
-        return [provider.name, provider.id, provider.category, provider.description, ...(provider.keywords || [])]
-          .join(' ')
-          .toLocaleLowerCase()
-          .includes(query)
-      }),
-    }))
-    .filter((group) => group.providers.length > 0)
+  let matches = filterProviders(providers.value, providerSearch.value)
+  if (!providerSearch.value.trim() && activeProviderCategory.value !== '全部') {
+    matches = matches.filter((provider) => provider.category === activeProviderCategory.value)
+  }
+  return [...groupProviders(matches)].map(([category, groupedProviders]) => ({
+    category,
+    providers: groupedProviders,
+  }))
 })
 const visibleProviderCount = computed(() =>
   visibleProviderGroups.value.reduce((total, group) => total + group.providers.length, 0),
@@ -112,16 +117,7 @@ const selectCollections = computed(() => {
   }
   return result
 })
-const formValid = computed(() => {
-  if (!selectedProvider.value || !connectorName.value.trim()) return false
-  return selectedProvider.value.fields.every((field) => {
-    if (!field.required) return true
-    if (field.type === 'boolean') return true
-    if (fieldSensitive(field) && secretIsPreserved(field)) return true
-    const value = config[field.key]
-    return typeof value === 'number' || String(value ?? '').trim().length > 0
-  })
-})
+const formValid = computed(() => !!selectedProvider.value && formController.valid.value)
 
 watch(providerSearch, (value) => {
   if (value.trim()) activeProviderCategory.value = '全部'
@@ -133,12 +129,7 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const [providerResponse, connectorResponse] = await Promise.all([
-      api.get('/api/admin/connectors/providers'),
-      api.get('/api/admin/connectors'),
-    ])
-    providers.value = Array.isArray(providerResponse.data?.providers) ? providerResponse.data.providers : []
-    connectors.value = Array.isArray(connectorResponse.data?.connectors) ? connectorResponse.data.connectors : []
+    await Promise.all([catalogState.load(), connectorsState.load()])
   } catch (cause) {
     loadError.value = errorMessage(cause, '活动连接器加载失败')
   } finally {
@@ -151,46 +142,22 @@ function showToast(title: string, type: 'success' | 'error') {
 }
 
 function beginCreate() {
-  selectedProviderID.value = ''
   providerSearch.value = ''
   activeProviderCategory.value = '全部'
-  connectorName.value = ''
-  connectorEnabled.value = true
-  clearConfig()
+  formController.reset(emptyProvider)
   editorError.value = ''
   editorDialog.show({})
 }
 
 function beginEdit(connector: ActivityConnector) {
-  selectedProviderID.value = connector.provider_id
-  connectorName.value = connector.name
-  connectorEnabled.value = connector.enabled
-  clearSecrets.value = new Set()
   const provider = providers.value.find((candidate) => candidate.id === connector.provider_id)
-  clearConfig()
-  if (provider) initializeConfig(provider, connector.config)
+  if (!provider) {
+    showToast('对应的连接器服务已不可用', 'error')
+    return
+  }
+  formController.reset(provider, connector)
   editorError.value = ''
   editorDialog.show({ connector })
-}
-
-function initializeConfig(provider: ConnectorProvider, values?: Record<string, unknown>) {
-  clearConfig()
-  for (const field of provider.fields) {
-    if (values && Object.prototype.hasOwnProperty.call(values, field.key)) {
-      config[field.key] = values[field.key]
-      continue
-    }
-    if (field.default !== undefined) {
-      config[field.key] = field.type === 'select' ? String(field.default) : field.default
-      continue
-    }
-    config[field.key] = field.type === 'boolean' ? false : ''
-  }
-}
-
-function clearConfig() {
-  for (const key of Object.keys(config)) delete config[key]
-  clearSecrets.value = new Set()
 }
 
 function closeEditor() {
@@ -200,18 +167,14 @@ function closeEditor() {
 
 function completeEditorClose() {
   if (!editorDialog.clearAfterExit()) return
-  selectedProviderID.value = ''
   providerSearch.value = ''
   activeProviderCategory.value = '全部'
-  clearConfig()
+  formController.reset(emptyProvider)
   editorError.value = ''
 }
 
 function selectProvider(provider: ConnectorProvider) {
-  selectedProviderID.value = provider.id
-  connectorName.value = provider.name
-  connectorEnabled.value = true
-  initializeConfig(provider, undefined)
+  formController.reset(provider)
   editorError.value = ''
 }
 
@@ -226,10 +189,7 @@ function selectProviderCategory(category: string) {
 }
 
 function changeProvider() {
-  selectedProviderID.value = ''
-  connectorName.value = ''
-  connectorEnabled.value = true
-  clearConfig()
+  formController.reset(emptyProvider)
   editorError.value = ''
 }
 
@@ -238,50 +198,32 @@ function fieldCollection(field: ConnectorField) {
 }
 
 function updateSelect(field: ConnectorField, values: string[]) {
-  config[field.key] = values[0] || ''
+  const selected = field.options?.find((option) => String(option.value) === values[0])
+  formController.setValue(field.key, selected?.value ?? '')
 }
 
 function updateBoolean(field: ConnectorField, checked: boolean | 'indeterminate') {
-  config[field.key] = checked === true
+  formController.setValue(field.key, checked === true)
 }
 
 function updateField(field: ConnectorField, value: string) {
-  config[field.key] = field.type === 'number' && value !== '' ? Number(value) : value
-  if (fieldSensitive(field) && value.trim()) {
-    const next = new Set(clearSecrets.value)
-    next.delete(field.key)
-    clearSecrets.value = next
-  }
+  formController.setValue(field.key, field.type === 'number' && value !== '' ? Number(value) : value)
 }
 
 function configuredSecret(field: ConnectorField) {
-  return !!editorPayload.value?.connector?.secret_configured?.[field.key]
+  return form.configuredSecrets[field.key] === true
 }
 
 function fieldSensitive(field: ConnectorField) {
-  return field.type === 'secret' || field.sensitive === true
+  return isSensitiveField(field)
 }
 
 function secretIsPreserved(field: ConnectorField) {
-  return configuredSecret(field) && !clearSecrets.value.has(field.key) && !String(config[field.key] ?? '').trim()
+  return notixSecretIsPreserved(form, field)
 }
 
 function toggleSecret(field: ConnectorField) {
-  const next = new Set(clearSecrets.value)
-  if (next.has(field.key)) next.delete(field.key)
-  else next.add(field.key)
-  config[field.key] = ''
-  clearSecrets.value = next
-}
-
-function formPayload() {
-  const cleanConfig: Record<string, unknown> = {}
-  for (const field of selectedProvider.value?.fields || []) {
-    const value = config[field.key]
-    if (fieldSensitive(field) && !String(value ?? '').trim()) continue
-    cleanConfig[field.key] = value
-  }
-  return { config: cleanConfig, clear_secrets: [...clearSecrets.value] }
+  formController.clearSecret(field.key, !form.clearSecrets.includes(field.key))
 }
 
 async function save() {
@@ -290,24 +232,13 @@ async function save() {
   saving.value = true
   editorError.value = ''
   try {
-    const shared = formPayload()
     const current = editorPayload.value?.connector
     if (current) {
-      const { data } = await api.put(`/api/admin/connectors/${encodeURIComponent(current.id)}`, {
-        name: connectorName.value.trim(),
-        enabled: connectorEnabled.value,
-        ...shared,
-      })
-      replaceConnector(data as ActivityConnector)
+      await connectorsState.update(current.id, buildUpdateInput(provider, form))
     } else {
-      const { data } = await api.post('/api/admin/connectors', {
-        provider_id: provider.id,
-        name: connectorName.value.trim(),
-        enabled: connectorEnabled.value,
-        config: shared.config,
-      })
-      connectors.value = [...connectors.value, data as ActivityConnector]
+      await connectorsState.create(buildCreateInput(provider, form))
     }
+    formController.acceptCurrent()
     editorDialog.close()
     showToast('连接器已保存', 'success')
   } catch (cause) {
@@ -323,11 +254,7 @@ async function testDraft() {
   testing.value = true
   editorError.value = ''
   try {
-    await api.post('/api/admin/connectors/test', {
-      connector_id: editorPayload.value?.connector?.id || '',
-      provider_id: provider.id,
-      ...formPayload(),
-    })
+    await connectorClient.testConnector(buildTestInput(provider, form, editorPayload.value?.connector?.id))
     showToast('测试消息已发送', 'success')
   } catch (cause) {
     editorError.value = errorMessage(cause, '测试发送失败')
@@ -340,7 +267,12 @@ async function testSaved(connector: ActivityConnector) {
   if (testingID.value) return
   testingID.value = connector.id
   try {
-    await api.post('/api/admin/connectors/test', { connector_id: connector.id, config: {} })
+    await connectorClient.testConnector({
+      connector_id: connector.id,
+      provider_id: connector.provider_id,
+      config: {},
+      clear_secrets: [],
+    })
     showToast(`${connector.name} 测试消息已发送`, 'success')
   } catch (cause) {
     showToast(errorMessage(cause, '测试发送失败'), 'error')
@@ -360,8 +292,7 @@ async function confirmDelete() {
   deleting.value = true
   deleteError.value = ''
   try {
-    await api.delete(`/api/admin/connectors/${encodeURIComponent(target.id)}`)
-    connectors.value = connectors.value.filter((connector) => connector.id !== target.id)
+    await connectorsState.remove(target.id)
     deleteDialog.close()
     showToast('连接器已删除', 'success')
   } catch (cause) {
@@ -375,19 +306,14 @@ async function retryFailed(connector: ActivityConnector) {
   if (retryingID.value) return
   retryingID.value = connector.id
   try {
-    const { data } = await api.post(`/api/admin/connectors/${encodeURIComponent(connector.id)}/retry`)
-    const count = Number(data?.retried || 0)
+    const count = await connectorClient.retryConnector(connector.id)
     showToast(count ? `已重新排队 ${count} 条活动` : '没有需要重试的活动', 'success')
-    await load()
+    await connectorsState.load()
   } catch (cause) {
     showToast(errorMessage(cause, '重新投递失败'), 'error')
   } finally {
     retryingID.value = ''
   }
-}
-
-function replaceConnector(next: ActivityConnector) {
-  connectors.value = connectors.value.map((connector) => (connector.id === next.id ? next : connector))
 }
 
 function formatTime(value?: string) {
@@ -616,7 +542,7 @@ function errorMessage(cause: unknown, fallback: string) {
             <template v-if="selectedProvider">
               <Field.Root class="activity-connector-field">
                 <Field.Label>连接器名称</Field.Label>
-                <Field.Input v-model="connectorName" maxlength="100" autocomplete="off" placeholder="便于识别的名称" />
+                <Field.Input v-model="form.name" maxlength="100" autocomplete="off" placeholder="便于识别的名称" />
               </Field.Root>
 
               <div class="activity-connector-fields">
@@ -624,7 +550,7 @@ function errorMessage(cause: unknown, fallback: string) {
                   <Checkbox.Root
                     v-if="field.type === 'boolean'"
                     class="activity-connector-checkbox"
-                    :checked="config[field.key] === true"
+                    :checked="form.config[field.key] === true"
                     @update:checked="updateBoolean(field, $event)"
                   >
                     <Checkbox.HiddenInput />
@@ -641,7 +567,7 @@ function errorMessage(cause: unknown, fallback: string) {
                     v-else-if="field.type === 'select'"
                     class="activity-connector-field"
                     :collection="fieldCollection(field)"
-                    :model-value="config[field.key] === undefined ? [] : [String(config[field.key])]"
+                    :model-value="form.config[field.key] === undefined ? [] : [String(form.config[field.key])]"
                     :positioning="{ placement: 'bottom-start', sameWidth: true }"
                     @value-change="updateSelect(field, $event.value)"
                   >
@@ -679,19 +605,19 @@ function errorMessage(cause: unknown, fallback: string) {
                         class="activity-connector-secret-action"
                         @click="toggleSecret(field)"
                       >
-                        {{ clearSecrets.has(field.key) ? '保留已保存凭据' : '移除已保存凭据' }}
+                        {{ form.clearSecrets.includes(field.key) ? '保留已保存凭据' : '移除已保存凭据' }}
                       </button>
                     </div>
                     <Field.Textarea
                       v-if="field.type === 'textarea'"
-                      :model-value="String(config[field.key] ?? '')"
+                      :model-value="String(form.config[field.key] ?? '')"
                       :placeholder="field.placeholder"
                       maxlength="65536"
                       @update:model-value="updateField(field, String($event))"
                     />
                     <Field.Input
                       v-else
-                      :model-value="config[field.key] as string | number"
+                      :model-value="form.config[field.key] as string | number"
                       :type="fieldSensitive(field) ? 'password' : field.type === 'number' ? 'number' : 'text'"
                       :autocomplete="fieldSensitive(field) ? 'new-password' : 'off'"
                       :placeholder="
@@ -709,8 +635,8 @@ function errorMessage(cause: unknown, fallback: string) {
 
               <Checkbox.Root
                 class="activity-connector-checkbox activity-connector-enabled"
-                :checked="connectorEnabled"
-                @update:checked="connectorEnabled = $event === true"
+                :checked="form.enabled"
+                @update:checked="form.enabled = $event === true"
               >
                 <Checkbox.HiddenInput />
                 <Checkbox.Control

@@ -1,4 +1,5 @@
 export { api, ApiError } from './api/useApi'
+export { createConnectorClient } from './api/connectorApi'
 export {
   agentApi,
   createSSEConnection,
@@ -42,12 +43,7 @@ export {
   type AgentProviderOAuthAttempt,
 } from './types/agent'
 export { conciseAgentErrorDetail, formatAgentError, isAbortedAgentError, unwrapAgentError } from './agentErrors'
-export {
-  type ActivityConnector,
-  type ConnectorField,
-  type ConnectorFieldOption,
-  type ConnectorProvider,
-} from './types/connectors'
+export { type Connector as ActivityConnector } from '@willvar/notix-vue'
 export { toMarkdownAssetPath, toNoteAssetUrl, toRelativeAssetPath } from './utils/noteAssets'
 export { renderMarkdown } from './markdown'
 export { clearAgentDraft, loadAgentDraft, saveAgentDraft } from './agentDrafts'

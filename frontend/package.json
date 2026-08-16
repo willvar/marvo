@@ -40,6 +40,7 @@
     "@tiptap/extension-text-align": "^3.25.0",
     "@tiptap/starter-kit": "^3.25.0",
     "@tiptap/vue-3": "^3.25.0",
+    "@willvar/notix-vue": "https://github.com/willvar/notix/releases/download/v0.1.1/willvar-notix-vue-0.1.1.tgz",
     "dompurify": "^3.4.13",
     "markdown-it": "^14.1.1",
     "node-diff3": "^3.2.1",

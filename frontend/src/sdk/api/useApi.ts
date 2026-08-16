@@ -9,6 +9,16 @@ const BASE = (() => {
   }
 })()
 
+export function apiRequestURL(url: string) {
+  return `${BASE}${scopedAPIPath(url)}`
+}
+
+export const apiFetch: typeof globalThis.fetch = async (input, init) => {
+  const response = await fetch(input, { credentials: 'include', ...init })
+  if (response.status === 401) notifyUnauthorized()
+  return response
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -27,7 +37,7 @@ interface RequestOptions {
 }
 
 async function request(method: string, url: string, body?: unknown, opts?: RequestOptions) {
-  const fullUrl = `${BASE}${scopedAPIPath(url)}${queryString(opts?.params)}`
+  const fullUrl = `${apiRequestURL(url)}${queryString(opts?.params)}`
 
   const init: RequestInit = {
     method,
@@ -43,11 +53,7 @@ async function request(method: string, url: string, body?: unknown, opts?: Reque
     init.body = JSON.stringify(body)
   }
 
-  const res = await fetch(fullUrl, init)
-
-  if (res.status === 401) {
-    notifyUnauthorized()
-  }
+  const res = await apiFetch(fullUrl, init)
 
   const contentType = res.headers.get('content-type') || ''
   let data: any = null
