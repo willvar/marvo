@@ -105,17 +105,20 @@ func (s *fakeState) updateSessionTitle(id, title string) (fakeSession, bool) {
 	return session, true
 }
 
-func (s *fakeState) addPrompt(id string, body map[string]any) bool {
+func (s *fakeState) addPrompt(id string, body map[string]any) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.sessions[id]; !ok {
-		return false
+		return "", false
 	}
 	rawParts, ok := body["parts"].([]any)
 	if !ok || len(rawParts) == 0 {
-		return false
+		return "", false
 	}
 	messageID := fmt.Sprintf("msg_%d", len(s.messages[id])+1)
+	if supplied, ok := body["messageID"].(string); ok && strings.TrimSpace(supplied) != "" {
+		messageID = strings.TrimSpace(supplied)
+	}
 	parts := make([]map[string]any, 0, len(rawParts))
 	for index, raw := range rawParts {
 		part, ok := raw.(map[string]any)
@@ -132,7 +135,7 @@ func (s *fakeState) addPrompt(id string, body map[string]any) bool {
 		parts = append(parts, copyPart)
 	}
 	if len(parts) == 0 {
-		return false
+		return "", false
 	}
 	messageInfo := map[string]any{
 		"id": messageID, "sessionID": id, "role": "user",
@@ -149,6 +152,27 @@ func (s *fakeState) addPrompt(id string, body map[string]any) bool {
 		Parts: parts,
 	})
 	s.statuses[id] = map[string]string{"type": "busy"}
+	return messageID, true
+}
+
+func (s *fakeState) completePrompt(id, parentID, text string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[id]; !ok {
+		return false
+	}
+	messageID := fmt.Sprintf("msg_answer_%d", len(s.messages[id])+1)
+	s.messages[id] = append(s.messages[id], fakeMessage{
+		Info: map[string]any{
+			"id": messageID, "sessionID": id, "role": "assistant", "parentID": parentID,
+			"time": map[string]int64{"created": time.Now().UnixMilli(), "completed": time.Now().UnixMilli()},
+		},
+		Parts: []map[string]any{{
+			"id": "part_" + messageID + "_1", "messageID": messageID, "sessionID": id,
+			"type": "text", "text": text,
+		}},
+	})
+	s.statuses[id] = map[string]string{"type": "idle"}
 	return true
 }
 
@@ -440,9 +464,17 @@ func newFakeHandler() http.Handler {
 	})
 	mux.HandleFunc("POST /session/{id}/prompt_async", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
-		if json.NewDecoder(r.Body).Decode(&body) != nil || !state.addPrompt(r.PathValue("id"), body) {
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
 			http.Error(w, "invalid prompt", http.StatusBadRequest)
 			return
+		}
+		messageID, added := state.addPrompt(r.PathValue("id"), body)
+		if !added {
+			http.Error(w, "invalid prompt", http.StatusBadRequest)
+			return
+		}
+		if system, _ := body["system"].(string); strings.Contains(system, "由 Marvo 自动任务触发") {
+			state.completePrompt(r.PathValue("id"), messageID, "自动检查已完成，并整理了本轮结果。")
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

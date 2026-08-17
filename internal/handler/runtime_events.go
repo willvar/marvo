@@ -100,6 +100,9 @@ func (r *SpaceRegistry) consumeRuntimeEvents(client *http.Client) (bool, error) 
 	// loaded spaces now closes the only loss window between stream attempts.
 	r.resyncLoadedSpaces()
 	r.ResyncDeliveries()
+	if r.scheduler != nil {
+		r.scheduler.Resync()
+	}
 	if err := r.readRuntimeEventStream(response.Body); err != nil {
 		return true, err
 	}
@@ -170,6 +173,7 @@ func (r *SpaceRegistry) resyncLoadedSpaces() {
 			runtimeevents.KindMemories,
 			runtimeevents.KindAgentSettings,
 			runtimeevents.KindDevices,
+			runtimeevents.KindSchedules,
 		} {
 			current.space.broadcastRuntimeEvent(kind)
 		}

@@ -2,6 +2,7 @@ package runtimegateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"marvo/internal/runtimeevents"
 	"marvo/internal/store"
@@ -75,6 +76,15 @@ func TestAgentToolsAuthenticateAndKeepUserStateIsolated(t *testing.T) {
 		t.Fatalf("set brand status = %d, body = %s", response.Code, response.Body.String())
 	}
 	assertGatewayEvent(t, events, gatewayTestUserID, runtimeevents.KindSpace)
+	scheduledAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	createdTask := call(gatewayTestUserID, token, "schedules", map[string]any{
+		"action": "create", "name": "继续研究", "instruction": "检查是否有新资料。",
+		"schedule": map[string]any{"kind": "at", "spec": map[string]any{"at": scheduledAt}},
+	})
+	if createdTask.Code != http.StatusOK {
+		t.Fatalf("create schedule status = %d, body = %s", createdTask.Code, createdTask.Body.String())
+	}
+	assertGatewayEvent(t, events, gatewayTestUserID, runtimeevents.KindSchedules)
 
 	stateA, err := store.OpenStateDB(filepath.Join(root, "users", gatewayTestUserID, "workspace"))
 	if err != nil {
@@ -86,6 +96,11 @@ func TestAgentToolsAuthenticateAndKeepUserStateIsolated(t *testing.T) {
 	if len(snapshotA.Memories) != 1 {
 		t.Fatalf("user A memories = %#v", snapshotA.Memories)
 	}
+	schedulesA, _ := store.NewScheduleStore(stateA)
+	tasksA, err := schedulesA.List(context.Background())
+	if err != nil || len(tasksA) != 1 || tasksA[0].Name != "继续研究" {
+		t.Fatalf("user A schedules = %#v, %v", tasksA, err)
+	}
 	stateB, err := store.OpenStateDB(filepath.Join(root, "users", secondGatewayTestUserID, "workspace"))
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +110,11 @@ func TestAgentToolsAuthenticateAndKeepUserStateIsolated(t *testing.T) {
 	snapshotB, _ := memoriesB.Get()
 	if len(snapshotB.Memories) != 0 {
 		t.Fatalf("user B received user A memories: %#v", snapshotB.Memories)
+	}
+	schedulesB, _ := store.NewScheduleStore(stateB)
+	tasksB, err := schedulesB.List(context.Background())
+	if err != nil || len(tasksB) != 0 {
+		t.Fatalf("user B received user A schedules: %#v, %v", tasksB, err)
 	}
 }
 
@@ -128,5 +148,23 @@ func TestAgentToolsRejectUnknownFieldsAndInvalidOperations(t *testing.T) {
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("payload %s status = %d, body = %s", payload, response.Code, response.Body.String())
 		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/tool/"+gatewayTestUserID+"/schedules", bytes.NewBufferString(
+		`{"action":"next_check","id":"11111111111111111111111111111111","next_check_seconds":9223372036854775807}`,
+	))
+	request.Header.Set("X-Marvo-Tool-Token", token)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("oversized next check status = %d, body = %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/tool/"+gatewayTestUserID+"/schedules", bytes.NewBufferString(
+		`{"action":"remove","id":"11111111111111111111111111111111"}`,
+	))
+	request.Header.Set("X-Marvo-Tool-Token", token)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unversioned remove status = %d, body = %s", response.Code, response.Body.String())
 	}
 }

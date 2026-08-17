@@ -174,6 +174,21 @@ func (s *ActivityStore) Get(id string) (Activity, error) {
 	return scanActivity(s.state.sql.QueryRow(activitySelect+` WHERE id = ?`, id))
 }
 
+func (s *ActivityStore) HasSourceMessage(sessionID, messageID string) (bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	messageID = strings.TrimSpace(messageID)
+	if sessionID == "" || messageID == "" || len(sessionID) > 256 || len(messageID) > 256 {
+		return false, ErrInvalidActivity
+	}
+	var exists int
+	err := s.state.sql.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM activities WHERE source_session_id = ? AND source_message_id = ?
+		)
+	`, sessionID, messageID).Scan(&exists)
+	return exists == 1, err
+}
+
 func (s *ActivityStore) List(limit int, cursor string) (ActivityPage, error) {
 	if limit < 1 || limit > 100 {
 		limit = 30

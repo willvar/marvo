@@ -76,6 +76,7 @@ ensure_runtime_image() {
     internal/runtimeauth \
     internal/runtimeevents \
     internal/runtimegateway \
+    internal/scheduling \
     internal/store \
     internal/userid)"
   build_image "$GATEWAY_IMAGE" "$digest" -f "$BASE_DIR/docker/runtime/Dockerfile" "$BASE_DIR"

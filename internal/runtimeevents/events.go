@@ -10,6 +10,7 @@ const (
 	KindSpace         Kind = "space"
 	KindAgentSettings Kind = "agent_settings"
 	KindDevices       Kind = "devices"
+	KindSchedules     Kind = "schedules"
 )
 
 type Event struct {
@@ -22,7 +23,7 @@ func (e Event) Valid() bool {
 		return false
 	}
 	switch e.Kind {
-	case KindActivity, KindMemories, KindSpace, KindAgentSettings, KindDevices:
+	case KindActivity, KindMemories, KindSpace, KindAgentSettings, KindDevices, KindSchedules:
 		return true
 	default:
 		return false

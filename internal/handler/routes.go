@@ -27,6 +27,7 @@ type Dependencies struct {
 	State        *store.StateDB
 	Activity     *store.ActivityStore
 	Connectors   *store.ConnectorStore
+	Schedules    *store.ScheduleStore
 	Providers    *connectors.Registry
 	AgentDeps    *AgentDeps
 	DeviceStore  *store.DeviceStore
@@ -127,6 +128,17 @@ func registerUserRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.Handle("GET /api/user/{userID}/activity/{id}", content((*Dependencies).GetActivity))
 	mux.Handle("POST /api/user/{userID}/activity/read", content((*Dependencies).MarkActivitiesRead))
 	mux.Handle("DELETE /api/user/{userID}/activity/{id}", content((*Dependencies).DeleteActivity))
+	mux.Handle("GET /api/user/{userID}/schedules", content((*Dependencies).ListSchedules))
+	mux.Handle("POST /api/user/{userID}/schedules", content((*Dependencies).CreateSchedule))
+	mux.Handle("GET /api/user/{userID}/schedules/{id}", content((*Dependencies).GetSchedule))
+	mux.Handle("PUT /api/user/{userID}/schedules/{id}", content((*Dependencies).UpdateSchedule))
+	mux.Handle("DELETE /api/user/{userID}/schedules/{id}", content((*Dependencies).DeleteSchedule))
+	mux.Handle("POST /api/user/{userID}/schedules/{id}/pause", content((*Dependencies).PauseSchedule))
+	mux.Handle("POST /api/user/{userID}/schedules/{id}/resume", content((*Dependencies).ResumeSchedule))
+	mux.Handle("POST /api/user/{userID}/schedules/{id}/complete", content((*Dependencies).CompleteSchedule))
+	mux.Handle("POST /api/user/{userID}/schedules/{id}/run", content((*Dependencies).RunScheduleNow))
+	mux.Handle("POST /api/user/{userID}/schedules/{id}/stop", content((*Dependencies).StopScheduleRun))
+	mux.Handle("GET /api/user/{userID}/schedules/{id}/runs", content((*Dependencies).ListScheduleRuns))
 
 	mux.Handle("GET /api/user/{userID}/agent/settings", management((*Dependencies).AgentGetSettings))
 	mux.Handle("PUT /api/user/{userID}/agent/settings", management((*Dependencies).AgentUpdateSettings))

@@ -18,6 +18,7 @@ import (
 	"marvo/internal/delivery"
 	"marvo/internal/media"
 	"marvo/internal/runtimeevents"
+	"marvo/internal/scheduler"
 	"marvo/internal/store"
 	"marvo/internal/userspace"
 )
@@ -43,6 +44,7 @@ type UserSpace struct {
 	Media       *media.Manager
 	Activity    *store.ActivityStore
 	Connectors  *store.ConnectorStore
+	Schedules   *store.ScheduleStore
 	AgentDeps   *AgentDeps
 	DeviceStore *store.DeviceStore
 	BrandStore  *store.BrandStore
@@ -54,6 +56,8 @@ type cachedUserSpace struct {
 	space    *UserSpace
 	leases   int
 	lastUsed time.Time
+	closing  bool
+	closed   chan struct{}
 }
 
 type spaceInitialization struct {
@@ -81,6 +85,7 @@ type SpaceRegistry struct {
 	eventsOnce   sync.Once
 	deliveryOnce sync.Once
 	deliveries   *delivery.Dispatcher
+	scheduler    *scheduler.Manager
 	providers    *connectors.Registry
 }
 
@@ -96,6 +101,9 @@ func NewSpaceRegistry(cfg *config.Config, controlDB *control.DB, layout *userspa
 	registry.deliveries = delivery.NewDispatcher(
 		controlDB, layout, cfg.Server.SessionSecret, cfg.Server.PublicURL, registry.providers,
 	)
+	registry.scheduler = scheduler.NewManager(controlDB, layout, registry)
+	registry.scheduler.SetChangeHandlers(registry.notifyScheduleChanged, registry.notifyScheduleActivity)
+	registry.scheduler.Start(background)
 	registry.backgroundWG.Add(1)
 	go registry.runIdleReaper()
 	return registry
@@ -136,6 +144,16 @@ func (r *SpaceRegistry) resolve(ctx context.Context, userID string) (*UserSpace,
 			return nil, ErrUserSpaceMigrating
 		}
 		if existing := r.spaces[userID]; existing != nil {
+			if existing.closing {
+				done := existing.closed
+				r.mu.Unlock()
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-done:
+					continue
+				}
+			}
 			existing.lastUsed = r.now()
 			existing.leases++
 			space := existing.space
@@ -168,7 +186,7 @@ func (r *SpaceRegistry) resolve(ctx context.Context, userID string) (*UserSpace,
 		space = nil
 		initErr = ErrUserSpaceUnavailable
 	} else if initErr == nil {
-		entry := &cachedUserSpace{space: space, leases: 1, lastUsed: r.now()}
+		entry := &cachedUserSpace{space: space, leases: 1, lastUsed: r.now(), closed: make(chan struct{})}
 		r.spaces[userID] = entry
 	}
 	pending.space = space
@@ -188,6 +206,13 @@ func (r *SpaceRegistry) release(userID string, space *UserSpace) {
 	}
 	entry.leases--
 	entry.lastUsed = r.now()
+	if entry.leases == 0 && entry.closing {
+		delete(r.spaces, userID)
+		close(entry.closed)
+		r.mu.Unlock()
+		space.Close()
+		return
+	}
 	closeSpaces := r.pruneIdleLocked(entry.lastUsed, false)
 	r.mu.Unlock()
 	closeUserSpaces(closeSpaces)
@@ -224,10 +249,18 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 		hub.Close()
 		return nil, fmt.Errorf("%w: initialize Activity connectors: %v", ErrUserSpaceUnavailable, err)
 	}
+	scheduleStore, err := store.NewScheduleStore(stateDB)
+	if err != nil {
+		_ = stateDB.Close()
+		mediaManager.Close()
+		hub.Close()
+		return nil, fmt.Errorf("%w: initialize automatic tasks: %v", ErrUserSpaceUnavailable, err)
+	}
 	space := &UserSpace{
 		UserID: userID, Paths: paths, State: stateDB, NoteStore: noteStore, Hub: hub, Media: mediaManager,
 		Activity:    activityStore,
 		Connectors:  connectorStore,
+		Schedules:   scheduleStore,
 		DeviceStore: store.NewDeviceStore(stateDB, derivedUserSecret(r.config.Server.SessionSecret, userID, "device")),
 	}
 	cleanup := func() {
@@ -304,7 +337,21 @@ func (r *SpaceRegistry) initialize(userID string) (*UserSpace, error) {
 func (r *SpaceRegistry) CloseUser(userID string) {
 	r.mu.Lock()
 	entry := r.spaces[userID]
+	if entry != nil && entry.leases > 0 {
+		entry.closing = true
+		r.mu.Unlock()
+		// End SSE/poll requests immediately so they cannot keep their own lease
+		// alive forever. State and media remain valid until short-lived users and
+		// the cancelling scheduler execution release their references.
+		if entry.space.Hub != nil {
+			entry.space.Hub.Close()
+		}
+		return
+	}
 	delete(r.spaces, userID)
+	if entry != nil {
+		close(entry.closed)
+	}
 	r.mu.Unlock()
 	if entry != nil {
 		entry.space.Close()
@@ -331,6 +378,9 @@ func (r *SpaceRegistry) BeginMigration(ctx context.Context, userID string) (func
 		r.migrating[userID] = true
 		entry := r.spaces[userID]
 		delete(r.spaces, userID)
+		if entry != nil {
+			close(entry.closed)
+		}
 		r.mu.Unlock()
 		if entry != nil {
 			entry.space.Close()
@@ -354,9 +404,13 @@ func (r *SpaceRegistry) Close() {
 	spaces := make([]*UserSpace, 0, len(r.spaces))
 	for _, entry := range r.spaces {
 		spaces = append(spaces, entry.space)
+		close(entry.closed)
 	}
 	r.spaces = make(map[string]*cachedUserSpace)
 	r.mu.Unlock()
+	if r.scheduler != nil {
+		r.scheduler.Close()
+	}
 	r.backgroundWG.Wait()
 	if r.deliveries != nil {
 		r.deliveries.Wait()
@@ -435,6 +489,7 @@ func (r *SpaceRegistry) pruneIdleLocked(now time.Time, expire bool) []*UserSpace
 			return
 		}
 		delete(r.spaces, userID)
+		close(entry.closed)
 		removed[userID] = true
 		idleCount--
 		spaces = append(spaces, entry.space)
@@ -466,7 +521,7 @@ func closeUserSpaces(spaces []*UserSpace) {
 func (r *SpaceRegistry) withLoadedSpace(userID string, visit func(*UserSpace)) bool {
 	r.mu.Lock()
 	entry := r.spaces[userID]
-	if entry == nil || r.closed {
+	if entry == nil || entry.closing || r.closed {
 		r.mu.Unlock()
 		return false
 	}
@@ -485,6 +540,9 @@ func (r *SpaceRegistry) notifyRuntimeEvent(event runtimeevents.Event) {
 	}
 	if event.Kind == runtimeevents.KindActivity && r.deliveries != nil {
 		r.deliveries.Wake(event.UserID)
+	}
+	if event.Kind == runtimeevents.KindSchedules && r.scheduler != nil {
+		r.scheduler.Wake(event.UserID)
 	}
 	r.withLoadedSpace(event.UserID, func(space *UserSpace) {
 		space.broadcastRuntimeEvent(event.Kind)
@@ -531,6 +589,39 @@ func (s *UserSpace) broadcastRuntimeEvent(kind runtimeevents.Kind) {
 		s.Hub.BroadcastAll(store.MustJSON(map[string]any{"action": "agent_settings_changed"}))
 	case runtimeevents.KindDevices:
 		s.Hub.BroadcastAll(store.MustJSON(map[string]any{"action": "devices_changed"}))
+	case runtimeevents.KindSchedules:
+		s.Hub.BroadcastAll(store.MustJSON(map[string]any{"action": "schedules_changed"}))
+	}
+}
+
+func (r *SpaceRegistry) notifyScheduleChanged(userID string) {
+	r.withLoadedSpace(userID, func(space *UserSpace) {
+		space.broadcastRuntimeEvent(runtimeevents.KindSchedules)
+	})
+}
+
+func (r *SpaceRegistry) notifyScheduleActivity(userID string) {
+	if r.deliveries != nil {
+		r.deliveries.Wake(userID)
+	}
+	r.withLoadedSpace(userID, func(space *UserSpace) {
+		space.broadcastRuntimeEvent(runtimeevents.KindActivity)
+	})
+}
+
+func (r *SpaceRegistry) WakeSchedules(userID string) {
+	if r != nil && r.scheduler != nil {
+		r.scheduler.Wake(userID)
+	}
+}
+
+func (r *SpaceRegistry) StopSchedule(userID, scheduleID, runID string) bool {
+	return r != nil && r.scheduler != nil && r.scheduler.Stop(userID, scheduleID, runID)
+}
+
+func (r *SpaceRegistry) StopUserSchedules(userID string) {
+	if r != nil && r.scheduler != nil {
+		r.scheduler.StopUser(userID)
 	}
 }
 
@@ -594,6 +685,7 @@ func (d *Dependencies) Scoped(handler scopedHandler) http.Handler {
 			State:        space.State,
 			Activity:     space.Activity,
 			Connectors:   space.Connectors,
+			Schedules:    space.Schedules,
 			Providers:    d.Spaces.providers,
 			AgentDeps:    space.AgentDeps,
 			DeviceStore:  space.DeviceStore,

@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"io"
 	"marvo/internal/runtimeevents"
+	"marvo/internal/scheduling"
 	"marvo/internal/store"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const maxAgentToolBody = 256 << 10
@@ -61,9 +63,159 @@ func (s *Server) handleTool(w http.ResponseWriter, r *http.Request) {
 		s.handleAgentSettingsTool(state, w, r)
 	case "devices":
 		s.handleDevicesTool(state, w, r)
+	case "schedules":
+		s.handleSchedulesTool(state, w, r)
 	default:
 		writeGatewayJSON(w, http.StatusNotFound, map[string]any{"error": "unknown Marvo tool"})
 	}
+}
+
+type schedulesToolInput struct {
+	Action           string                 `json:"action"`
+	ID               string                 `json:"id"`
+	Revision         int64                  `json:"revision"`
+	Name             string                 `json:"name"`
+	Instruction      string                 `json:"instruction"`
+	Schedule         *scheduling.Definition `json:"schedule"`
+	NextCheckSeconds int64                  `json:"next_check_seconds"`
+	Reason           string                 `json:"reason"`
+	Limit            int                    `json:"limit"`
+}
+
+func (s *Server) handleSchedulesTool(state *store.StateDB, w http.ResponseWriter, r *http.Request) {
+	var input schedulesToolInput
+	if err := decodeToolJSON(r, &input); err != nil {
+		writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid automatic task operation"})
+		return
+	}
+	tasks, err := store.NewScheduleStore(state)
+	if err != nil {
+		writeToolError(w, err)
+		return
+	}
+	mutated := false
+	var output any
+	now := time.Now()
+	switch input.Action {
+	case "list":
+		if input.hasValues() {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "list does not accept task values"})
+			return
+		}
+		items, listErr := tasks.List(r.Context())
+		err, output = listErr, map[string]any{"tasks": items}
+	case "get":
+		if input.ID == "" || input.hasValuesExcept("id") {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "get requires only id"})
+			return
+		}
+		var task store.Schedule
+		task, err = tasks.Get(r.Context(), input.ID)
+		output = map[string]any{"task": task}
+	case "create":
+		if input.ID != "" || input.Revision != 0 || input.Schedule == nil || input.NextCheckSeconds != 0 || input.Reason != "" || input.Limit != 0 {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "create requires name, instruction and schedule"})
+			return
+		}
+		var task store.Schedule
+		task, err = tasks.Create(r.Context(), store.ScheduleInput{Name: input.Name, Instruction: input.Instruction, Definition: *input.Schedule}, now)
+		output, mutated = map[string]any{"task": task}, err == nil
+	case "update":
+		if input.ID == "" || input.Revision < 1 || input.Schedule == nil || input.NextCheckSeconds != 0 || input.Reason != "" || input.Limit != 0 {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "update requires id, revision, name, instruction and schedule"})
+			return
+		}
+		var task store.Schedule
+		task, err = tasks.Update(r.Context(), input.ID, input.Revision, store.ScheduleInput{Name: input.Name, Instruction: input.Instruction, Definition: *input.Schedule}, now)
+		output, mutated = map[string]any{"task": task}, err == nil
+	case "pause":
+		if input.ID == "" || input.Revision < 1 || input.hasValuesExcept("id", "revision", "reason") {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "pause requires id and revision"})
+			return
+		}
+		var task store.Schedule
+		task, err = tasks.Pause(r.Context(), input.ID, input.Revision, input.Reason, now)
+		output, mutated = map[string]any{"task": task}, err == nil
+	case "resume":
+		if input.ID == "" || input.Revision < 1 || input.hasValuesExcept("id", "revision") {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "resume requires only id and revision"})
+			return
+		}
+		var task store.Schedule
+		task, err = tasks.Resume(r.Context(), input.ID, input.Revision, now)
+		output, mutated = map[string]any{"task": task}, err == nil
+	case "run_now":
+		if input.ID == "" || input.hasValuesExcept("id") {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "run_now requires only id"})
+			return
+		}
+		var run store.ScheduleRun
+		run, err = tasks.RunNow(r.Context(), input.ID, now)
+		output, mutated = map[string]any{"run": run}, err == nil
+	case "history":
+		if input.ID == "" || input.hasValuesExcept("id", "limit") {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "history requires id and optional limit"})
+			return
+		}
+		var runs []store.ScheduleRun
+		runs, err = tasks.ListRuns(r.Context(), input.ID, input.Limit)
+		output = map[string]any{"runs": runs}
+	case "next_check":
+		if input.ID == "" || input.NextCheckSeconds < 1 ||
+			input.NextCheckSeconds > int64(scheduling.MaximumInterval/time.Second) ||
+			input.hasValuesExcept("id", "next_check_seconds") {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "next_check requires id and next_check_seconds"})
+			return
+		}
+		var task store.Schedule
+		task, err = tasks.SetAdaptiveNext(r.Context(), input.ID, time.Duration(input.NextCheckSeconds)*time.Second, now)
+		output, mutated = map[string]any{"task": task}, err == nil
+	case "complete":
+		if input.ID == "" || input.Revision < 1 || input.hasValuesExcept("id", "revision") {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "complete requires only id and revision"})
+			return
+		}
+		var task store.Schedule
+		task, err = tasks.Complete(r.Context(), input.ID, input.Revision, now)
+		output, mutated = map[string]any{"task": task}, err == nil
+	case "remove":
+		if input.ID == "" || input.Revision < 1 || input.hasValuesExcept("id", "revision") {
+			writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "remove requires only id and revision"})
+			return
+		}
+		var removed bool
+		removed, err = tasks.Delete(r.Context(), input.ID, input.Revision)
+		if err == nil && !removed {
+			err = store.ErrScheduleNotFound
+		}
+		output, mutated = map[string]any{"removed": removed}, err == nil
+	default:
+		writeGatewayJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported automatic task operation"})
+		return
+	}
+	if err != nil {
+		writeToolError(w, err)
+		return
+	}
+	if mutated {
+		s.publishStateEvent(r.PathValue("userID"), runtimeevents.KindSchedules)
+	}
+	writeGatewayJSON(w, http.StatusOK, output)
+}
+
+func (i schedulesToolInput) hasValues() bool {
+	return i.hasValuesExcept()
+}
+
+func (i schedulesToolInput) hasValuesExcept(fields ...string) bool {
+	allowed := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		allowed[field] = true
+	}
+	return (!allowed["id"] && i.ID != "") || (!allowed["revision"] && i.Revision != 0) ||
+		(!allowed["name"] && i.Name != "") || (!allowed["instruction"] && i.Instruction != "") ||
+		(!allowed["schedule"] && i.Schedule != nil) || (!allowed["next_check_seconds"] && i.NextCheckSeconds != 0) ||
+		(!allowed["reason"] && i.Reason != "") || (!allowed["limit"] && i.Limit != 0)
 }
 
 func (s *Server) handleActivityTool(state *store.StateDB, w http.ResponseWriter, r *http.Request) {
@@ -368,11 +520,12 @@ func writeToolError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrInvalidActivity), errors.Is(err, store.ErrInvalidMemories),
 		errors.Is(err, store.ErrInvalidAgentSettings), errors.Is(err, store.ErrInvalidBrand),
-		errors.Is(err, store.ErrInvalidDeviceName):
+		errors.Is(err, store.ErrInvalidDeviceName), errors.Is(err, store.ErrInvalidSchedule):
 		status = http.StatusBadRequest
-	case errors.Is(err, sql.ErrNoRows), errors.Is(err, store.ErrActivityNotFound):
+	case errors.Is(err, sql.ErrNoRows), errors.Is(err, store.ErrActivityNotFound), errors.Is(err, store.ErrScheduleNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, store.ErrDeviceNameConflict), errors.Is(err, store.ErrActivityResponded):
+	case errors.Is(err, store.ErrDeviceNameConflict), errors.Is(err, store.ErrActivityResponded),
+		errors.Is(err, store.ErrScheduleConflict), errors.Is(err, store.ErrScheduleBusy):
 		status = http.StatusConflict
 	}
 	writeGatewayJSON(w, status, map[string]any{"error": fmt.Sprintf("%v", err)})

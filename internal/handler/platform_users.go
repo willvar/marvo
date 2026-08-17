@@ -63,7 +63,10 @@ func (d *Dependencies) UpdateUserStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if *body.Disabled && d.Spaces != nil {
+		d.Spaces.StopUserSchedules(userID)
 		d.Spaces.CloseUser(userID)
+	} else if d.Spaces != nil {
+		d.Spaces.WakeSchedules(userID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }

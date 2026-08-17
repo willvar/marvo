@@ -22,7 +22,7 @@ import (
 const (
 	stateDirectoryName = ".marvo"
 	stateDatabaseName  = "state.sqlite"
-	stateSchemaVersion = 3
+	stateSchemaVersion = 4
 )
 
 // StateDB owns the structured state for one user space. Notes, media and
@@ -208,9 +208,57 @@ func (d *StateDB) initialize(ctx context.Context) error {
 		);
 		CREATE INDEX IF NOT EXISTS activity_deliveries_due_idx
 			ON activity_deliveries(status, next_attempt_at, lease_until);
-		CREATE INDEX IF NOT EXISTS activity_deliveries_activity_idx
-			ON activity_deliveries(activity_id, created_at, id);
-	`); err != nil {
+			CREATE INDEX IF NOT EXISTS activity_deliveries_activity_idx
+				ON activity_deliveries(activity_id, created_at, id);
+			CREATE TABLE IF NOT EXISTS schedules (
+				id TEXT PRIMARY KEY,
+				name TEXT NOT NULL,
+				instruction TEXT NOT NULL,
+				schedule_kind TEXT NOT NULL CHECK (schedule_kind IN ('at', 'every', 'cron', 'adaptive')),
+				schedule_spec_json TEXT NOT NULL,
+				timezone TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed')),
+				next_run_at INTEGER,
+				session_id TEXT NOT NULL DEFAULT '',
+				revision INTEGER NOT NULL DEFAULT 1,
+				consecutive_failures INTEGER NOT NULL DEFAULT 0,
+				last_error TEXT NOT NULL DEFAULT '',
+				last_run_at INTEGER,
+				paused_reason TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS schedules_due_idx
+				ON schedules(status, next_run_at, id);
+			CREATE TABLE IF NOT EXISTS schedule_runs (
+				id TEXT PRIMARY KEY,
+				schedule_id TEXT NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+				schedule_revision INTEGER NOT NULL,
+				occurrence_key TEXT NOT NULL UNIQUE,
+				trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('scheduled', 'manual')),
+				scheduled_for INTEGER NOT NULL,
+				status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'waiting_retry', 'succeeded', 'failed', 'timed_out', 'cancelled')),
+				attempt INTEGER NOT NULL DEFAULT 0,
+				next_attempt_at INTEGER,
+				lease_until INTEGER,
+				session_id TEXT NOT NULL DEFAULT '',
+				request_message_id TEXT NOT NULL DEFAULT '',
+				message_id TEXT NOT NULL DEFAULT '',
+				adaptive_next_seconds INTEGER NOT NULL DEFAULT 0,
+				error TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				started_at INTEGER,
+				finished_at INTEGER,
+				updated_at INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS schedule_runs_history_idx
+				ON schedule_runs(schedule_id, created_at DESC, id DESC);
+			CREATE INDEX IF NOT EXISTS schedule_runs_due_idx
+				ON schedule_runs(status, next_attempt_at, lease_until);
+			CREATE UNIQUE INDEX IF NOT EXISTS schedule_runs_active_idx
+				ON schedule_runs(schedule_id)
+				WHERE status IN ('queued', 'running', 'waiting_retry');
+		`); err != nil {
 		return fmt.Errorf("create user state schema: %w", err)
 	}
 
