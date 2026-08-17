@@ -732,7 +732,16 @@ function appendFiles(segments: RawAssistantSegment[], part: MessagePart) {
 function visibleParts(message: MessageInfo, parts: MessagePart[]) {
   if (isInternalAssistant(message)) return []
   return parts.filter(
-    (part) => part.type !== 'compaction' && part.ignored !== true && !(part.type === 'text' && part.synthetic === true),
+    (part) =>
+      part.type !== 'compaction' &&
+      part.ignored !== true &&
+      !(part.type === 'text' && part.synthetic === true) &&
+      !(
+        message.role === 'assistant' &&
+        part.type === 'text' &&
+        typeof part.text === 'string' &&
+        part.text.trim() === '<marvo:no-activity>'
+      ),
   )
 }
 

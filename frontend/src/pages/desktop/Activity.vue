@@ -15,6 +15,7 @@ import { useActivityStore } from '../../stores/activity'
 import { useAgentStore } from '../../stores/agent'
 import { XButton, XMarkdown, XSender, XWelcome } from '../../components/x'
 import { useRetainedDialog } from '../../composables/useRetainedDialog'
+import WorkspaceActivityNav from '../../components/WorkspaceActivityNav.vue'
 
 const activityStore = useActivityStore()
 const agent = useAgentStore()
@@ -258,6 +259,7 @@ useAppBackHandler(() => {
           <h1>活动</h1>
           <p>智能体主动发来的进展、结果和待确认事项。</p>
         </div>
+        <WorkspaceActivityNav />
       </header>
 
       <p v-if="actionError" class="activity-error" role="alert">{{ actionError }}</p>
@@ -427,6 +429,10 @@ useAppBackHandler(() => {
 }
 
 .activity-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
   margin-bottom: 24px;
 
   h1 {
@@ -690,6 +696,11 @@ useAppBackHandler(() => {
 @media (max-width: 600px) {
   .activity-page {
     padding: 16px 12px 28px;
+  }
+
+  .activity-heading {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .activity-card {

@@ -72,7 +72,7 @@ function navigateToParent(router: Router) {
     void router.replace(workspaceRoute('/login'))
     return true
   }
-  if (['user-note', 'user-agent', 'user-trash'].includes(String(route.name))) {
+  if (['user-note', 'user-agent', 'user-activity', 'user-schedules', 'user-trash'].includes(String(route.name))) {
     void router.replace(workspaceRoute())
     return true
   }

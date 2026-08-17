@@ -4,6 +4,7 @@ import QrcodeVue from 'qrcode.vue'
 import { useAuthStore } from '../stores/auth'
 import { useNoteStore } from '../stores/note'
 import { useActivityStore } from '../stores/activity'
+import { useSchedulesStore } from '../stores/schedules'
 import AgentFloating from '../components/AgentFloating.vue'
 import MarvoMark from '../components/MarvoMark.vue'
 import {
@@ -47,6 +48,7 @@ import {
 const auth = useAuthStore()
 const noteStore = useNoteStore()
 const activityStore = useActivityStore()
+const schedulesStore = useSchedulesStore()
 const router = useRouter()
 const route = useRoute()
 const androidApp = isMarvoAndroidApp()
@@ -180,11 +182,12 @@ const headerTitle = computed(() => {
   if (currentNoteInfo.value) return currentNoteInfo.value.title
   if (route.name === 'user-agent') return '智能体对话'
   if (route.name === 'user-activity') return '活动'
+  if (route.name === 'user-schedules') return '自动任务'
   if (route.name === 'user-trash') return '回收站'
   return ''
 })
 const showHeaderAgentEntry = computed(() => route.name !== 'user-agent')
-const showHeaderActivityEntry = computed(() => route.name !== 'user-activity')
+const showHeaderActivityEntry = computed(() => route.name !== 'user-activity' && route.name !== 'user-schedules')
 const activityEntryTitle = computed(() => {
   const details = []
   if (activityStore.unread) details.push(`${activityStore.unread} 条未读`)
@@ -289,12 +292,14 @@ onBeforeUnmount(() => {
   stopThemeEvents()
   stopBrandEvents()
   stopActivityEvents()
+  stopScheduleEvents()
   disconnect()
 })
 
 const stopThemeEvents = on('theme_changed', () => loadTheme())
 const stopBrandEvents = on('brand_changed', () => void loadBrand())
 const stopActivityEvents = on('activity_changed', (message) => void activityStore.handleChanged(message))
+const stopScheduleEvents = on('schedules_changed', () => void schedulesStore.handleChanged())
 
 async function openNote(title: string) {
   if (isCompact.value) siderCollapsed.value = true

@@ -56,6 +56,8 @@ function routeTitleParts(route: RouteLocationNormalizedLoaded) {
       return ['智能体']
     case 'user-activity':
       return ['活动']
+    case 'user-schedules':
+      return ['自动任务']
     case 'user-trash':
       return ['回收站']
     default:
@@ -64,7 +66,11 @@ function routeTitleParts(route: RouteLocationNormalizedLoaded) {
 }
 
 function routeBrand(route: RouteLocationNormalizedLoaded) {
-  if (['user-home', 'user-note', 'user-agent', 'user-activity', 'user-trash'].includes(String(route.name))) {
+  if (
+    ['user-home', 'user-note', 'user-agent', 'user-activity', 'user-schedules', 'user-trash'].includes(
+      String(route.name),
+    )
+  ) {
     return userRouteBrands.get(routeParameter(route.params.userId)) || 'Marvo'
   }
   return 'Marvo'
@@ -170,6 +176,7 @@ export const router = createRouter({
         { path: 'note/:title', name: 'user-note', component: () => import('./pages/desktop/NoteEditor.vue') },
         { path: 'agent', name: 'user-agent', component: () => import('./pages/desktop/AgentChat.vue') },
         { path: 'activity', name: 'user-activity', component: () => import('./pages/desktop/Activity.vue') },
+        { path: 'schedules', name: 'user-schedules', component: () => import('./pages/desktop/Schedules.vue') },
         { path: 'trash', name: 'user-trash', component: () => import('./pages/desktop/Trash.vue') },
       ],
     },
@@ -207,7 +214,10 @@ router.afterEach((to) => {
   applyRouteTitle(to)
   if (!isMarvoAndroidApp()) return
   const userID = routeParameter(to.params.userId)
-  if (!userID || !['user-home', 'user-note', 'user-agent', 'user-activity', 'user-trash'].includes(String(to.name)))
+  if (
+    !userID ||
+    !['user-home', 'user-note', 'user-agent', 'user-activity', 'user-schedules', 'user-trash'].includes(String(to.name))
+  )
     return
   try {
     localStorage.setItem(androidRouteStorageKey(userID), to.fullPath)

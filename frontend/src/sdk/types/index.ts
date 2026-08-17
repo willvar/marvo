@@ -67,3 +67,65 @@ export interface ActivityCounts {
   unread: number
   pending: number
 }
+
+type ScheduleKind = 'at' | 'every' | 'cron' | 'adaptive'
+type ScheduleStatus = 'active' | 'paused' | 'completed'
+type ScheduleRunStatus = 'queued' | 'running' | 'waiting_retry' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled'
+
+interface ScheduleSpec {
+  at?: string
+  every_seconds?: number
+  anchor?: string
+  expression?: string
+  minimum_seconds?: number
+  maximum_seconds?: number
+  default_seconds?: number
+}
+
+export interface ScheduleDefinition {
+  kind: ScheduleKind
+  spec: ScheduleSpec
+  timezone?: string
+}
+
+export interface ScheduleRun {
+  id: string
+  schedule_id: string
+  schedule_revision: number
+  trigger: 'scheduled' | 'manual'
+  scheduled_for: string
+  status: ScheduleRunStatus
+  attempt: number
+  next_attempt_at?: string
+  session_id?: string
+  message_id?: string
+  error?: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+  updated_at: string
+}
+
+export interface AutomaticTask {
+  id: string
+  name: string
+  instruction: string
+  schedule: ScheduleDefinition
+  status: ScheduleStatus
+  next_run_at: string | null
+  session_id?: string
+  revision: number
+  consecutive_failures: number
+  last_error?: string
+  last_run_at: string | null
+  paused_reason?: string
+  created_at: string
+  updated_at: string
+  active_run?: ScheduleRun
+}
+
+export interface ScheduleInput {
+  name: string
+  instruction: string
+  schedule: ScheduleDefinition
+}

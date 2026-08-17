@@ -22,6 +22,10 @@ export {
   type ActivityItem,
   type ActivityPage,
   type ActivityCounts,
+  type ScheduleDefinition,
+  type ScheduleRun,
+  type AutomaticTask,
+  type ScheduleInput,
 } from './types'
 export {
   type AgentSession,

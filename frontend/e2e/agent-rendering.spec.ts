@@ -577,3 +577,61 @@ test('Agent 流式回复不显示光标且链接在新窗口打开', async ({ pa
   await expect(page).toHaveURL(workspaceURL('/agent'))
   await newPage.close()
 })
+
+test('自动任务的内部无活动标记不会显示在对话中', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium-landscape')
+  await approveDevice(page, 'Playwright hidden automatic task marker')
+  const created = await page.request.post(workspaceAPI('/api/agent/session'))
+  expect(created.ok()).toBeTruthy()
+  const session = (await created.json()) as { id: string }
+  const userMessageID = 'automatic-task-user-message'
+  const assistantMessageID = 'automatic-task-empty-answer'
+
+  await page.route(new RegExp(workspaceAPIRegex(`/api/agent/session/${session.id}/message(?:\\?.*)?$`)), (route) =>
+    route.fulfill({
+      json: [
+        {
+          info: {
+            id: userMessageID,
+            role: 'user',
+            sessionID: session.id,
+            time: { created: Date.now() },
+          },
+          parts: [
+            {
+              id: 'automatic-task-user-part',
+              type: 'text',
+              messageID: userMessageID,
+              sessionID: session.id,
+              text: '检查是否有新进展。',
+            },
+          ],
+        },
+        {
+          info: {
+            id: assistantMessageID,
+            role: 'assistant',
+            parentID: userMessageID,
+            sessionID: session.id,
+            time: { created: Date.now(), completed: Date.now() },
+          },
+          parts: [
+            {
+              id: 'automatic-task-empty-part',
+              type: 'text',
+              messageID: assistantMessageID,
+              sessionID: session.id,
+              text: '<marvo:no-activity>',
+            },
+          ],
+        },
+      ],
+    }),
+  )
+  await page.evaluate((id) => localStorage.setItem('marvo.agent.currentSessionId', id), session.id)
+  await page.goto(workspacePath('/agent'))
+
+  await expect(page.getByText('检查是否有新进展。', { exact: true })).toBeVisible()
+  await expect(page.getByText('<marvo:no-activity>', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.agent-message-assistant')).toHaveCount(0)
+})
