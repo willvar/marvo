@@ -1,9 +1,39 @@
 .PHONY: build build-frontend build-agent build-runtime rebuild-images start-runtime stop-runtime wait-runtime dev preview android-debug android-apk test test-go test-android test-runtime test-webkit lint lint-go lint-frontend lint-android format-android deadcode audit clean
 
+SHELL := /bin/bash
+
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.1.0")
 CONFIG_FILE ?= config.yaml
 ANDROID_CHECK_ORIGIN ?= http://127.0.0.1:5080
 ANDROID_GRADLE := frontend/android/run-gradle.sh -p frontend/android
+
+# Marvo is a standalone module. Ignore unrelated go.work files inherited from
+# parent directories unless the caller explicitly selects a workspace.
+GOWORK ?= off
+export GOWORK
+
+define run-local-stack
+	@set -Eeuo pipefail; \
+	api_pid=""; \
+	ui_pid=""; \
+	cleanup() { \
+		trap - EXIT INT TERM; \
+		for pid in "$$api_pid" "$$ui_pid"; do \
+			if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null; then kill "$$pid" 2>/dev/null || true; fi; \
+		done; \
+		for pid in "$$api_pid" "$$ui_pid"; do \
+			if [ -n "$$pid" ]; then wait "$$pid" 2>/dev/null || true; fi; \
+		done; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	go run . -c "$(CONFIG_FILE)" & api_pid="$$!"; \
+	$(1) & ui_pid="$$!"; \
+	set +e; \
+	wait -n "$$api_pid" "$$ui_pid"; \
+	status="$$?"; \
+	set -e; \
+	exit "$$status"
+endef
 
 build: build-frontend
 	go test -tags marvo_web ./frontend
@@ -67,14 +97,10 @@ wait-runtime:
 	echo "Runtime gateway ready: $$health_url"
 
 dev: start-runtime
-	go run . -c config.yaml & \
-	npm --prefix frontend run dev & \
-	wait
+	$(call run-local-stack,npm --prefix frontend run dev)
 
 preview: start-runtime build-frontend
-	go run . -c config.yaml & \
-	npm --prefix frontend run preview -- --host 0.0.0.0 & \
-	wait
+	$(call run-local-stack,npm --prefix frontend run preview -- --host 0.0.0.0)
 
 test: test-go test-android
 
